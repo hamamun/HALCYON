@@ -98,6 +98,15 @@ Item {
         }
     }
 
+    // Audio-only / idle visual. Sits *below* the mouse area so clicks still
+    // reach play-pause, and disappears the instant a frame arrives so it can
+    // never draw over video.
+    NowPlayingCard {
+        anchors.fill: parent
+        visible: !root.hasVideo
+        animate: visible
+    }
+
     // Double-click toggles fullscreen — the *same* action as the transport
     // button and the F key (§4.1). Not a second implementation.
     MouseArea {

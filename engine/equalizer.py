@@ -180,12 +180,18 @@ class Equalizer(QObject):
         player = getattr(self._engine, "raw_player", None)
         if player is None or self._vlc is None:
             return
+        setter = getattr(player, "set_equalizer", None)
+        if setter is None:
+            # Older/cut-down libVLC builds omit the equalizer API entirely.
+            # Not having an EQ must never stop the audio.
+            log.debug("libVLC build has no equalizer support — skipping")
+            return
         try:
             if self._eq is not None:
                 self._vlc.libvlc_audio_equalizer_release(self._eq)
                 self._eq = None
             if not self._enabled:
-                player.set_equalizer(None)
+                setter(None)
                 return
             self._eq = self._vlc.libvlc_audio_equalizer_new()
             if not self._eq:
@@ -193,7 +199,7 @@ class Equalizer(QObject):
             self._vlc.libvlc_audio_equalizer_set_preamp(self._eq, self._preamp)
             for band, amp in enumerate(self._amps):
                 self._vlc.libvlc_audio_equalizer_set_amp_at_index(self._eq, amp, band)
-            player.set_equalizer(self._eq)
+            setter(self._eq)
         except Exception:
             log.exception("could not apply equalizer")
 

@@ -100,7 +100,14 @@ class PlaneSurface(QQuickItem):
 
     # -- content ------------------------------------------------------------
     def set_image(self, image: QImage | None) -> None:
-        """Give this plane a new QImage *view*. Called on the GUI thread."""
+        """Give this plane a new QImage *view*.
+
+        Called from :meth:`VideoSurface.updatePaintNode`, i.e. during the
+        render-thread sync phase while the GUI thread is blocked. Scheduling
+        an update from inside ``updatePaintNode`` is explicitly allowed by Qt,
+        which is why this is safe here and was *not* safe from the decoder
+        thread.
+        """
         self._pending = image
         self._dirty = True
         self.update()
@@ -165,6 +172,12 @@ class VideoSurface(QQuickItem):
     fillModeChanged = Signal()
     frameRendered = Signal()
 
+    #: Internal, decoder-thread -> GUI-thread hops. Emitting a Qt signal is
+    #: thread-safe; the queued connections below marshal the delivery.
+    frameArrived = Signal()
+    formatArrived = Signal()
+    videoStopped = Signal()
+
     class FillMode:
         Stretch = 0
         PreserveAspectFit = 1
@@ -192,6 +205,20 @@ class VideoSurface(QQuickItem):
         self.widthChanged.connect(self._recompute_content_rect)
         self.heightChanged.connect(self._recompute_content_rect)
 
+        # Queued on purpose: the emitting thread is VLC's, the receiving slot
+        # must run on the GUI thread. Without the explicit type Qt would use
+        # AutoConnection, which is queued here anyway — being explicit
+        # documents the intent and survives a future re-parenting.
+        self.frameArrived.connect(
+            self._on_frame_gui, Qt.ConnectionType.QueuedConnection
+        )
+        self.formatArrived.connect(
+            self._on_format_gui, Qt.ConnectionType.QueuedConnection
+        )
+        self.videoStopped.connect(
+            self._on_video_stopped_gui, Qt.ConnectionType.QueuedConnection
+        )
+
     # ------------------------------------------------------------ binding ---
     def bind(self, vout: VideoOutput) -> None:
         """Attach to a video output. Safe to call once; PiP calls it on its own
@@ -204,6 +231,7 @@ class VideoSurface(QQuickItem):
         vout.add_reader()
         vout.frame_ready = self._on_frame_threadsafe
         vout.format_changed = self._on_format_threadsafe
+        vout.video_stopped = self._on_video_stopped_threadsafe
         self._ensure_planes()
 
     def unbind(self) -> None:
@@ -220,13 +248,53 @@ class VideoSurface(QQuickItem):
             self.bind(vout)
 
     # ------------------------------------------------ thread entry points ---
+    # These two run on VLC's **decoder thread**. Neither may touch Qt state.
+    #
+    # ``QQuickItem.update()`` is *not* thread-safe, contrary to what the old
+    # code assumed. Calling it from the decoder thread made Qt log
+    #
+    #     Updates can only be scheduled from GUI thread or from
+    #     QQuickItem::updatePaintNode()
+    #
+    # and then drop the request — so no repaint was ever scheduled and the
+    # stage stayed black even though frames were decoding correctly. The fix
+    # is the hop the module docstring always described: emit a signal that is
+    # delivered to the GUI thread, and call update() there.
     def _on_frame_threadsafe(self) -> None:
-        """Called on VLC's decoder thread. Must not touch Qt state directly."""
-        self.update()  # thread-safe: schedules a render-thread sync
+        self.frameArrived.emit()
 
     def _on_format_threadsafe(self, fmt: FrameFormat) -> None:
         self._fmt = fmt
+        self.formatArrived.emit()
+
+    @Slot()
+    def _on_frame_gui(self) -> None:
+        """GUI thread. Safe to schedule a repaint from here."""
+        self.update()
+
+    def _on_video_stopped_threadsafe(self) -> None:
+        self.videoStopped.emit()
+
+    @Slot()
+    def _on_format_gui(self) -> None:
         self._recompute_content_rect()
+        self.frameFormatChanged.emit()
+        self.update()
+
+    @Slot()
+    def _on_video_stopped_gui(self) -> None:
+        """The stream has no more video. Drop back to the idle state.
+
+        Without this ``hasVideo`` latched true for the rest of the session, so
+        after one video the audio-only Now Playing card never appeared again.
+        """
+        self._fmt = None
+        self._last_serial = -1
+        self._texture = None
+        self._image = None
+        self._set_has_video(False)
+        self.frameFormatChanged.emit()
+        self.update()
 
     # ------------------------------------------------------------ layout ---
     def _recompute_content_rect(self) -> None:

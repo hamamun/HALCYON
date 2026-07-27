@@ -43,6 +43,10 @@ QtObject {
     function seekRelative(ms)       { return _call("seekRelative", ms) }
     function seekTo(ms)             { return _call("seekTo", ms) }
     function seekFraction(f)        { return _call("seekFraction", f) }
+    // Bracket a scrub drag so the engine stops publishing positions that
+    // would fight the pointer.
+    function beginScrub()           { return _call("beginScrub") }
+    function endScrub()             { return _call("endScrub") }
     function setRate(rate)          { return _call("setRate", rate) }
     function stepRate(delta)        { return _call("stepRate", delta) }
 

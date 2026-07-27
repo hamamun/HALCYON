@@ -176,15 +176,60 @@ class AppController(QObject):
 
     @Slot(list)
     def clearSelected(self, rows: list) -> None:  # noqa: N802 - QML-facing
+        """Remove the selected rows, stopping playback if one of them is the
+        track currently on air.
+
+        Removing a row from a list model does nothing to libVLC — it is still
+        decoding a file that is no longer in the queue. Whether the *playing*
+        item was removed is the model's business (it knows the current index),
+        so it reports back and this decides what the engine does.
+        """
         target = self.playlist
-        if target is not None and hasattr(target, "remove_rows"):
-            target.remove_rows([int(r) for r in rows])
+        if target is None or not hasattr(target, "remove_rows"):
+            return
+        wanted = [int(r) for r in rows]
+        playing_path = self._current_path()
+        target.remove_rows(wanted)
+        self._stop_if_orphaned(playing_path)
 
     @Slot()
     def clearPlaylist(self) -> None:  # noqa: N802 - QML-facing
+        """Empty the queue *and* stop the player.
+
+        An empty playlist with audio still coming out of the speakers is the
+        clearest possible contradiction between what the UI says and what the
+        app is doing.
+        """
         target = self.playlist
         if target is not None and hasattr(target, "clear"):
             target.clear()
+        self._engine.stop()
+        self._metadata.load("")
+        self._lyrics.load("")
+
+    def _current_path(self) -> str:
+        """Filesystem path of whatever the engine currently has open."""
+        return _from_uri(self._engine.currentMedia or "")
+
+    def _stop_if_orphaned(self, playing_path: str) -> None:
+        """Stop playback if ``playing_path`` is no longer in the queue."""
+        if not playing_path:
+            return
+        target = self.playlist
+        if target is None:
+            return
+        still_queued = False
+        path_at = getattr(target, "path_at", None)
+        count = getattr(target, "count", 0)
+        if callable(path_at):
+            for row in range(int(count)):
+                if path_at(row) == playing_path:
+                    still_queued = True
+                    break
+        if not still_queued:
+            self._engine.stop()
+            self._metadata.load("")
+            self._lyrics.load("")
 
     @Slot(int)
     def playIndex(self, row: int) -> None:  # noqa: N802 - QML-facing

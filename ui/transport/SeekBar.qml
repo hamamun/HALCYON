@@ -13,10 +13,20 @@ import Halcyon.Ui
 Item {
     id: root
 
-    property real position: 0.0        // 0..1, played
+    property real position: 0.0        // 0..1, played — driven by the player
     property real buffered: 0.0        // 0..1
     property int duration: 0           // ms, for the hover tooltip
     property bool scrubbing: dragArea.pressed
+
+    //: Where the pointer is during a drag. While scrubbing this — not
+    //: `position` — is what the fill and knob follow, so the bar tracks the
+    //: pointer at pointer speed instead of waiting for the engine's 200 ms
+    //: poll to catch up.
+    property real scrubPosition: 0.0
+
+    //: The single value everything on this bar renders from.
+    readonly property real displayPosition:
+        Math.max(0, Math.min(1, scrubbing ? scrubPosition : position))
 
     signal seekRequested(real fraction)
     signal scrubStarted()
@@ -25,7 +35,11 @@ Item {
     implicitHeight: Theme.hitTarget * 0.6
     height: implicitHeight
 
-    readonly property bool active: hoverArea.containsMouse || dragArea.pressed
+    // A bar with no known duration cannot be seeked. Render it dimmed and
+    // ignore input rather than pretending.
+    opacity: enabled ? 1.0 : Theme.opacityDisabled
+
+    readonly property bool active: enabled && (hoverArea.containsMouse || dragArea.pressed)
     readonly property real barHeight: active ? Theme.seekBarHover : Theme.seekBarRest
 
     onScrubbingChanged: scrubbing ? scrubStarted() : scrubEnded()
@@ -57,7 +71,7 @@ Item {
 
         Rectangle {
             id: played
-            width: parent.width * Math.max(0, Math.min(1, root.position))
+            width: parent.width * root.displayPosition
             height: parent.height
             radius: height / 2
             gradient: Gradient {
@@ -76,8 +90,12 @@ Item {
         radius: 6
         color: Theme.text
         anchors.verticalCenter: parent.verticalCenter
-        x: track.width * Math.max(0, Math.min(1, root.position)) - width / 2
-        opacity: root.active ? 1 : 0
+        x: track.width * root.displayPosition - width / 2
+        // Visible whenever the bar is usable. Previously it faded to 0 unless
+        // hovered, so at rest there was no knob and no obvious progress
+        // indicator — the bar looked inert.
+        visible: root.enabled
+        opacity: root.active ? 1 : 0.9
         scale: dragArea.pressed ? 1.2 : 1.0
 
         Behavior on opacity {
@@ -140,15 +158,29 @@ Item {
         anchors.topMargin: -6
         anchors.bottomMargin: -6
         preventStealing: true
+        enabled: root.enabled
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
 
         function fractionAt(mx) {
             return Math.max(0, Math.min(1, mx / Math.max(1, root.width)));
         }
 
-        onPressed: function(mouse) { root.seekRequested(fractionAt(mouse.x)) }
+        // Both handlers set scrubPosition *first*, so the fill and knob move
+        // with the pointer on this very frame rather than after the engine
+        // has confirmed the seek.
+        onPressed: function(mouse) {
+            root.scrubPosition = fractionAt(mouse.x);
+            root.seekRequested(root.scrubPosition);
+        }
         onPositionChanged: function(mouse) {
-            if (pressed)
-                root.seekRequested(fractionAt(mouse.x));
+            if (!pressed)
+                return;
+            root.scrubPosition = fractionAt(mouse.x);
+            root.seekRequested(root.scrubPosition);
+        }
+        onReleased: function(mouse) {
+            root.scrubPosition = fractionAt(mouse.x);
+            root.seekRequested(root.scrubPosition);
         }
     }
 }

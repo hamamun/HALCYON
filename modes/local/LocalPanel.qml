@@ -120,6 +120,7 @@ Item {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     text: row.isAudio ? Glyphs.music : Glyphs.video
+                    font.family: Theme.fontFamilyIcons
                     font.pixelSize: 13
                     color: row.current ? Theme.accent : Theme.textFaint
                 }
@@ -165,6 +166,7 @@ Item {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: Glyphs.playlist
+            font.family: Theme.fontFamilyIcons
             font.pixelSize: 34
             color: Theme.textFaint
         }

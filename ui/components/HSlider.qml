@@ -47,8 +47,16 @@ Slider {
         height: width
         radius: width / 2
         color: Theme.text
-        visible: root.showHandle && (root.hovered || root.pressed)
+        // Always visible when the slider is enabled: a handle that only
+        // appears on hover reads as a disabled/greyed-out control, which is
+        // exactly how the volume and seek sliders were being perceived.
+        visible: root.showHandle && root.enabled
+        opacity: root.hovered || root.pressed ? 1.0 : 0.85
         scale: root.pressed ? 1.15 : 1.0
+
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+        }
 
         Behavior on scale {
             NumberAnimation { duration: Theme.durFast; easing.type: Theme.easing }

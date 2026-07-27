@@ -270,6 +270,11 @@ class VideoOutput:
         self.chroma = chroma
         self.frame_ready: Callable[[], None] | None = None
         self.format_changed: Callable[[FrameFormat], None] | None = None
+        #: Fired when VLC tears the video pipeline down (end of a video track,
+        #: or a track with no video at all). Lets a surface drop back to its
+        #: idle state instead of leaving the last frame — or a stale
+        #: ``hasVideo`` — on screen.
+        self.video_stopped: Callable[[], None] | None = None
 
         self._player = None
         self._attached = False
@@ -396,7 +401,15 @@ class VideoOutput:
         return SLOTS
 
     def _on_cleanup(self) -> None:
+        """VLC is done with this video format — the track ended or had no
+        video. Runs on a VLC thread, so the handler must only marshal."""
         log.debug("video format cleanup")
+        cb = self.video_stopped
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                log.exception("video_stopped handler failed")
 
     def _on_lock(self, planes) -> int:
         """Hand VLC the next write slot. Hot path — keep it boring."""
