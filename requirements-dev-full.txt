@@ -1,0 +1,33 @@
+# =============================================================================
+# HALCYON — Complete Development Requirements (All Phases)
+# =============================================================================
+# This file installs everything needed for the full application across all
+# phases (Phase 1 + Phase 2 + Phase 3) plus testing.
+#
+# Use this for a complete future-proof development environment.
+# =============================================================================
+
+# --- Phase 1 Core (Local Mode) ---
+-r requirements-phase1.txt
+
+# --- Phase 3 Additions (Web Mode) ---
+# QtWebEngineQuick is required for embedding Chromium inside the main window.
+PySide6-Addons==6.11.1
+
+# --- Testing & Quality ---
+pytest>=8.0
+
+# =============================================================================
+# FUTURE / POST-v1.0 (Mobile Remote)
+# Uncomment the lines below only when you start the remote feature.
+# These are intentionally excluded from the default install to keep the
+# surface small during Phase 1–3 development.
+# =============================================================================
+# aiohttp>=3.9
+# qrcode[pil]>=7.4
+# =============================================================================
+
+# Note:
+# - Nuitka (for packaging) is a build tool — install separately when needed:
+#     pip install nuitka
+# - All other dependencies are covered by the lines above.
