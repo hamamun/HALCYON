@@ -55,6 +55,40 @@ def qml_url(url: str) -> str:
     return url
 
 
+def normalise_path(raw) -> str:
+    """Turn anything the UI can hand us into a plain filesystem path.
+
+    QML's ``FileDialog`` yields percent-encoded URLs — the very first log in this
+    repo came from ``E:\\drvie personal\\...``, which arrives as
+    ``file:///E:/drvie%20personal/...``. Three things have to happen, and a
+    ``.replace("file://", "")`` does none of them:
+
+    * percent-decoding, or the path contains a literal ``%20`` and never exists;
+    * dropping the leading slash on ``/E:/...``, or Windows rejects it;
+    * leaving UNC paths (``file://server/share``) with their host intact.
+
+    Non-URL input passes through untouched, so this is safe to call twice.
+    """
+    text = str(raw).strip()
+    if not text:
+        return ""
+    if not text.lower().startswith("file:"):
+        return text
+
+    from urllib.parse import unquote, urlparse
+
+    parsed = urlparse(text)
+    path = unquote(parsed.path)
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        # file://server/share/file -> \\server\share\file
+        return f"//{parsed.netloc}{path}".replace("/", os.sep) if os.sep == "\\" \
+            else f"//{parsed.netloc}{path}"
+    # file:///E:/x -> /E:/x -> E:/x
+    if len(path) > 2 and path[0] == "/" and path[2] == ":":
+        path = path[1:]
+    return path
+
+
 def _platform_data_dir() -> Path:
     override = os.environ.get("HALCYON_DATA_DIR")
     if override:

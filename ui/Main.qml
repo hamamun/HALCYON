@@ -50,20 +50,23 @@ Shell {
         id: actionHost
 
         // ---------------------------------------------------- playback --
+        // `usesPlayer` is read through a helper because modeSpec is null for
+        // one frame at startup — Modes.spec() runs before App.activeMode has
+        // settled — and `null.usesPlayer` throws rather than returning false.
         function playPause() {
-            if (!modeSpec.usesPlayer) return;
+            if (!window.usesPlayer()) return;
             Player.toggle();
             osdGlyph(Player.isPlaying ? Glyphs.pause : Glyphs.play);
         }
-        function play()  { if (modeSpec.usesPlayer) Player.play() }
-        function pause() { if (modeSpec.usesPlayer) Player.pause() }
-        function stop()  { if (modeSpec.usesPlayer) Player.stop() }
+        function play()  { if (window.usesPlayer()) Player.play() }
+        function pause() { if (window.usesPlayer()) Player.pause() }
+        function stop()  { if (window.usesPlayer()) Player.stop() }
 
         function next()     { App.next() }
         function previous() { App.previous() }
 
         function seekRelative(ms) {
-            if (!modeSpec.usesPlayer) return;
+            if (!window.usesPlayer()) return;
             Player.seek_relative(ms);
             osd((ms > 0 ? Glyphs.fastForward : Glyphs.rewind) + "  "
                 + formatTime(Player.time) + " / " + formatTime(Player.duration));
@@ -152,9 +155,16 @@ Shell {
         function osdLevel(spec)    { if (osdEnabled()) osdLayer.showLevel(spec.text, spec.glyph, spec.level) }
     }
 
-    // OSD fires only where the ModeSpec allows it (§6.2) — M3U and Web never.
-    function osdEnabled()  { return modeSpec && modeSpec.osdEnabled }
+    // OSD fires only where the ModeSpec allows it (§6.2) — M3U and Web never,
+    // and neither does anything before the first spec resolves.
+    function osdEnabled()  {
+        return !!modeSpec && modeSpec.osdEnabled && Settings.get("ui.osdEnabled", true);
+    }
     function osdGlyph(g)   { if (osdEnabled()) osdLayer.showGlyph(g) }
+
+    // Does the active mode drive the shared player? False while modeSpec is
+    // still resolving, which is the safe answer.
+    function usesPlayer() { return !!modeSpec && modeSpec.usesPlayer }
 
     function volumeGlyph(v, muted) {
         if (muted || v === 0) return Glyphs.volumeMute;
@@ -174,6 +184,35 @@ Shell {
 
     function localPanelSelection() {
         return panelHost.item && panelHost.item.selection ? panelHost.item.selection : [];
+    }
+
+    // The active mode's context object (Local's queue today). Looked up by id,
+    // never named directly, so adding a mode needs no edit here (§A.3).
+    readonly property var modeContext: activeMode === "local"
+                                       && typeof LocalPlaylist !== "undefined"
+                                       ? LocalPlaylist : null
+
+    // Push live state into whichever transport bar the active mode loaded.
+    // Establishes real bindings via Qt.binding, so later changes keep flowing.
+    function bindTransport(item) {
+        if (!item)
+            return;
+        if ("player" in item)
+            item.player = Player;
+        if ("repeatMode" in item)
+            item.repeatMode = Qt.binding(function() {
+                return window.modeContext ? window.modeContext.repeatMode : 0;
+            });
+        if ("shuffle" in item)
+            item.shuffle = Qt.binding(function() {
+                return window.modeContext ? window.modeContext.shuffle : false;
+            });
+        if ("audioTracks" in item)
+            item.audioTracks = Qt.binding(function() { return App.audioTracks });
+        if ("subtitleTracks" in item)
+            item.subtitleTracks = Qt.binding(function() { return App.subtitleTracks });
+        if ("subtitleDelayMs" in item)
+            item.subtitleDelayMs = Qt.binding(function() { return App.subtitleDelayMs });
     }
 
     // ======================================================================
@@ -242,10 +281,17 @@ Shell {
                         NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
                     }
 
-                    onLoaded: {
-                        if (item && item.hasOwnProperty("player"))
-                            item.player = Player;
-                    }
+                    // A one-shot assignment in onLoaded is a *copy*, not a
+                    // binding: the bar would keep whatever repeat mode and
+                    // track list existed the instant it loaded. Binding
+                    // properties on the Loader propagates them to `item` and
+                    // keeps updating, which is what makes the gear popover and
+                    // the repeat/shuffle buttons reflect reality.
+                    //
+                    // Guarded with hasOwnProperty-free `??`-style defaults so a
+                    // mode whose bar declares fewer properties (M3U's six
+                    // controls, §B.2) still loads cleanly.
+                    onLoaded: window.bindTransport(item)
                 }
 
                 // Slim progress hairline in fullscreen once the chrome is gone (§7).
@@ -322,7 +368,7 @@ Shell {
         anchors.fill: parent
         focus: true
 
-        readonly property bool mediaKeys: window.modeSpec && window.modeSpec.mediaKeysEnabled
+        readonly property bool mediaKeys: !!window.modeSpec && window.modeSpec.mediaKeysEnabled
 
         Keys.onPressed: function(event) {
             window.wakeChrome();
