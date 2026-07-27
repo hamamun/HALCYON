@@ -1,0 +1,85 @@
+"""Where Halcyon keeps things.
+
+Runtime state lives **only** in the per-user app-data directory (§P1.3):
+
+    Windows  %APPDATA%\\Halcyon
+    Linux    ~/.local/share/Halcyon        (development)
+    macOS    ~/Library/Application Support/Halcyon
+
+The repository ``config/`` directory holds first-run defaults which are copied
+once, never read afterwards. Set ``HALCYON_DATA_DIR`` to override (used by the
+test suite so it never touches a real profile).
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from pathlib import Path
+
+APP_NAME = "Halcyon"
+
+#: Repository root — the directory containing main.py.
+ROOT = Path(__file__).resolve().parent.parent
+
+#: First-run defaults shipped with the app.
+DEFAULTS_DIR = ROOT / "config"
+
+#: Bundled libVLC (§P1.3). Gitignored; see README for how to populate it.
+VENDOR_VLC = ROOT / "vendor" / "vlc"
+
+ASSETS = ROOT / "assets"
+UI_DIR = ROOT / "ui"
+SHADERS = UI_DIR / "shaders"
+
+
+def _platform_data_dir() -> Path:
+    override = os.environ.get("HALCYON_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
+        return Path(base) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / APP_NAME
+
+
+def data_dir() -> Path:
+    """The writable profile directory, created on first access."""
+    d = _platform_data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def data_file(name: str) -> Path:
+    return data_dir() / name
+
+
+def cache_dir() -> Path:
+    d = data_dir() / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def seed_defaults() -> list[str]:
+    """Copy any missing first-run defaults from ``config/`` into the profile.
+
+    Only copies files that do not already exist — a user's edits are never
+    clobbered by an upgrade. Returns the names copied.
+    """
+    if not DEFAULTS_DIR.is_dir():
+        return []
+    copied: list[str] = []
+    target = data_dir()
+    for src in sorted(DEFAULTS_DIR.iterdir()):
+        if not src.is_file():
+            continue
+        dst = target / src.name
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            copied.append(src.name)
+    return copied

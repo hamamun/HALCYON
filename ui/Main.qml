@@ -1,0 +1,428 @@
+import QtQuick
+import QtQuick.Window
+import QtQuick.Dialogs
+import Halcyon.Ui
+import Halcyon.Shell
+
+// The window — §P1.4.
+//
+//  ┌──────────────────────────────────────────────────────────┐
+//  │ ◆ Halcyon   [ Local ]                    ⚙  ─  □  ✕      │ 44px
+//  ├────────────┬─────────────────────────────┬───────────────┤
+//  │ PanelHost  │  Stage (video + OSD)        │  InfoPanel    │
+//  │  300px     │                             │   320px       │
+//  │            ├─────────────────────────────┤  collapsible  │
+//  │            │  mode transport bar         │               │
+//  └────────────┴─────────────────────────────┴───────────────┘
+//
+// The chassis is fixed. Which panel, which stage and which bar load into it
+// comes from the active ModeSpec (§A.2) — that is the whole extension mechanism.
+Shell {
+    id: window
+
+    property string activeMode: App.activeMode
+    readonly property var modeSpec: Modes.spec(activeMode)
+    property bool chromeVisible: true
+
+    title: "Halcyon"
+    visible: true
+
+    Component.onCompleted: {
+        restoreGeometry();
+        Actions.host = actionHost;
+    }
+
+    onClosing: {
+        saveGeometry();
+        Settings.flush();
+    }
+
+    // ======================================================================
+    // ACTION HOST — the single implementation of every action (§4.1).
+    //
+    // Buttons, hotkeys, drag-and-drop and the OSD all route here. If you find
+    // yourself writing behaviour anywhere else in the UI, it belongs in this
+    // object instead.
+    // ======================================================================
+    QtObject {
+        id: actionHost
+
+        // ---------------------------------------------------- playback --
+        function playPause() {
+            if (!modeSpec.usesPlayer) return;
+            Player.toggle();
+            osdGlyph(Player.isPlaying ? Glyphs.pause : Glyphs.play);
+        }
+        function play()  { if (modeSpec.usesPlayer) Player.play() }
+        function pause() { if (modeSpec.usesPlayer) Player.pause() }
+        function stop()  { if (modeSpec.usesPlayer) Player.stop() }
+
+        function next()     { App.next() }
+        function previous() { App.previous() }
+
+        function seekRelative(ms) {
+            if (!modeSpec.usesPlayer) return;
+            Player.seek_relative(ms);
+            osd((ms > 0 ? Glyphs.fastForward : Glyphs.rewind) + "  "
+                + formatTime(Player.time) + " / " + formatTime(Player.duration));
+        }
+        function seekTo(ms)       { Player.seek(ms) }
+        function seekFraction(f)  { Player.set_position(f) }
+        function setRate(rate) {
+            Player.set_rate(rate);
+            osd(rate + "\u00D7");
+        }
+        function stepRate(delta) {
+            var steps = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+            var i = 0, best = 1e9;
+            for (var k = 0; k < steps.length; k++) {
+                var d = Math.abs(steps[k] - Player.rate);
+                if (d < best) { best = d; i = k; }
+            }
+            setRate(steps[Math.max(0, Math.min(steps.length - 1, i + delta))]);
+        }
+
+        // ------------------------------------------------------- audio --
+        function setVolume(v) {
+            Player.set_volume(v);
+            Settings.set("audio.volume", v);
+            osdLevel({ text: "Volume " + v + "%", glyph: volumeGlyph(v, Player.muted),
+                       level: v / 100 });
+        }
+        function adjustVolume(delta) { setVolume(Math.max(0, Math.min(100, Player.volume + delta))) }
+        function toggleMute() {
+            Player.toggle_mute();
+            Settings.set("audio.muted", Player.muted);
+            osd(Player.muted ? "Muted" : "Unmuted",
+                volumeGlyph(Player.volume, Player.muted));
+        }
+
+        // ------------------------------------------------------ tracks --
+        function setAudioTrack(id)    { App.setAudioTrack(id) }
+        function cycleAudioTrack()    { App.cycleAudioTrack() }
+        function setSubtitleTrack(id) { App.setSubtitleTrack(id) }
+        function cycleSubtitleTrack() { App.cycleSubtitleTrack() }
+        function loadSubtitleFile()   { subtitleDialog.open() }
+        function adjustSubtitleDelay(ms) { App.adjustSubtitleDelay(ms) }
+
+        // ---------------------------------------------------- playlist --
+        function addFiles()        { fileDialog.open() }
+        function addFolder()       { folderDialog.open() }
+        function addPaths(paths)   { App.addPaths(paths) }
+        function clearSelected()   { App.clearSelected(localPanelSelection()) }
+        function clearPlaylist()   { confirmClear.open() }
+        function playIndex(i)      { App.playIndex(i) }
+        function moveItem(f, t)    { App.moveItem(f, t) }
+        function cycleRepeat()     { App.cycleRepeat() }
+        function toggleShuffle()   { App.toggleShuffle() }
+
+        // -------------------------------------------------------- view --
+        function toggleFullscreen() {
+            window.setFullscreen(!window.fullscreen);
+            osdGlyph(window.fullscreen ? Glyphs.fullscreen : Glyphs.fullscreenExit);
+        }
+        function exitFullscreen()  { if (window.fullscreen) toggleFullscreen() }
+        function toggleLeftPanel() {
+            panelHost.open = !panelHost.open;
+            Settings.set("window.leftPanelVisible", panelHost.open);
+        }
+        function toggleRightPanel() {
+            infoPanel.open = !infoPanel.open;
+            Settings.set("window.rightPanelVisible", infoPanel.open);
+        }
+        function showEqualizer() {
+            infoPanel.open = true;
+            infoPanel.currentTab = 2;
+            Settings.set("window.rightPanelVisible", true);
+        }
+        function showSettings()    { settingsDialog.open() }
+
+        // -------------------------------------------------------- mode --
+        function switchMode(id)    { App.setActiveMode(id) }
+
+        // ------------------------------------------------------ window --
+        function minimizeWindow()  { window.showMinimized() }
+        function toggleMaximized() { window.toggleMaximized() }
+        function closeWindow()     { window.close() }
+
+        // --------------------------------------------------------- osd --
+        function osd(text, glyph)  { if (osdEnabled()) osdLayer.show(text, glyph) }
+        function osdLevel(spec)    { if (osdEnabled()) osdLayer.showLevel(spec.text, spec.glyph, spec.level) }
+    }
+
+    // OSD fires only where the ModeSpec allows it (§6.2) — M3U and Web never.
+    function osdEnabled()  { return modeSpec && modeSpec.osdEnabled }
+    function osdGlyph(g)   { if (osdEnabled()) osdLayer.showGlyph(g) }
+
+    function volumeGlyph(v, muted) {
+        if (muted || v === 0) return Glyphs.volumeMute;
+        return v < 34 ? Glyphs.volumeLow : v < 67 ? Glyphs.volumeMid : Glyphs.volumeHigh;
+    }
+
+    function formatTime(ms) {
+        if (!isFinite(ms) || ms < 0) ms = 0;
+        var total = Math.floor(ms / 1000);
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        var mm = (h > 0 && m < 10 ? "0" : "") + m;
+        var ss = (s < 10 ? "0" : "") + s;
+        return h > 0 ? h + ":" + mm + ":" + ss : mm + ":" + ss;
+    }
+
+    function localPanelSelection() {
+        return panelHost.item && panelHost.item.selection ? panelHost.item.selection : [];
+    }
+
+    // ======================================================================
+    // LAYOUT
+    // ======================================================================
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.base
+        radius: window.maximizedOrFull ? 0 : Theme.radiusPanel
+
+        TitleBar {
+            id: titleBar
+            width: parent.width
+            anchors.top: parent.top
+            activeMode: window.activeMode
+            visible: !window.fullscreen
+            height: window.fullscreen ? 0 : Theme.titleBarHeight
+            onModeRequested: function(id) { Actions.switchMode(id) }
+        }
+
+        Item {
+            id: body
+            anchors.top: titleBar.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+
+            PanelHost {
+                id: panelHost
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                open: !window.fullscreen && Settings.get("window.leftPanelVisible", true)
+                source: window.modeSpec ? window.modeSpec.panelQml : ""
+                blurSource: stage
+            }
+
+            Stage {
+                id: stage
+                anchors.left: panelHost.right
+                anchors.right: infoPanel.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                source: window.modeSpec ? window.modeSpec.stageQml : ""
+
+                // OSD sits above the stage content, below the transport bar.
+                Osd {
+                    id: osdLayer
+                    anchors.fill: parent
+                    enabled: window.osdEnabled()
+                    suppressed: settingsDialog.visible || confirmClear.visible
+                }
+
+                // The mode's own bar, floating over the video (§B.4).
+                Loader {
+                    id: transportLoader
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    source: window.modeSpec ? window.modeSpec.transportQml : ""
+                    active: source !== ""
+                    opacity: window.chromeVisible ? 1 : 0
+                    visible: opacity > 0
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    }
+
+                    onLoaded: {
+                        if (item && item.hasOwnProperty("player"))
+                            item.player = Player;
+                    }
+                }
+
+                // Slim progress hairline in fullscreen once the chrome is gone (§7).
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width * (Player ? Player.position : 0)
+                    height: 2
+                    visible: window.fullscreen && !window.chromeVisible
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: Theme.accent }
+                        GradientStop { position: 1.0; color: Theme.accentAlt }
+                    }
+                }
+            }
+
+            InfoPanel {
+                id: infoPanel
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                open: !window.fullscreen && Settings.get("window.rightPanelVisible", false)
+                blurSource: stage
+            }
+        }
+    }
+
+    // ======================================================================
+    // AUTO-HIDE — §P1.4
+    // Playing + pointer still 2.5 s -> chrome and cursor fade. Never while a
+    // popover is open, while scrubbing, or while paused.
+    // ======================================================================
+    MouseArea {
+        id: idleWatcher
+        anchors.fill: parent
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
+        propagateComposedEvents: true
+        cursorShape: window.chromeVisible ? Qt.ArrowCursor : Qt.BlankCursor
+        z: -1
+
+        onPositionChanged: window.wakeChrome()
+    }
+
+    function wakeChrome() {
+        chromeVisible = true;
+        idleTimer.restart();
+    }
+
+    Timer {
+        id: idleTimer
+        interval: Settings.get("ui.autoHideDelayMs", 2500)
+        onTriggered: {
+            var bar = transportLoader.item;
+            var busy = bar && ((bar.popoverOpen === true) || (bar.scrubbing === true));
+            if (Player && Player.isPlaying && !busy)
+                window.chromeVisible = false;
+        }
+    }
+
+    Connections {
+        target: Player
+        function onStateChanged() {
+            if (!Player.isPlaying)
+                window.wakeChrome();     // never hide while paused
+        }
+    }
+
+    // ======================================================================
+    // HOTKEYS — §P1.5. Every binding invokes an Actions entry, never a
+    // behaviour of its own.
+    // ======================================================================
+    Item {
+        anchors.fill: parent
+        focus: true
+
+        readonly property bool mediaKeys: window.modeSpec && window.modeSpec.mediaKeysEnabled
+
+        Keys.onPressed: function(event) {
+            window.wakeChrome();
+            var shift = event.modifiers & Qt.ShiftModifier;
+            var ctrl = event.modifiers & Qt.ControlModifier;
+
+            if (ctrl) {
+                switch (event.key) {
+                case Qt.Key_O: Actions.addFiles();       event.accepted = true; return;
+                case Qt.Key_E: Actions.showEqualizer();  event.accepted = true; return;
+                case Qt.Key_L: Actions.toggleLeftPanel();  event.accepted = true; return;
+                case Qt.Key_I: Actions.toggleRightPanel(); event.accepted = true; return;
+                }
+            }
+
+            if (event.key === Qt.Key_Escape) {
+                Actions.exitFullscreen();
+                event.accepted = true;
+                return;
+            }
+
+            if (!mediaKeys)
+                return;                  // Web mode: media keys are inert (§P3.6)
+
+            switch (event.key) {
+            case Qt.Key_Space:  Actions.playPause(); break;
+            case Qt.Key_Left:   Actions.seekRelative(shift ? -60000 : -10000); break;
+            case Qt.Key_Right:  Actions.seekRelative(shift ?  60000 :  10000); break;
+            case Qt.Key_Up:     Actions.adjustVolume(5); break;
+            case Qt.Key_Down:   Actions.adjustVolume(-5); break;
+            case Qt.Key_M:      Actions.toggleMute(); break;
+            case Qt.Key_F:      Actions.toggleFullscreen(); break;
+            case Qt.Key_S:      Actions.cycleSubtitleTrack(); break;
+            case Qt.Key_A:      Actions.cycleAudioTrack(); break;
+            case Qt.Key_L:      Actions.cycleRepeat(); break;
+            case Qt.Key_BracketLeft:  Actions.stepRate(-1); break;
+            case Qt.Key_BracketRight: Actions.stepRate(1); break;
+            case Qt.Key_Delete: Actions.clearSelected(); break;
+            default: return;
+            }
+            event.accepted = true;
+        }
+    }
+
+    // ======================================================================
+    // DRAG AND DROP — anywhere in the window, same handler as Add Files (§4.1)
+    // ======================================================================
+    DropArea {
+        anchors.fill: parent
+        onDropped: function(drop) {
+            if (drop.hasUrls) {
+                var paths = [];
+                for (var i = 0; i < drop.urls.length; i++)
+                    paths.push(drop.urls[i].toString());
+                Actions.addPaths(paths);       // the one append path
+                drop.accept();
+            }
+        }
+    }
+
+    // ======================================================================
+    // DIALOGS
+    // ======================================================================
+    FileDialog {
+        id: fileDialog
+        title: "Add files"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [
+            "Media files (*.mkv *.mp4 *.avi *.mov *.wmv *.ts *.flv *.webm *.m4v *.mpg *.mpeg *.mp3 *.flac *.aac *.opus *.ogg *.wav *.m4a *.wma)",
+            "Video (*.mkv *.mp4 *.avi *.mov *.wmv *.ts *.flv *.webm)",
+            "Audio (*.mp3 *.flac *.aac *.opus *.ogg *.wav *.m4a)",
+            "All files (*)"
+        ]
+        onAccepted: {
+            var paths = [];
+            for (var i = 0; i < selectedFiles.length; i++)
+                paths.push(selectedFiles[i].toString());
+            Actions.addPaths(paths);
+        }
+    }
+
+    FolderDialog {
+        id: folderDialog
+        title: "Add folder"
+        onAccepted: Actions.addPaths([selectedFolder.toString()])
+    }
+
+    FileDialog {
+        id: subtitleDialog
+        title: "Load subtitle file"
+        nameFilters: ["Subtitles (*.srt *.ass *.ssa *.sub *.vtt)", "All files (*)"]
+        onAccepted: App.loadSubtitle(selectedFile.toString())
+    }
+
+    ConfirmDialog {
+        id: confirmClear
+        title: "Clear playlist"
+        message: "Remove all items from the playlist?"
+        onConfirmed: App.clearPlaylist()
+    }
+
+    SettingsDialog {
+        id: settingsDialog
+    }
+}
