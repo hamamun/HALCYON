@@ -37,6 +37,12 @@ from engine.video_out import Chroma, VideoOutput
 
 log = logging.getLogger(__name__)
 
+# Keep Windows DLL-directory handles alive for the lifetime of the process.
+# ``os.add_dll_directory`` removes the search path when its returned handle is
+# garbage-collected; retaining only the path is not sufficient for libvlccore
+# and the plugin DLLs on Python 3.8+.
+_DLL_DIRECTORY_HANDLES = []
+
 
 class State(IntEnum):
     """Mirrors ``libvlc_state_t`` but decoupled from it, so UI code never
@@ -134,7 +140,15 @@ def _resolve_bundled_vlc() -> Path | None:
             if plugins.is_dir():
                 os.environ["VLC_PLUGIN_PATH"] = str(plugins)
             if sys.platform == "win32":
-                os.add_dll_directory(str(base))
+                # Do not discard this handle: discarding it immediately removes
+                # ``base`` from the DLL search path, which can make libvlc.dll
+                # load while libvlccore.dll or a codec plugin fails later.
+                try:
+                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(base)))
+                except (AttributeError, OSError):
+                    # Older Python/Windows combinations may not expose the API;
+                    # python-vlc can still use the explicit library path below.
+                    log.debug("could not register VLC DLL directory", exc_info=True)
                 os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
             else:
                 os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
@@ -596,13 +610,14 @@ class VlcEngine(QObject):
             return
         self._releasing = True
         self._poll.stop()
-        # Detach first: no VLC event may reach Python once teardown starts.
-        self._detach_events()
         try:
             if self._player is not None:
+                # Stop first and wait for VLC's decoder/event threads. Detaching
+                # while a stop event is still being dispatched leaves a narrow
+                # race where libVLC can call an already-invalid callback; it was
+                # also the source of the noisy QObject::disconnect warning seen
+                # during application exit.
                 self._player.stop()
-                # Give VLC's threads a moment to unwind before the memory they
-                # are still touching disappears.
                 deadline = 2000
                 waited = 0
                 import time
@@ -615,6 +630,10 @@ class VlcEngine(QObject):
                         break
                     time.sleep(0.02)
                     waited += 20
+
+                # No VLC event can be in flight now. Remove event and video
+                # callback registrations before releasing either object.
+                self._detach_events()
                 self.video_output.detach()
                 self._player.release()
                 self._player = None
@@ -625,7 +644,15 @@ class VlcEngine(QObject):
                 self._instance.release()
                 self._instance = None
         except Exception:
+            # Best effort cleanup is still important if a backend reports an
+            # error from stop/release. In particular, never leave Python
+            # callback trampolines registered against a dying VLC instance.
             log.exception("shutdown was not clean")
+            self._detach_events()
+            try:
+                self.video_output.detach()
+            except Exception:
+                log.debug("video callback detach failed", exc_info=True)
         log.info("engine shut down")
 
     # ---------------------------------------------------------- properties ---
