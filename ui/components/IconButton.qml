@@ -43,7 +43,7 @@ AbstractButton {
         Text {
             anchors.centerIn: parent
             text: root.glyph
-            font.family: Theme.fontFamily
+            font.family: Theme.fontFamilyIcons
             font.pixelSize: root.iconSize
             color: root.active ? root.activeColor
                  : root.hovered ? Theme.text

@@ -63,6 +63,43 @@ _VLC_STATE_MAP = {
     7: State.Error,
 }
 
+#: States in which the player is not holding the decoder open any more.
+_SETTLED_STATES = (0, 5, 6, 7)
+
+
+def _enum_int(value, default: int = 0) -> int:
+    """Read a libVLC enum as a plain ``int``.
+
+    **This is load-bearing.** ``python-vlc`` returns ``libvlc_state_t`` as a
+    :class:`vlc.State`, which derives from ``ctypes.c_uint`` — *not* from
+    ``int``. Calling ``int()`` on it does not unwrap it; ctypes falls back to
+    parsing its raw 4-byte buffer as a decimal string and raises::
+
+        ValueError: invalid literal for int() with base 10: b'\\x03\\x00\\x00\\x00'
+
+    The old ``int(self._player.get_state())`` sat inside a bare ``except:
+    return`` in the poll, so **every poll tick aborted on its first line**.
+    Nothing downstream ever updated: no time, no duration, no position, and
+    ``isPlaying`` was permanently ``False`` — which is why the seek bar stayed
+    grey, the clocks stayed at zero and Pause did nothing (``toggle()`` saw a
+    non-Playing state and called ``play()`` again).
+
+    The value lives in ``.value``; only fall back to ``int()`` for a genuine
+    Python int.
+    """
+    if value is None:
+        return default
+    inner = getattr(value, "value", None)
+    if inner is not None:
+        try:
+            return int(inner)
+        except (TypeError, ValueError):
+            return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 #: Base options. ``--avcodec-threads=0`` = use every core, which is what makes
 #: software decode viable at 1080p/1440p (§0.5).
 BASE_VLC_ARGS = [
@@ -150,6 +187,7 @@ class VlcEngine(QObject):
         self._rate = 1.0
         self._current_mrl = ""
         self._releasing = False
+        self._scrubbing = False
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -168,6 +206,8 @@ class VlcEngine(QObject):
     def _attach_events(self) -> None:
         vlc = self._vlc
         em = self._player.event_manager()
+        self._event_manager = em
+        self._event_wiring: list = []
         wiring = [
             (vlc.EventType.MediaPlayerEndReached, self._on_end_reached),
             (vlc.EventType.MediaPlayerEncounteredError, self._on_error),
@@ -183,6 +223,25 @@ class VlcEngine(QObject):
         for event_type, handler in wiring:
             em.event_attach(event_type, handler)
             self._event_callbacks.append(handler)
+            self._event_wiring.append((event_type, handler))
+
+    def _detach_events(self) -> None:
+        """Unhook every VLC event before the player is released.
+
+        Leaving them attached is what produced ``QObject::disconnect:
+        Unexpected nullptr parameter`` on exit: VLC could still fire into a
+        Python callback whose Qt receiver was already being torn down.
+        """
+        em = getattr(self, "_event_manager", None)
+        if em is None:
+            return
+        for event_type, handler in getattr(self, "_event_wiring", []):
+            try:
+                em.event_detach(event_type, handler)
+            except Exception:
+                log.debug("event_detach failed for %s", event_type, exc_info=True)
+        self._event_wiring = []
+        self._event_manager = None
 
     # Every one of these runs on a *VLC* thread. Emit and get out — Qt queues the
     # delivery to the GUI thread for us.
@@ -209,31 +268,56 @@ class VlcEngine(QObject):
 
     # ---------------------------------------------------------------- poll ---
     def _poll_state(self) -> None:
+        """Publish engine state on the GUI thread, 5x a second.
+
+        Every reading is fetched independently. A single ``try`` around the
+        whole body meant one unlucky call — and ``get_state()`` was an
+        unlucky call on *every* tick, see :func:`_enum_int` — silently killed
+        the time, duration and position updates that follow it.
+        """
         if self._releasing or self._player is None:
             return
+
+        player = self._player
+
         try:
-            raw = int(self._player.get_state())
+            state = _VLC_STATE_MAP.get(_enum_int(player.get_state()), State.Idle)
         except Exception:
-            return
-        state = _VLC_STATE_MAP.get(raw, State.Idle)
+            state = self._state
         if state != self._state:
             self._state = state
             self.stateChanged.emit(int(state))
 
-        duration = max(0, int(self._player.get_length()))
+        try:
+            duration = max(0, int(player.get_length()))
+        except Exception:
+            duration = self._duration
         if duration != self._duration:
             self._duration = duration
             self.durationChanged.emit(duration)
 
-        time_ms = max(0, int(self._player.get_time()))
-        if time_ms != self._time:
-            self._time = time_ms
-            self.timeChanged.emit(time_ms)
+        # While the user is dragging the seek bar the UI is authoritative:
+        # publishing VLC's pre-seek time here would yank the knob backwards
+        # between the drag and the seek landing.
+        if not self._scrubbing:
+            try:
+                time_ms = max(0, int(player.get_time()))
+            except Exception:
+                time_ms = self._time
+            if time_ms != self._time:
+                self._time = time_ms
+                self.timeChanged.emit(time_ms)
 
-        position = float(self._player.get_position() or 0.0)
-        if abs(position - self._position) > 1e-5:
-            self._position = position
-            self.positionChanged.emit(position)
+            try:
+                position = float(player.get_position() or 0.0)
+            except Exception:
+                position = self._position
+            # A stopped/ended player reports -1; clamp so the bar never renders
+            # a negative fill.
+            position = max(0.0, min(1.0, position))
+            if abs(position - self._position) > 1e-5:
+                self._position = position
+                self.positionChanged.emit(position)
 
     # ------------------------------------------------------------ playback ---
     @Slot(str)
@@ -261,36 +345,124 @@ class VlcEngine(QObject):
 
     @Slot()
     def play(self) -> None:
+        if self._player is None:
+            return
         self._player.play()
+        self._publish_state_now()
 
     @Slot()
     def pause(self) -> None:
-        if self._player.can_pause():
+        """Pause, and reflect it immediately.
+
+        ``can_pause()`` returns a ctypes bool that is falsy for some codecs
+        even when pausing works, so a failed check must not silently swallow
+        the request — we try to pause regardless and only guard the call.
+        """
+        if self._player is None:
+            return
+        try:
             self._player.set_pause(1)
+        except Exception:
+            log.exception("pause failed")
+        self._publish_state_now()
 
     @Slot()
     def toggle(self) -> None:
         """Single implementation of play/pause — §4.1. Space, the transport
-        button and the OSD all route here."""
-        if self._state == State.Playing:
+        button, the stage click and the OSD all route here.
+
+        Reads the state straight from libVLC rather than trusting the cached
+        ``self._state``: the cache is refreshed by a 200 ms poll, so a click
+        arriving between ticks used to be judged against a stale value.
+        """
+        if self._player is None:
+            return
+        try:
+            live = _VLC_STATE_MAP.get(_enum_int(self._player.get_state()), self._state)
+        except Exception:
+            live = self._state
+        if live == State.Playing:
             self.pause()
         else:
             self.play()
 
     @Slot()
     def stop(self) -> None:
+        """Stop playback and zero the clocks.
+
+        libVLC stops reporting time once stopped, so the poll would leave the
+        last-known time and position on screen forever. Reset them here and
+        notify, so the seek bar empties and the clocks read 0:00.
+        """
+        if self._player is None:
+            return
         try:
             self._player.stop()
         except Exception:
             log.exception("stop failed")
+        self._scrubbing = False
+        self._current_mrl = ""
+        if self._time != 0:
+            self._time = 0
+            self.timeChanged.emit(0)
+        if self._position != 0.0:
+            self._position = 0.0
+            self.positionChanged.emit(0.0)
+        if self._duration != 0:
+            self._duration = 0
+            self.durationChanged.emit(0)
+        self._publish_state_now()
+
+    def _publish_state_now(self) -> None:
+        """Push the current libVLC state out without waiting for the poll.
+
+        Play/pause must feel instant: the button glyph and the auto-hide logic
+        both key off ``isPlaying``, and a 200 ms lag there reads as a dropped
+        click.
+        """
+        if self._releasing or self._player is None:
+            return
+        try:
+            state = _VLC_STATE_MAP.get(_enum_int(self._player.get_state()), self._state)
+        except Exception:
+            return
+        if state != self._state:
+            self._state = state
+            self.stateChanged.emit(int(state))
+
+    @Slot(bool)
+    def set_scrubbing(self, active: bool) -> None:
+        """Tell the engine the user is dragging the seek bar.
+
+        While true the poll stops publishing time/position, so the knob
+        follows the pointer instead of fighting stale readings from VLC.
+        """
+        self._scrubbing = bool(active)
 
     @Slot(int)
     def seek(self, ms: int) -> None:
+        """Seek to an absolute time, updating *both* readouts.
+
+        Time and position are two views of one thing. Emitting only one left
+        the seek bar and the clock disagreeing until the next poll tick.
+        """
+        if self._player is None:
+            return
+        ms = max(0, int(ms))
         if self._duration > 0:
-            ms = max(0, min(ms, self._duration))
-        self._player.set_time(int(ms))
-        self._time = int(ms)
+            ms = min(ms, self._duration)
+        try:
+            self._player.set_time(int(ms))
+        except Exception:
+            log.exception("seek failed")
+            return
+        self._time = ms
         self.timeChanged.emit(self._time)
+        if self._duration > 0:
+            position = max(0.0, min(1.0, ms / self._duration))
+            if abs(position - self._position) > 1e-5:
+                self._position = position
+                self.positionChanged.emit(position)
 
     @Slot(int)
     def seek_relative(self, delta_ms: int) -> None:
@@ -298,10 +470,21 @@ class VlcEngine(QObject):
 
     @Slot(float)
     def set_position(self, fraction: float) -> None:
+        if self._player is None:
+            return
         fraction = max(0.0, min(1.0, float(fraction)))
-        self._player.set_position(fraction)
+        try:
+            self._player.set_position(fraction)
+        except Exception:
+            log.exception("set_position failed")
+            return
         self._position = fraction
         self.positionChanged.emit(fraction)
+        if self._duration > 0:
+            time_ms = int(fraction * self._duration)
+            if time_ms != self._time:
+                self._time = time_ms
+                self.timeChanged.emit(time_ms)
 
     # -------------------------------------------------------------- audio ---
     @Slot(int)
@@ -399,6 +582,8 @@ class VlcEngine(QObject):
             return
         self._releasing = True
         self._poll.stop()
+        # Detach first: no VLC event may reach Python once teardown starts.
+        self._detach_events()
         try:
             if self._player is not None:
                 self._player.stop()
@@ -406,15 +591,14 @@ class VlcEngine(QObject):
                 # are still touching disappears.
                 deadline = 2000
                 waited = 0
+                import time
+
                 while waited < deadline:
                     try:
-                        if int(self._player.get_state()) in (0, 5, 6, 7):
+                        if _enum_int(self._player.get_state()) in _SETTLED_STATES:
                             break
                     except Exception:
                         break
-                    QTimer.singleShot(0, lambda: None)
-                    import time
-
                     time.sleep(0.02)
                     waited += 20
                 self.video_output.detach()

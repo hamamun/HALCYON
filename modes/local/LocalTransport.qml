@@ -7,7 +7,7 @@ import Halcyon.Transport
 // TWO ROWS, ~72px, arranged for Local's fourteen controls:
 //
 //   ●━━━━━━━━━━━━━━○···········································
-//   ▶ ⏹ ⏮ ⏪ ⏩ ⏭   🔊━━━    12:34 / 45:67        ⚙ 🔁 🔀 ⛶
+//   ▶ ⏹ ⏮ ⏪ ⏩ ⏭  🔊━━━  -01:23 · 04:56 · 06:19    ☰ ⚙ 🔁 🔀 ⛶
 //
 // Every control here is a SHARED part from ui/transport/ or a shared IconButton.
 // This file contributes arrangement only — no new colours, no new radii, no new
@@ -20,7 +20,9 @@ Item {
     property var player: null
     property int repeatMode: 0        // 0 off, 1 one, 2 all
     property bool shuffle: false
-    property bool showRemaining: false
+    //: Reflects the left dock's state so the playlist button can light up.
+    //: Bound by the shell in Main.qml — see bindTransport().
+    property bool playlistVisible: false
     property var audioTracks: []
     property var subtitleTracks: []
     property int currentAudioId: -1
@@ -52,7 +54,15 @@ Item {
             height: 26
             position: root.player ? root.player.position : 0
             duration: root.player ? root.player.duration : 0
+            // Only seekable once we know how long the media is; a live stream
+            // or a not-yet-parsed file renders as a plain inert track.
+            enabled: root.player ? root.player.duration > 0 : false
             onSeekRequested: function(fraction) { Actions.seekFraction(fraction) }
+            // Suspend the engine's position polling for the duration of the
+            // drag, so the knob follows the pointer instead of snapping back
+            // to whatever VLC last reported.
+            onScrubStarted: Actions.beginScrub()
+            onScrubEnded: Actions.endScrub()
         }
 
         // ----------------------------------------------- row 2: controls --
@@ -107,12 +117,12 @@ Item {
                     onMuteToggled: Actions.toggleMute()
                 }
 
+                // Remaining · playback · media — all three, always, in that
+                // order. No toggle (see TimeDisplay.qml).
                 TimeDisplay {
                     anchors.verticalCenter: parent.verticalCenter
                     elapsed: root.player ? root.player.time : 0
                     duration: root.player ? root.player.duration : 0
-                    showRemaining: root.showRemaining
-                    onToggled: root.showRemaining = !root.showRemaining
                 }
             }
 
@@ -122,6 +132,16 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.spaceXs
 
+                // Show/hide the queue. The left dock had no on-screen toggle
+                // at all — Ctrl+L was the only way to reach it, which is not
+                // discoverable. This is a *trigger* for the existing action,
+                // not a second implementation (§4.1).
+                IconButton {
+                    glyph: Glyphs.playlist
+                    tooltip: "Playlist (Ctrl+L)"
+                    active: root.playlistVisible
+                    onClicked: Actions.toggleLeftPanel()
+                }
                 IconButton {
                     id: gearButton
                     glyph: Glyphs.settings

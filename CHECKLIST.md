@@ -175,16 +175,24 @@
 - [ ] Click-to-seek anywhere on the track
 - [ ] Scrub-drag follows pointer live, commits on release
 - [ ] Hover timestamp tooltip *(frame thumbnail deferred to v1.1 · §8)*
-- [ ] `VolumeControl.qml` — icon only at rest, **slider expands rightward on hover**
-- [ ] Mute toggle on icon click; icon reflects level and mute state
-- [ ] `TimeDisplay.qml` — ★ **one click target, two states**: elapsed/total ↔ remaining · §P1.5
+- [x] `VolumeControl.qml` — icon plus an **always-visible** slider
+      *(revised: the hover-to-expand version never expanded — the IconButton
+      swallowed the hover events — and a volume control you cannot see is one
+      most people never find.)*
+- [x] Mute toggle on icon click; icon reflects level and mute state
+- [x] `TimeDisplay.qml` — **three readouts, always visible, fixed order**:
+      `remaining · playback · media`
+      *(revised: replaces the click-to-toggle elapsed↔remaining control. The
+      toggle hid one value behind the other and was undiscoverable.)*
 - [ ] `TrackPopover.qml` — ⚙ grouping speed, audio track, subtitle track, subtitle delay
 - [ ] `TransportScrim.qml` — vertical gradient for legibility over bright video
 
 ### Build — Local's arrangement
 - [ ] `modes/local/LocalTransport.qml` — **two rows, ~72px** · §B.2
 - [ ] Row 1: seek bar, full width
-- [ ] Row 2: ▶ ⏹ ⏮ ⏪ ⏩ ⏭ · volume · time · ⚙ 🔁 🔀 ⛶
+- [x] Row 2: ▶ ⏹ ⏮ ⏪ ⏩ ⏭ · volume · time · ☰ ⚙ 🔁 🔀 ⛶
+      (☰ = playlist toggle — the left dock previously had no on-screen
+      trigger at all, only Ctrl+L)
 - [ ] All 14 controls present and wired to `Actions` entries
 - [ ] Repeat cycles off → one → all, with distinct icons
 - [ ] Shuffle toggles, icon reflects state
@@ -336,7 +344,9 @@
 - [ ] `core/lyrics.py` — sidecar `.lrc` parsing, timed
 - [ ] Embedded lyrics tags
 - [ ] Lyrics tab: auto-scroll, current line highlighted, click a line to seek
-- [ ] Audio-only idle visual: album art + Ken Burns + audio-reactive bars · §7
+- [x] Audio-only idle visual: album art + Ken Burns on the stage · §7
+      (`ui/shell/NowPlayingCard.qml` — cover, title, artist, album; shown
+      whenever the stage has no picture. Audio-reactive bars still to do.)
 - [ ] Settings dialog behind the gear · §4.1
 - [ ] **Turbo Mode** toggle in Settings — `set_hwnd()` + `--avcodec-hw=d3d11va`; transport drops to a solid strip below the video · §0.5
 - [ ] All hotkeys wired, every one invoking an `Actions` entry · §P1.5

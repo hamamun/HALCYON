@@ -38,6 +38,7 @@ AbstractButton {
         Text {
             visible: root.glyph.length > 0
             text: root.glyph
+            font.family: Theme.fontFamilyIcons
             font.pixelSize: Theme.iconSize - 4
             color: root.primary ? Theme.textOnAccent : Theme.text
             anchors.verticalCenter: parent.verticalCenter

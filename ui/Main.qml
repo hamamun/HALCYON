@@ -73,6 +73,8 @@ Shell {
         }
         function seekTo(ms)       { Player.seek(ms) }
         function seekFraction(f)  { Player.set_position(f) }
+        function beginScrub()     { Player.set_scrubbing(true) }
+        function endScrub()       { Player.set_scrubbing(false) }
         function setRate(rate) {
             Player.set_rate(rate);
             osd(rate + "\u00D7");
@@ -207,6 +209,8 @@ Shell {
             item.shuffle = Qt.binding(function() {
                 return window.modeContext ? window.modeContext.shuffle : false;
             });
+        if ("playlistVisible" in item)
+            item.playlistVisible = Qt.binding(function() { return panelHost.open });
         if ("audioTracks" in item)
             item.audioTracks = Qt.binding(function() { return App.audioTracks });
         if ("subtitleTracks" in item)
@@ -352,10 +356,17 @@ Shell {
         }
     }
 
+    // `target` is guarded rather than a bare `Player`. On shutdown Qt clears
+    // the context property before this element is destroyed, so the binding
+    // re-evaluates to null/undefined and Qt tries to disconnect from nothing —
+    // which is the `QObject::disconnect: Unexpected nullptr parameter` line in
+    // the exit log. Resolving to `null` explicitly makes the detach a no-op.
     Connections {
-        target: Player
+        target: (typeof Player !== "undefined" && Player) ? Player : null
+        enabled: target !== null
+
         function onStateChanged() {
-            if (!Player.isPlaying)
+            if (target && !target.isPlaying)
                 window.wakeChrome();     // never hide while paused
         }
     }

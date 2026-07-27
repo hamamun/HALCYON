@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+
+from core import paths
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,9 @@ class Metadata(QObject):
 
     changed = Signal()
 
+    #: How many times to re-read while waiting for libVLC's async parse.
+    _MAX_RETRIES = 5
+
     def __init__(self, engine, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._engine = engine
@@ -39,15 +44,29 @@ class Metadata(QObject):
         self._album = ""
         self._artwork = ""
         self._details: list[dict] = []
+        self._path = ""
+        self._retries = 0
 
     @Slot(str)
     def load(self, path: str) -> None:
+        """Read metadata for ``path``.
+
+        libVLC parses asynchronously, so the first read right after a track
+        opens usually returns empty strings for title/artist/album/art. A
+        couple of short retries pick the values up as soon as the parse lands
+        — cheap, and the alternative (subscribing to MediaParsedChanged) fires
+        on a VLC thread and would need marshalling back anyway.
+        """
         self._reset()
+        self._retries = 0
         if not path:
             self.changed.emit()
             return
+        self._path = path
+        self._read(path)
 
-        file_path = Path(path.replace("file://", ""))
+    def _read(self, path: str) -> None:
+        file_path = Path(paths.normalise_path(path))
         self._title = file_path.stem
         details = [
             {"label": "File", "value": file_path.name},
@@ -60,7 +79,20 @@ class Metadata(QObject):
             player = getattr(self._engine, "raw_player", None)
             media = player.get_media() if player is not None else None
             if media is not None:
-                media.parse_with_options(vlc.MediaParseFlag.local, 3000)
+                # `local` alone parses the *stream* but never goes looking for
+                # cover art, so ArtworkURL came back empty for every file and
+                # the album-art slot was permanently blank. `fetch_local` is
+                # the flag that extracts embedded covers and picks up
+                # folder.jpg / cover.jpg next to the file. The two are a
+                # bitmask, so they combine.
+                #
+                # MediaParseFlag members are ctypes enums; OR-ing them needs
+                # their .value, and the result is passed back as a plain int.
+                flags = (
+                    vlc.MediaParseFlag.local.value
+                    | vlc.MediaParseFlag.fetch_local.value
+                )
+                media.parse_with_options(flags, 3000)
 
                 def meta(key):
                     try:
@@ -117,12 +149,25 @@ class Metadata(QObject):
         self._details = details
         self.changed.emit()
 
+        # If the parse has not produced tags yet, look again shortly. Bounded
+        # so a file that genuinely has no tags does not retry forever.
+        if self._retries < self._MAX_RETRIES and not (self._artist or self._artwork):
+            self._retries += 1
+            QTimer.singleShot(400, self._retry)
+
+    def _retry(self) -> None:
+        # The user may have skipped to another track while we waited; only
+        # refresh if this is still the file on air.
+        if self._path:
+            self._read(self._path)
+
     def _reset(self) -> None:
         self._title = ""
         self._artist = ""
         self._album = ""
         self._artwork = ""
         self._details = []
+        self._path = ""
 
     @Property(str, notify=changed)
     def title(self) -> str:

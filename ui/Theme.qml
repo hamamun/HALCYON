@@ -82,6 +82,22 @@ QtObject {
     // ----------------------------------------------------------------- type --
     readonly property string fontFamily: "Segoe UI Variable Text, Segoe UI, Inter, sans-serif"
     readonly property string fontFamilyMono: "Cascadia Mono, Consolas, monospace"
+
+    // The icon font — §B.1. Every Glyphs.* codepoint MUST be rendered with
+    // this family and nothing else.
+    //
+    // Glyphs.qml holds private-use codepoints (U+E7xx…) from Segoe Fluent
+    // Icons. Drawing them with `fontFamily` asks Segoe UI *Text* for a
+    // character it does not have, so Qt walks the entire installed font list
+    // hunting for a fallback. That is the source of the
+    //
+    //     qt.text.font.db: OpenType support missing for "Tahoma", script 12
+    //     ... Arial / MS UI Gothic / SimSun / Segoe UI Emoji / Segoe UI Symbol
+    //
+    // wall in the log — one line per candidate font, per glyph — and the
+    // search ends in a blank box or nothing at all, which is why transport
+    // icons were missing. Naming the icon font directly fixes both.
+    readonly property string fontFamilyIcons: "Segoe Fluent Icons, Segoe MDL2 Assets"
     readonly property int fontSizeTiny:  10
     readonly property int fontSizeSmall: 12
     readonly property int fontSizeBody:  13

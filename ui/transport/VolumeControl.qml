@@ -3,43 +3,43 @@ import Halcyon.Ui
 
 // Shared transport part — §B.4.
 //
-// Icon only at rest; the slider expands rightward on hover (§P1.5). The icon
-// reflects both level and mute state, and clicking it toggles mute — one
-// target, and the icon *is* the state readout.
+// Mute/level icon plus a slider. Clicking the icon toggles mute, and the icon
+// *is* the level readout — one target, no separate indicator.
 //
-// Used by Local and by M3U. M3U was missing volume in earlier plan drafts; that
-// was an oversight (§P2.3), and the fix is simply that M3U's bar includes this
-// same part.
+// The slider used to be hidden until hover ("icon only at rest, expands
+// rightward"). Two things were wrong with that in practice:
+//
+//   1. It never actually expanded. The hover MouseArea sat *behind* an
+//      IconButton, and AbstractButton has hoverEnabled: true, so the button
+//      swallowed the hover events. `hoverArea.containsMouse` stayed false
+//      forever and the slider's container stayed 0px wide — the reported
+//      "no volume slider".
+//   2. Even working, a volume control you cannot see is a volume control most
+//      people never find.
+//
+// So the slider is always present. Hover still has an effect — the track
+// brightens and the handle appears — but visibility no longer depends on it.
+//
+// Used by Local and by M3U (§P2.3).
 Item {
     id: root
 
     property int volume: 80
     property bool muted: false
-    property int expandedWidth: 92
+    property int sliderWidth: 84
 
     signal volumeRequested(int value)
     signal muteToggled()
 
-    readonly property bool expanded: hoverArea.containsMouse || slider.pressed
-
     implicitHeight: Theme.hitTarget
-    implicitWidth: Theme.hitTarget + (expanded ? expandedWidth : 0)
+    implicitWidth: Theme.hitTarget + sliderWidth + Theme.spaceXs
     width: implicitWidth
-
-    Behavior on width {
-        NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easing }
-    }
-
-    MouseArea {
-        id: hoverArea
-        anchors.fill: parent
-        hoverEnabled: true
-        acceptedButtons: Qt.NoButton
-    }
+    height: implicitHeight
 
     Row {
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 0
+        anchors.left: parent.left
+        spacing: Theme.spaceXs
 
         IconButton {
             anchors.verticalCenter: parent.verticalCenter
@@ -53,30 +53,21 @@ Item {
             onClicked: root.muteToggled()
         }
 
-        Item {
-            width: root.expanded ? root.expandedWidth : 0
-            height: Theme.hitTarget
-            clip: true
-            opacity: root.expanded ? 1 : 0
-
-            Behavior on width {
-                NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easing }
-            }
-            Behavior on opacity {
-                NumberAnimation { duration: Theme.durNormal; easing.type: Theme.easing }
-            }
-
-            HSlider {
-                id: slider
-                anchors.verticalCenter: parent.verticalCenter
-                width: root.expandedWidth - Theme.spaceSm
-                from: 0
-                to: 100
-                value: root.muted ? 0 : root.volume
-                trackHeight: 4
-                handleSize: 11
-                onMoved: root.volumeRequested(Math.round(value))
-            }
+        HSlider {
+            id: slider
+            anchors.verticalCenter: parent.verticalCenter
+            width: root.sliderWidth
+            from: 0
+            to: 100
+            // A muted player reads as 0 so the slider agrees with the icon,
+            // but the underlying volume is not destroyed — unmuting restores it.
+            value: root.muted ? 0 : root.volume
+            trackHeight: 4
+            handleSize: 11
+            // `moved` fires only for user interaction, never for the binding
+            // above — so a volume change arriving from a hotkey or the OSD
+            // cannot echo back out and fight the value it just set.
+            onMoved: root.volumeRequested(Math.round(value))
         }
     }
 }

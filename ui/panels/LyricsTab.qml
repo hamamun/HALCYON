@@ -72,6 +72,7 @@ Item {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: Glyphs.lyrics
+            font.family: Theme.fontFamilyIcons
             font.pixelSize: 30
             color: Theme.textFaint
         }

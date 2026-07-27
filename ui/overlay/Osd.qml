@@ -86,6 +86,7 @@ Item {
             Text {
                 id: statusGlyph
                 anchors.verticalCenter: parent.verticalCenter
+                font.family: Theme.fontFamilyIcons
                 font.pixelSize: Theme.iconSize
                 color: Theme.accent
                 visible: text.length > 0
@@ -139,6 +140,7 @@ Item {
                 spacing: Theme.spaceSm
                 Text {
                     id: levelGlyph
+                    font.family: Theme.fontFamilyIcons
                     font.pixelSize: Theme.iconSize
                     color: Theme.accent
                 }
@@ -196,6 +198,7 @@ Item {
         opacity: 0
         anchors.horizontalCenter: parent.horizontalCenter
         y: (parent.height - root.safeBottom) / 2 - height / 2
+        font.family: Theme.fontFamilyIcons
         font.pixelSize: 72
         color: Theme.text
 

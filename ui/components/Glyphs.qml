@@ -37,6 +37,7 @@ QtObject {
     readonly property string clearAll:   "\uE74D"
     readonly property string clearItem:  "\uE738"
     readonly property string playlist:   "\uE90B"
+    readonly property string infoPanel:  "\uE8A0"   // right dock toggle
 
     // chrome
     readonly property string settings:   "\uE713"
