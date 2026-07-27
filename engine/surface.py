@@ -49,6 +49,7 @@ from PySide6.QtQml import QmlElement
 from PySide6.QtQuick import (
     QQuickItem,
     QQuickWindow,
+    QSGNode,
     QSGSimpleTextureNode,
     QSGTexture,
     QSGTextureProvider,
@@ -90,6 +91,7 @@ class PlaneSurface(QQuickItem):
         self.setFlag(QQuickItem.Flag.ItemHasContents, True)
         self._provider: _PlaneTextureProvider | None = None
         self._texture: QSGTexture | None = None
+        self._texture_size: QSize = QSize()
         self._image: QImage | None = None
         self._pending: QImage | None = None
         self._dirty = False
@@ -121,33 +123,61 @@ class PlaneSurface(QQuickItem):
         """Build the QSGTexture from the staged image and publish it.
 
         Runs on the **render thread**, while the owning :class:`VideoSurface`
-        holds the ring pin — so the one DMA upload reads stable pixels and no
-        reader/writer race is possible.
+        holds the ring pin.
 
         The plane item itself is invisible (only the QML ``ShaderEffect``
         samples it), so its own ``updatePaintNode`` is never invoked by Qt.
         Committing here, from the surface's ``updatePaintNode``, is therefore
-        the *only* path by which a plane ever receives a texture. Leaving it
-        to ``updatePaintNode`` left three texture providers holding ``None``,
-        which is exactly why the I420 path rendered black whenever the shader
-        was present.
+        the *only* path by which a plane ever receives a texture.
+
+        **Why the image must already be a deep copy.** ``createTextureFromImage``
+        does not upload anything; it wraps the QImage in a ``QSGPlainTexture``
+        and marks it dirty. The real ``convertToFormat`` + ``uploadTexture``
+        happens later, in ``commitTextureOperations``, during the render pass —
+        long after ``updatePaintNode`` has returned and the ring pin has been
+        released. Handing it a QImage that merely *views* ring memory means Qt
+        reads those bytes while VLC's decoder is already writing the next frame
+        into the same slot. The caller therefore passes an owned copy; see
+        :meth:`VideoSurface._plane_view`.
+
+        **On reusing the texture.** In C++ the cheap path here would be
+        ``QSGPlainTexture::setImage()``, which re-flags the existing GPU
+        resource instead of allocating a new one. PySide6 does not expose
+        ``QSGPlainTexture`` at all (nor ``setImage`` on the ``QSGTexture``
+        base), so from Python a new QSGTexture per frame is the only option.
+        The important part is that the *old* one is dropped here, on the render
+        thread, at a well-defined point — the previous code let three textures
+        per frame accumulate until the RHI's allocator gave out, which is the
+        "Device loss detected in Present()" in the report.
         """
         image = self._pending
-        if image is None or image.isNull():
-            texture = None
-        else:
-            # One DMA upload. NoOwnership: the pixels belong to the ring, and
-            # the ring outlives this texture.
-            texture = window.createTextureFromImage(
-                image, QQuickWindow.CreateTextureOption.TextureIsOpaque
-            )
-            self._image = image  # keep the view alive while Qt reads it
-        self._texture = texture
+        self._pending = None
         self._dirty = False
-        # Ensure the provider exists so the ShaderEffect always has a texture to
-        # sample, even on the first frame before it has queried us. Safe on the
-        # render thread (we are inside the surface's updatePaintNode).
+
+        if image is None or image.isNull():
+            if self._texture is not None:
+                self._texture = None
+                self._texture_size = QSize()
+                self._image = None
+                self.textureProvider().set_texture(None)
+            return
+
+        texture = window.createTextureFromImage(
+            image, QQuickWindow.CreateTextureOption.TextureIsOpaque
+        )
+        # Release the previous frame's texture explicitly rather than waiting
+        # for Python's GC to notice. At 60 fps a delayed collection is what
+        # turns "one spare texture" into hundreds of live GPU allocations.
+        old = self._texture
+        self._texture = texture
+        self._texture_size = image.size()
+        self._image = image  # keep the pixels alive until the upload lands
         self.textureProvider().set_texture(texture)
+        if old is not None:
+            try:
+                old.deleteLater()
+            except (AttributeError, RuntimeError):
+                pass
 
     def updatePaintNode(self, node, _data):  # noqa: N802 - Qt override
         window = self.window()
@@ -172,7 +202,9 @@ class PlaneSurface(QQuickItem):
 
     def releaseResources(self) -> None:  # noqa: N802 - Qt override
         self._texture = None
+        self._texture_size = QSize()
         self._image = None
+        self._pending = None
         if self._provider is not None:
             try:
                 self._provider.set_texture(None)
@@ -226,8 +258,9 @@ class VideoSurface(QQuickItem):
 
         # RV32 path: this item draws the picture itself.
         self._texture: QSGTexture | None = None
+        self._texture_size: QSize = QSize()
         self._image: QImage | None = None
-        self._image_buf: object | None = None  # keep the ring view alive for upload
+        self._image_buf: object | None = None
 
         # I420 path: three child plane items, sampled by a ShaderEffect in QML.
         self._plane_y: PlaneSurface | None = None
@@ -324,6 +357,7 @@ class VideoSurface(QQuickItem):
         self._fmt = None
         self._last_serial = -1
         self._texture = None
+        self._texture_size = QSize()
         self._image = None
         self._image_buf = None
         self._plane_bufs = ()
@@ -410,23 +444,35 @@ class VideoSurface(QQuickItem):
 
     def _plane_view(self, address: int, offset: int, pitch: int, lines: int,
                     width: int, height: int) -> tuple[QImage, object]:
-        """A QImage that *views* ring memory — no copy, no ownership.
+        """One plane of the current frame as a QImage Qt may keep.
 
         ``pitch`` is honoured as bytesPerLine so padded strides do not shear the
         picture; the visible ``width``/``height`` crop off the alignment padding.
 
-        Returns ``(image, buffer)``; the caller must keep ``buffer`` reachable
-        for as long as Qt might still read from the image (until the texture
-        upload completes). The pixels themselves live in the ring and are never
-        freed here.
+        **This returns an owned copy, deliberately.** The obvious optimisation —
+        wrapping ring memory in a QImage and relying on the pin to keep it
+        stable — is unsound, because Qt does not read the pixels inside
+        ``updatePaintNode``. ``createTextureFromImage``/``setImage`` only store
+        the QImage; the actual read happens in ``commitTextureOperations``
+        during the render pass, after we have released the pin. The decoder is
+        then free to overwrite the slot mid-upload, which shows up as tearing,
+        flickering colour blocks, and — when the GPU reads a partially-written
+        page — a lost D3D11 device.
+
+        ``QImage::copy()`` also compacts the image to a tightly-packed
+        ``bytesPerLine``, which avoids the extra ``tmp.copy()`` Qt would
+        otherwise perform internally for a padded stride, so the cost is one
+        memcpy either way.
         """
         import ctypes
 
         size = pitch * lines
         buf = (ctypes.c_ubyte * size).from_address(address + offset)
-        image = QImage(
+        view = QImage(
             memoryview(buf), width, height, pitch, QImage.Format.Format_Grayscale8
         )
+        # copy() detaches from ring memory; the result owns its pixels.
+        image = view.copy()
         return image, buf
 
     def _update_planar(self, window, address: int, fmt: FrameFormat, node):
@@ -451,10 +497,10 @@ class VideoSurface(QQuickItem):
         self._plane_v.set_image(v_img)
         for plane in (self._plane_y, self._plane_u, self._plane_v):
             plane.commit_texture(window)
-        # Hold the ctypes wrappers until the next frame. The textures are already
-        # uploaded, but this is cheap insurance against any RHI that defers its
-        # GPU read past this sync phase.
-        self._plane_bufs = (y_buf, u_buf, v_buf)
+        # The images are detached copies now, so the ctypes views are dead the
+        # moment this returns. Drop them rather than pinning three frame-sized
+        # allocations until the next frame.
+        self._plane_bufs = ()
         return node
 
     def _update_packed(self, window, address: int, fmt: FrameFormat, node):
@@ -468,30 +514,52 @@ class VideoSurface(QQuickItem):
         # every frame rendered with red and blue swapped. Format_RGBX8888 is a
         # fixed byte order of R, G, B, X regardless of CPU endianness, which is
         # exactly what VLC writes. Do not "simplify" this back to RGB32.
+        # .copy() for the same reason as the planar path: Qt's upload is
+        # deferred past the ring pin, so it must not reference ring memory.
         image = QImage(
             memoryview(buf),
             fmt.width,
             fmt.height,
             fmt.y_pitch,
             QImage.Format.Format_RGBX8888,
-        )
-        self._texture = window.createTextureFromImage(
+        ).copy()
+
+        texture = window.createTextureFromImage(
             image, QQuickWindow.CreateTextureOption.TextureIsOpaque
         )
+        # Same reasoning as PlaneSurface.commit_texture: PySide6 gives us no
+        # way to re-upload into an existing QSGTexture, so drop last frame's
+        # explicitly instead of letting GC decide when the GPU memory returns.
+        old = self._texture
+        self._texture = texture
+        self._texture_size = image.size()
         self._image = image
-        self._image_buf = buf  # keep the ring view alive until the upload lands
+        self._image_buf = None  # the copy owns its pixels; nothing to pin
+
         tex_node = node if isinstance(node, QSGSimpleTextureNode) else QSGSimpleTextureNode()
         tex_node.setTexture(self._texture)
         tex_node.setOwnsTexture(False)
         tex_node.setFiltering(QSGTexture.Filtering.Linear)
         tex_node.setRect(self._content_rect)
+        # The node keeps the same geometry frame to frame, so Qt has no other
+        # way to learn the material changed.
+        tex_node.markDirty(QSGNode.DirtyStateBit.DirtyMaterial)
+        if old is not None:
+            try:
+                old.deleteLater()
+            except (AttributeError, RuntimeError):
+                pass
         return tex_node
 
     def releaseResources(self) -> None:  # noqa: N802 - Qt override
+        # The RHI is going away (device loss, window re-parent). Drop every GPU
+        # handle; the next updatePaintNode rebuilds from the ring.
         self._texture = None
+        self._texture_size = QSize()
         self._image = None
         self._image_buf = None
         self._plane_bufs = ()
+        self._last_serial = -1
 
     # ---------------------------------------------------------- properties ---
     @Property(bool, notify=hasVideoChanged)
