@@ -118,7 +118,7 @@ python tools/check_isolation.py
 |---|---|---|---|
 | `auto` *(default)* | I420 → packed grayscale texture + YUV shader | 1.5 | fewest bytes over the bus |
 | `i420` | as above, forced | 1.5 | |
-| `rv32` | BGRA straight to `createTextureFromImage` | 4.0 | fallback for odd GPUs; §9 |
+| `rv32` | RGB straight to `createTextureFromImage` | 4.0 | fallback for odd GPUs; §9 |
 
 Both paths do **one** texture upload per frame from a triple-buffered ring that
 libVLC decodes straight into — no CPU memcpy anywhere.

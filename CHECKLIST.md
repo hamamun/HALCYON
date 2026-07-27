@@ -99,7 +99,8 @@
 - [ ] `engine/surface.py` — `VideoSurface` as a registered QML type
 - [ ] Aspect-ratio fit: letterbox / pillarbox, correct on resize
 - [ ] DPR-aware texture sizing · §9 HiDPI risk
-- [ ] RV32 + `Format_BGRA8888` fallback path behind a flag · §9
+- [x] RV32 + `Format_RGBX8888` fallback path behind a flag · §9
+      *(VLC RV32 is host-order RGB, not BGRA — Format_RGB32 swaps red/blue. Fixed in engine/surface.py)*
 - [ ] `engine/vlc_engine.py` — instance creation, bundled-DLL path resolution
 - [ ] Set `VLC_PLUGIN_PATH` at startup · §9 Nuitka risk
 - [ ] `play()` · `pause()` · `stop()` · `toggle()`
