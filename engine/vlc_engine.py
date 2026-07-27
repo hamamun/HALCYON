@@ -330,6 +330,13 @@ class VlcEngine(QObject):
         if not _looks_like_url(mrl):
             mrl = Path(mrl).expanduser().resolve().as_uri()
 
+        if self._media is not None:
+            try:
+                self._media.release()
+            except Exception:
+                pass
+            self._media = None
+
         media = self._instance.media_new(mrl)
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
@@ -345,7 +352,7 @@ class VlcEngine(QObject):
 
     @Slot()
     def play(self) -> None:
-        if self._player is None:
+        if self._player is None or self._media is None or not self._current_mrl:
             return
         self._player.play()
         self._publish_state_now()
@@ -375,7 +382,7 @@ class VlcEngine(QObject):
         ``self._state``: the cache is refreshed by a 200 ms poll, so a click
         arriving between ticks used to be judged against a stale value.
         """
-        if self._player is None:
+        if self._player is None or self._media is None or not self._current_mrl:
             return
         try:
             live = _VLC_STATE_MAP.get(_enum_int(self._player.get_state()), self._state)
@@ -398,8 +405,15 @@ class VlcEngine(QObject):
             return
         try:
             self._player.stop()
+            self._player.set_media(None)
         except Exception:
             log.exception("stop failed")
+        if self._media is not None:
+            try:
+                self._media.release()
+            except Exception:
+                pass
+            self._media = None
         self._scrubbing = False
         self._current_mrl = ""
         if self._time != 0:

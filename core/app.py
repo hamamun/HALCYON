@@ -176,21 +176,38 @@ class AppController(QObject):
 
     @Slot(list)
     def clearSelected(self, rows: list) -> None:  # noqa: N802 - QML-facing
-        """Remove the selected rows, stopping playback if one of them is the
-        track currently on air.
-
-        Removing a row from a list model does nothing to libVLC — it is still
-        decoding a file that is no longer in the queue. Whether the *playing*
-        item was removed is the model's business (it knows the current index),
-        so it reports back and this decides what the engine does.
+        """Remove the selected rows. If the currently playing track was removed,
+        auto-start the next available track or stop if queue is empty.
         """
         target = self.playlist
         if target is None or not hasattr(target, "remove_rows"):
             return
-        wanted = [int(r) for r in rows]
-        playing_path = self._current_path()
+        wanted = [int(r) for r in rows if isinstance(r, (int, float, str))]
+        if not wanted:
+            return
+
+        cur = getattr(target, "current_index", lambda: -1)()
+        playing_removed = (cur in wanted)
+        removed_before = len([r for r in wanted if r < cur]) if playing_removed else 0
+
         target.remove_rows(wanted)
-        self._stop_if_orphaned(playing_path)
+
+        new_count = getattr(target, "count", 0)
+
+        if playing_removed:
+            if new_count == 0:
+                self._engine.stop()
+                self._metadata.load("")
+                self._lyrics.load("")
+            else:
+                target_idx = cur - removed_before
+                if target_idx < new_count:
+                    next_idx = target_idx
+                else:
+                    rep = getattr(target, "repeat_mode", lambda: 0)()
+                    next_idx = 0 if rep == 2 else new_count - 1
+
+                target.play_index(next_idx)
 
     @Slot()
     def clearPlaylist(self) -> None:  # noqa: N802 - QML-facing
@@ -268,6 +285,63 @@ class AppController(QObject):
             target.toggle_shuffle()
 
     # -------------------------------------------------------------- playback ---
+    @Slot()
+    def playPause(self) -> None:  # noqa: N802 - QML-facing
+        """Toggle play/pause, or start playing from playlist if stopped."""
+        from engine.vlc_engine import State
+
+        state = self._engine.state
+        if state in (State.Playing, State.Paused):
+            self._engine.toggle()
+            return
+
+        target = self.playlist
+        if target is not None:
+            count = getattr(target, "count", 0)
+            if count > 0:
+                cur = getattr(target, "current_index", lambda: -1)()
+                if 0 <= cur < count:
+                    target.play_index(cur)
+                else:
+                    target.play_index(0)
+            return
+
+        if self._engine.currentMedia:
+            self._engine.play()
+
+    @Slot()
+    def play(self) -> None:  # noqa: N802 - QML-facing
+        from engine.vlc_engine import State
+
+        state = self._engine.state
+        if state == State.Paused:
+            self._engine.play()
+            return
+
+        target = self.playlist
+        if target is not None:
+            count = getattr(target, "count", 0)
+            if count > 0:
+                cur = getattr(target, "current_index", lambda: -1)()
+                if 0 <= cur < count:
+                    target.play_index(cur)
+                else:
+                    target.play_index(0)
+            return
+
+        if self._engine.currentMedia:
+            self._engine.play()
+
+    @Slot()
+    def pause(self) -> None:  # noqa: N802 - QML-facing
+        self._engine.pause()
+
+    @Slot()
+    def stop(self) -> None:  # noqa: N802 - QML-facing
+        self._engine.stop()
+        self._metadata.load("")
+        self._lyrics.load("")
+
     @Slot(str)
     def openPath(self, path: str) -> None:  # noqa: N802 - QML-facing
         resume_ms = 0
@@ -294,7 +368,11 @@ class AppController(QObject):
         in one place, so this is just a nudge."""
         target = self.playlist
         if target is not None and hasattr(target, "play_next"):
-            target.play_next()
+            played = target.play_next()
+            if not played:
+                self._engine.stop()
+                self._metadata.load("")
+                self._lyrics.load("")
 
     def _auto_load_subtitle(self, path: str) -> None:
         media = Path(path)

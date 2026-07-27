@@ -55,12 +55,12 @@ Shell {
         // settled — and `null.usesPlayer` throws rather than returning false.
         function playPause() {
             if (!window.usesPlayer()) return;
-            Player.toggle();
+            App.playPause();
             osdGlyph(Player.isPlaying ? Glyphs.pause : Glyphs.play);
         }
-        function play()  { if (window.usesPlayer()) Player.play() }
-        function pause() { if (window.usesPlayer()) Player.pause() }
-        function stop()  { if (window.usesPlayer()) Player.stop() }
+        function play()  { if (window.usesPlayer()) App.play() }
+        function pause() { if (window.usesPlayer()) App.pause() }
+        function stop()  { if (window.usesPlayer()) App.stop() }
 
         function next()     { App.next() }
         function previous() { App.previous() }
@@ -116,8 +116,18 @@ Shell {
         function addFiles()        { fileDialog.open() }
         function addFolder()       { folderDialog.open() }
         function addPaths(paths)   { App.addPaths(paths) }
-        function clearSelected()   { App.clearSelected(localPanelSelection()) }
-        function clearPlaylist()   { confirmClear.open() }
+        function clearSelected() {
+            App.clearSelected(localPanelSelection());
+            if (panelHost.item && "selection" in panelHost.item) {
+                panelHost.item.selection = [];
+            }
+        }
+        function clearPlaylist() {
+            App.clearPlaylist();
+            if (panelHost.item && "selection" in panelHost.item) {
+                panelHost.item.selection = [];
+            }
+        }
         function playIndex(i)      { App.playIndex(i) }
         function moveItem(f, t)    { App.moveItem(f, t) }
         function cycleRepeat()     { App.cycleRepeat() }
@@ -267,7 +277,7 @@ Shell {
                     id: osdLayer
                     anchors.fill: parent
                     osdEnabled: window.osdEnabled()
-                    suppressed: settingsDialog.visible || confirmClear.visible
+                    suppressed: settingsDialog.visible
                 }
 
                 // The mode's own bar, floating over the video (§B.4).
@@ -472,13 +482,6 @@ Shell {
         title: "Load subtitle file"
         nameFilters: ["Subtitles (*.srt *.ass *.ssa *.sub *.vtt)", "All files (*)"]
         onAccepted: App.loadSubtitle(selectedFile.toString())
-    }
-
-    ConfirmDialog {
-        id: confirmClear
-        title: "Clear playlist"
-        message: "Remove all items from the playlist?"
-        onConfirmed: App.clearPlaylist()
     }
 
     SettingsDialog {
