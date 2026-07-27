@@ -174,7 +174,10 @@ class PlaneSurface(QQuickItem):
         self._texture = None
         self._image = None
         if self._provider is not None:
-            self._provider.set_texture(None)
+            try:
+                self._provider.set_texture(None)
+            except RuntimeError:
+                pass
 
 
 @QmlElement
