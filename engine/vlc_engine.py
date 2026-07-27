@@ -117,6 +117,26 @@ BASE_VLC_ARGS = [
     "--no-snapshot-preview",
     "--no-stats",
     "--no-osd",  # Halcyon draws its own OSD in the scene graph (§6.2)
+    # ------------------------------------------------------------------
+    # Hardware decoding is INCOMPATIBLE with the vmem video callbacks.
+    #
+    # With --avcodec-hw=auto (the default) libVLC decodes into GPU surfaces in
+    # an opaque, driver-specific tiled layout. vmem then has to read those back
+    # into our buffers; when the copy is not supported for the negotiated
+    # chroma the planes arrive partially written or not at all, which is
+    # exactly the "no video / green garbage" symptom on 10-bit HEVC .mkv files.
+    # Upstream's position is explicit: "If you want hardware acceleration, do
+    # not use the video callbacks."
+    #
+    # ``libvlc_video_set_callbacks()`` already does ``var_SetString(mp,
+    # "avcodec-hw", "none")`` on the *player* object, so in the normal flow
+    # this is belt-and-braces. It is kept deliberately because that inheritance
+    # only applies to objects created after the call: setting it on the
+    # instance makes the guarantee independent of whether anything ever calls
+    # attach() late, and it also covers the short-lived probe instances in
+    # modes/local/playlist.py. Explicit beats implicit for a setting whose
+    # failure mode is a green picture.
+    "--avcodec-hw=none",
 ]
 
 
@@ -563,14 +583,37 @@ class VlcEngine(QObject):
 
     @Slot(str, result=bool)
     def add_subtitle_file(self, path: str) -> bool:
-        """External subtitle via ``add_slave`` (§P1.5)."""
-        try:
-            uri = Path(path).expanduser().resolve().as_uri()
-            rc = self._player.add_slave(self._vlc.MediaSlaveType.subtitle, uri, True)
-            return rc == 0
-        except Exception:
-            log.exception("add_subtitle_file failed")
+        """External subtitle via ``add_slave`` (§P1.5).
+
+        Guarded on every step. ``add_slave`` is a no-op unless a media is
+        loaded, and handing it a path that does not exist makes libVLC spawn a
+        demuxer that fails asynchronously on a VLC thread — which is a far more
+        confusing failure than returning False here.
+        """
+        if self._player is None or self._releasing:
             return False
+        if not self._current_mrl:
+            log.info("no media loaded — cannot attach subtitle %s", path)
+            return False
+        try:
+            resolved = Path(paths.normalise_path(path)).expanduser()
+        except Exception:
+            log.warning("unusable subtitle path %r", path)
+            return False
+        if not resolved.is_file():
+            log.warning("subtitle not found on disk: %s", resolved)
+            return False
+        try:
+            rc = self._player.add_slave(
+                self._vlc.MediaSlaveType.subtitle, resolved.resolve().as_uri(), True
+            )
+        except Exception:
+            log.exception("add_subtitle_file failed for %s", resolved)
+            return False
+        if rc != 0:
+            log.warning("libVLC rejected subtitle %s (rc=%s)", resolved.name, rc)
+            return False
+        return True
 
     @Slot(int)
     def set_subtitle_delay(self, delay_ms: int) -> None:

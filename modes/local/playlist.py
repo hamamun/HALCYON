@@ -48,6 +48,15 @@ AUDIO_EXTENSIONS = {
 }
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
+#: Sidecar subtitle formats. These are **not** media and must never enter the
+#: queue: libVLC will happily "open" a .srt as a media item, produce a track
+#: with no video and no audio, tear the video pipeline down and leave the UI
+#: showing a track that can never play. Dropping one is a request to subtitle
+#: the *current* video — core.app routes them there instead (§P1.5).
+SUBTITLE_EXTENSIONS = {
+    ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup", ".smi", ".txt",
+}
+
 
 class RepeatMode(IntEnum):
     Off = 0
@@ -92,11 +101,26 @@ class _ProbeTask(QRunnable):
         self.setAutoDelete(True)
 
     def run(self) -> None:
+        """Probe one file. **Must never raise.**
+
+        This is a ``QRunnable`` override, so an escaping exception surfaces as
+        Qt's "Error calling Python override of QRunnable::run()" on a pool
+        thread with no useful traceback. The whole body is therefore wrapped:
+        during interpreter shutdown even ``import vlc`` or ``log.debug`` can
+        fail, and a probe result is never worth taking the process down for.
+        """
+        try:
+            self._probe()
+        except BaseException:  # noqa: BLE001 - a pool thread must not propagate
+            pass
+
+    def _probe(self) -> None:
         # Bail before doing any work if the queue was cleared or the app is
         # quitting — a folder of 500 files leaves a lot of these queued.
         if self._signals.cancelled:
             return
         duration = 0
+        instance = media = None
         try:
             import vlc
 
@@ -106,10 +130,17 @@ class _ProbeTask(QRunnable):
                 if media is not None:
                     media.parse_with_options(vlc.MediaParseFlag.local, 2000)
                     duration = max(0, int(media.get_duration()))
-                    media.release()
-                instance.release()
         except Exception:
             log.debug("probe failed for %s", self._path, exc_info=True)
+        finally:
+            # Release in reverse order of creation, and never let a failed
+            # release strand the other handle.
+            for obj in (media, instance):
+                if obj is not None:
+                    try:
+                        obj.release()
+                    except Exception:
+                        pass
 
         # Re-check: the model may have been torn down during the parse above,
         # and emitting into a deleted QObject raises out of a pool thread.
@@ -197,7 +228,14 @@ class PlaylistModel(QAbstractListModel):
             if p.is_dir():
                 incoming.extend(self._scan_folder(p))
             elif p.is_file():
-                if p.suffix.lower() in MEDIA_EXTENSIONS:
+                suffix = p.suffix.lower()
+                if suffix in SUBTITLE_EXTENSIONS:
+                    # Not media. The caller (core.app.addPaths) has already had
+                    # the chance to attach it to the playing video; reaching
+                    # here means it could not, so drop it rather than queue an
+                    # unplayable row.
+                    log.info("ignoring subtitle file in queue: %s", p.name)
+                elif suffix in MEDIA_EXTENSIONS:
                     incoming.append(Track(str(p), p.stem))
                 else:
                     # Explicitly chosen through a dialog: the user knows what

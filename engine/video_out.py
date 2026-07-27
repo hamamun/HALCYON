@@ -28,6 +28,30 @@ natively produces, so nothing forces a CPU colour-space conversion before we eve
 see the frame. YUV→RGB happens in a fragment shader (§0.4). ``rv32`` remains a
 one-line fallback for hardware that dislikes the shader path (§9).
 
+The chroma callback, and why it needs its own prototype
+-------------------------------------------------------
+``python-vlc`` declares ``VideoFormatCb``'s ``chroma`` parameter as
+``ctypes.c_char_p``. When ctypes marshals a ``c_char_p`` *into* a Python
+callback it does not hand over the pointer — it builds an **immutable Python
+``bytes`` object** from it. ``ctypes.memmove(chroma, b"I420", 4)`` therefore
+writes four bytes into a throwaway Python object and VLC's real ``char
+chroma[5]`` is never touched.
+
+The consequence is not a crash, which is why it survived so long: VLC simply
+keeps whatever chroma the decoder natively produces. For 8-bit H.264 that
+happens to be I420 and everything looks fine. For 10-bit HEVC — which is what
+most x265 ``.mkv`` rips are — it is ``I0AL``/``P010``, i.e. **two bytes per
+sample**. We then allocate an 8-bit I420 ring, hand VLC 8-bit pitches, and
+interpret the result as 8-bit planar: a sheared, green picture.
+
+(The repeated "frame ring allocated" lines in the logs are a separate, normal
+thing — libVLC builds and rebuilds the vout while it settles on a size. They
+are worth watching but are not by themselves a fault.)
+
+The fix is to declare the callback ourselves with ``chroma`` typed as a raw
+``c_void_p``, so ``memmove`` lands in VLC's buffer, and then ``ctypes.cast`` the
+result to the type ``python-vlc``'s binding expects. See :data:`_FormatCbProto`.
+
 Lifetime rules (learned the hard way — §9, the High-severity row)
 -----------------------------------------------------------------
 * The ``ctypes`` trampolines are stored on ``self``. A callback that gets garbage
@@ -59,6 +83,25 @@ ALIGN = 32
 
 def _align_up(value: int, to: int = ALIGN) -> int:
     return (value + to - 1) // to * to
+
+
+#: Our own prototype for ``libvlc_video_format_cb``.
+#:
+#: Identical to ``python-vlc``'s ``CallbackDecorators.VideoFormatCb`` except for
+#: the second parameter: ``c_void_p`` instead of ``c_char_p``. That single
+#: change is what makes the chroma request actually reach libVLC — see the
+#: module docstring. ``ctypes.cast`` converts the resulting function pointer to
+#: the declared type at registration time, and because a cast preserves the
+#: address, libVLC calls exactly this trampoline.
+_FormatCbProto = ctypes.CFUNCTYPE(
+    ctypes.c_uint,                    # return: number of picture buffers
+    ctypes.POINTER(ctypes.c_void_p),  # opaque
+    ctypes.c_void_p,                  # chroma  -> writable char[5]
+    ctypes.POINTER(ctypes.c_uint),    # width
+    ctypes.POINTER(ctypes.c_uint),    # height
+    ctypes.POINTER(ctypes.c_uint),    # pitches[]
+    ctypes.POINTER(ctypes.c_uint),    # lines[]
+)
 
 
 class Chroma:
@@ -289,8 +332,21 @@ class VideoOutput:
         self._cb_unlock = None
         self._cb_display = None
         self._cb_format = None
+        self._cb_format_cast = None
         self._cb_cleanup = None
         self._opaque = None
+
+        #: Landing pad for a ``lock`` that arrives when the ring is not usable
+        #: (mid-reallocation, or after ``free()`` while VLC winds down).
+        #:
+        #: A fixed-size guess is not good enough here: the decoder writes a
+        #: whole plane, so anything smaller than the current frame's largest
+        #: plane turns a NULL-pointer crash into a heap corruption, which is
+        #: strictly worse. It is therefore sized from the real format in
+        #: :meth:`_ensure_scratch` and the three planes are given *separate*
+        #: regions so a planar write cannot overlap them.
+        self._scratch = None
+        self._scratch_plane = 0
 
     # ------------------------------------------------------------- attach ---
     def attach(self, player) -> None:
@@ -300,7 +356,12 @@ class VideoOutput:
         if self._attached:
             return
 
-        @vlc.CallbackDecorators.VideoFormatCb
+        # NOT vlc.CallbackDecorators.VideoFormatCb — its ``chroma`` parameter is
+        # c_char_p, which ctypes converts to an immutable bytes object on the
+        # way in, so the chroma we request is silently discarded (module
+        # docstring). Declare it with a raw pointer, then cast to the type the
+        # binding will type-check against.
+        @_FormatCbProto
         def _format(opaque, chroma, width, height, pitches, lines):
             return self._on_format(chroma, width, height, pitches, lines)
 
@@ -327,8 +388,14 @@ class VideoOutput:
         self._cb_lock = _lock
         self._cb_unlock = _unlock
         self._cb_display = _display
+        # Keep BOTH the original trampoline (above, owns the code object) and
+        # the cast view (below, what we hand to libVLC) alive for the whole
+        # session. Dropping either is the classic python-vlc segfault (§9).
+        self._cb_format_cast = ctypes.cast(
+            self._cb_format, vlc.CallbackDecorators.VideoFormatCb
+        )
 
-        player.video_set_format_callbacks(self._cb_format, self._cb_cleanup)
+        player.video_set_format_callbacks(self._cb_format_cast, self._cb_cleanup)
         player.video_set_callbacks(
             self._cb_lock, self._cb_unlock, self._cb_display, None
         )
@@ -343,6 +410,7 @@ class VideoOutput:
         # Keep the trampolines alive until VLC can no longer reach them; the
         # player release path is what guarantees that, so we clear afterwards.
         self._cb_format = None
+        self._cb_format_cast = None
         self._cb_cleanup = None
         self._cb_lock = None
         self._cb_unlock = None
@@ -364,35 +432,79 @@ class VideoOutput:
 
     # ---------------------------------------------------------- callbacks ---
     def _on_format(self, chroma_ptr, width_ptr, height_ptr, pitches, lines) -> int:
-        """Choose the decode format. Runs once per stream, on a VLC thread."""
-        width = int(width_ptr[0])
-        height = int(height_ptr[0])
+        """Choose the decode format. Runs once per stream, on a VLC thread.
 
-        if self.chroma == Chroma.I420:
-            requested = b"I420"
-            y_pitch = _align_up(width)
-            y_lines = _align_up(height)
-            uv_pitch = _align_up((width + 1) // 2)
-            uv_lines = _align_up((height + 1) // 2)
-            pitches[0] = y_pitch
-            pitches[1] = uv_pitch
-            pitches[2] = uv_pitch
-            lines[0] = y_lines
-            lines[1] = uv_lines
-            lines[2] = uv_lines
-            fmt = FrameFormat(
-                Chroma.I420, width, height, y_pitch, y_lines, uv_pitch, uv_lines
-            )
-        else:
-            requested = b"RV32"
-            pitch = _align_up(width * 4)
-            rows = _align_up(height)
-            pitches[0] = pitch
-            lines[0] = rows
-            fmt = FrameFormat(Chroma.RV32, width, height, pitch, rows)
+        ``chroma_ptr`` is the raw address of libVLC's ``char chroma[5]``. We
+        overwrite it in place; that is the whole point of :data:`_FormatCbProto`.
 
-        ctypes.memmove(chroma_ptr, requested, 4)
-        self.ring.allocate(fmt)
+        Everything here must be exception-proof. A Python traceback escaping
+        into a C callback unwinds through libVLC's stack frame, and returning 0
+        (or nothing) makes VLC log "video format setup failure (no pictures)"
+        and abandon the video pipeline.
+        """
+        try:
+            width = int(width_ptr[0])
+            height = int(height_ptr[0])
+            if width <= 0 or height <= 0:
+                log.warning("format callback got %dx%d — refusing", width, height)
+                return 0
+
+            if self.chroma == Chroma.I420:
+                requested = b"I420"
+                # --- plane geometry -----------------------------------------
+                # Both pitches and line counts stay 32-aligned: VLC explicitly
+                # recommends it so decoder/filter SIMD row loops keep their
+                # fast path.
+                #
+                # The one change from the obvious formulation is that chroma is
+                # *derived from* luma rather than computed independently.
+                # Rounding each to 32 on its own lets them disagree:
+                #     y_lines  = align32(1440)     = 1440
+                #     uv_lines = align32(1440 / 2) =  736   -> 736*2 = 1472
+                # which claims 1472 chroma scanlines for a 1440-line picture.
+                # In I420 the chroma planes are *by definition* exactly half
+                # the luma height, so that description is simply untrue, and
+                # the surplus rows are memory nothing ever writes — undefined
+                # bytes that decode as bright green if anything samples them.
+                #
+                # Deriving one from the other makes the two mathematically
+                # incapable of drifting apart, at any resolution. (align32
+                # always yields a multiple of 32, so the halved value is still
+                # a clean multiple of 16.)
+                y_pitch = _align_up(width)
+                y_lines = _align_up(height)
+                uv_pitch = _align_up(y_pitch // 2)
+                uv_lines = y_lines // 2
+                pitches[0] = y_pitch
+                pitches[1] = uv_pitch
+                pitches[2] = uv_pitch
+                lines[0] = y_lines
+                lines[1] = uv_lines
+                lines[2] = uv_lines
+                fmt = FrameFormat(
+                    Chroma.I420, width, height, y_pitch, y_lines, uv_pitch, uv_lines
+                )
+            else:
+                requested = b"RV32"
+                pitch = _align_up(width * 4)
+                rows = height
+                pitches[0] = pitch
+                lines[0] = rows
+                fmt = FrameFormat(Chroma.RV32, width, height, pitch, rows)
+
+            # Write the four FourCC bytes into VLC's buffer. Only four: the
+            # fifth byte is the NUL terminator VLC already put there.
+            ctypes.memmove(chroma_ptr, requested, 4)
+
+            # Size the emergency landing pad for this format *before* the ring
+            # exists, so a lock arriving during the reallocation below still
+            # has somewhere large enough to write.
+            self._ensure_scratch(max(fmt.y_size, fmt.uv_size))
+            self.ring.allocate(fmt)
+        except Exception:
+            log.exception("video format setup failed")
+            return 0
+
         if self.format_changed:
             try:
                 self.format_changed(fmt)
@@ -412,16 +524,60 @@ class VideoOutput:
                 log.exception("video_stopped handler failed")
 
     def _on_lock(self, planes) -> int:
-        """Hand VLC the next write slot. Hot path — keep it boring."""
-        base = self.ring.write_address()
-        fmt = self.ring.format
-        if not base or fmt is None:
+        """Hand VLC the next write slot. Hot path — keep it boring.
+
+        Returning without filling ``planes`` is not an option: libVLC does not
+        check them, it passes them straight to ``picture_NewFromResource`` and
+        the decoder writes to whatever address is there. A NULL plane is an
+        immediate access violation on the decoder thread, which is why the
+        scratch buffer below exists rather than an early ``return 0``.
+        """
+        try:
+            base = self.ring.write_address()
+            fmt = self.ring.format
+            if not base or fmt is None:
+                return self._fill_scratch(planes)
+            planes[0] = ctypes.c_void_p(base)
+            if fmt.is_planar:
+                planes[1] = ctypes.c_void_p(base + fmt.y_size)
+                planes[2] = ctypes.c_void_p(base + fmt.y_size + fmt.uv_size)
+            return base
+        except Exception:
+            log.exception("lock callback failed")
+            return self._fill_scratch(planes)
+
+    def _ensure_scratch(self, plane_bytes: int) -> None:
+        """Grow the scratch pad so one plane of ``plane_bytes`` always fits.
+
+        Three separate regions of that size are allocated, so pointing all
+        three planes at the pad cannot make a planar decode write over itself.
+        """
+        if self._scratch is not None and self._scratch_plane >= plane_bytes:
+            return
+        self._scratch_plane = plane_bytes
+        self._scratch = (ctypes.c_ubyte * (plane_bytes * 3))()
+
+    def _fill_scratch(self, planes) -> int:
+        """Point every plane at a throwaway buffer so a decode cannot fault.
+
+        Used only when the ring is unavailable. The frame decoded here is never
+        published, so nothing ever displays it — the only job is to give the
+        decoder somewhere legal to write instead of address 0.
+        """
+        try:
+            scratch = self._scratch
+            if scratch is None:
+                # No format seen yet, so no safe size is known. Returning 0
+                # leaves planes NULL, but VLC has not started a decode either.
+                return 0
+            base = ctypes.addressof(scratch)
+            stride = self._scratch_plane
+            planes[0] = ctypes.c_void_p(base)
+            planes[1] = ctypes.c_void_p(base + stride)
+            planes[2] = ctypes.c_void_p(base + 2 * stride)
+            return base
+        except Exception:
             return 0
-        planes[0] = ctypes.c_void_p(base)
-        if fmt.is_planar:
-            planes[1] = ctypes.c_void_p(base + fmt.y_size)
-            planes[2] = ctypes.c_void_p(base + fmt.y_size + fmt.uv_size)
-        return base
 
     def _on_display(self) -> None:
         self.ring.publish()

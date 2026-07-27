@@ -168,6 +168,25 @@ class AppController(QObject):
         if not cleaned:
             return
 
+        # Dropping a .srt on the window means "subtitle what is playing", not
+        # "queue this file". Split them out before the queue ever sees them: a
+        # subtitle added as a track opens as media with no audio and no video,
+        # which tears down the video pipeline mid-playback.
+        subtitles = [p for p in cleaned if _is_subtitle(p)]
+        media = [p for p in cleaned if not _is_subtitle(p)]
+
+        if subtitles and not media:
+            self._attach_subtitles(subtitles)
+            return
+        if subtitles:
+            # Mixed drop (a video and its sidecar): queue the media, and let
+            # the sidecar be picked up by the normal auto-load on open.
+            log.info("ignoring %d subtitle file(s) alongside media", len(subtitles))
+
+        cleaned = media
+        if not cleaned:
+            return
+
         was_empty = target.current_index() < 0
         added = target.add_paths(cleaned)
         log.info("addPaths: %d path(s) in, %d track(s) queued", len(cleaned), added)
@@ -374,6 +393,18 @@ class AppController(QObject):
                 self._metadata.load("")
                 self._lyrics.load("")
 
+    def _attach_subtitles(self, paths: list[str]) -> None:
+        """Load dropped subtitle files onto whatever is currently playing."""
+        if not self._engine.currentMedia:
+            log.info("subtitle dropped with nothing playing — ignored")
+            return
+        for path in paths:
+            if self._engine.add_subtitle_file(path):
+                log.info("loaded subtitle %s", Path(path).name)
+            else:
+                log.warning("could not load subtitle %s", Path(path).name)
+        self._refresh_tracks()
+
     def _auto_load_subtitle(self, path: str) -> None:
         media = Path(path)
         for suffix in (".srt", ".ass", ".ssa", ".sub", ".vtt"):
@@ -459,6 +490,14 @@ class AppController(QObject):
                 step()
             except Exception:
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
+
+
+#: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily
+#: so core/ never depends on a mode package at import time (§A.1).
+def _is_subtitle(path: str) -> bool:
+    from modes.local.playlist import SUBTITLE_EXTENSIONS
+
+    return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
 
 
 def _normalise(raw) -> str:
