@@ -1,0 +1,388 @@
+"""Local mode's queue — Milestone 1.5.
+
+A ``QAbstractListModel`` so QML gets change notifications for free, with
+reorder, multi-select and repeat/shuffle-aware next/prev.
+
+**Isolation (§A.1):** this is Local's queue and nothing else's. M3U keeps its own
+channel list in ``modes/m3u/``; the two never mix, and deleting either directory
+leaves the other perfect.
+
+Duration probing runs on a worker thread — a folder of 500 files must never
+block the UI while it works out how long each one is (§P1.5).
+"""
+
+from __future__ import annotations
+
+import logging
+import random
+from dataclasses import dataclass, field
+from enum import IntEnum
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QByteArray,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    Signal,
+    Slot,
+)
+
+log = logging.getLogger(__name__)
+
+#: Extensions Add Folder will pick up (§P1.5). Deliberately generous — libVLC
+#: plays far more than this, but a recursive scan should not hoover up .txt.
+VIDEO_EXTENSIONS = {
+    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mts", ".flv",
+    ".webm", ".mpg", ".mpeg", ".m4v", ".3gp", ".ogv", ".vob", ".divx", ".rmvb",
+}
+AUDIO_EXTENSIONS = {
+    ".mp3", ".flac", ".aac", ".opus", ".ogg", ".wav", ".m4a", ".wma", ".alac",
+    ".ape", ".aiff", ".dsf", ".mka", ".mpc",
+}
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
+
+class RepeatMode(IntEnum):
+    Off = 0
+    One = 1
+    All = 2
+
+
+@dataclass
+class Track:
+    path: str
+    title: str
+    duration_ms: int = 0
+    probed: bool = False
+
+    @property
+    def is_audio(self) -> bool:
+        return Path(self.path).suffix.lower() in AUDIO_EXTENSIONS
+
+
+class _ProbeSignals(QObject):
+    done = Signal(str, int)  # path, duration_ms
+
+
+class _ProbeTask(QRunnable):
+    """Ask libVLC how long a file is, off the UI thread."""
+
+    def __init__(self, path: str, signals: _ProbeSignals) -> None:
+        super().__init__()
+        self._path = path
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        duration = 0
+        try:
+            import vlc
+
+            instance = vlc.Instance(["--quiet", "--no-video", "--intf=dummy"])
+            if instance is not None:
+                media = instance.media_new_path(self._path)
+                if media is not None:
+                    media.parse_with_options(vlc.MediaParseFlag.local, 2000)
+                    duration = max(0, int(media.get_duration()))
+                    media.release()
+                instance.release()
+        except Exception:
+            log.debug("probe failed for %s", self._path, exc_info=True)
+        self._signals.done.emit(self._path, duration)
+
+
+class PlaylistModel(QAbstractListModel):
+    """Local's queue."""
+
+    PathRole = Qt.ItemDataRole.UserRole + 1
+    TitleRole = Qt.ItemDataRole.UserRole + 2
+    DurationRole = Qt.ItemDataRole.UserRole + 3
+    IsCurrentRole = Qt.ItemDataRole.UserRole + 4
+    IsAudioRole = Qt.ItemDataRole.UserRole + 5
+
+    currentIndexChanged = Signal(int)
+    countChanged = Signal()
+    repeatModeChanged = Signal()
+    shuffleChanged = Signal()
+    playRequested = Signal(str, int)  # path, index
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._tracks: list[Track] = []
+        self._current = -1
+        self._repeat = RepeatMode.Off
+        self._shuffle = False
+        self._shuffle_order: list[int] = []
+        self._pool = QThreadPool.globalInstance()
+        self._probe_signals = _ProbeSignals()
+        self._probe_signals.done.connect(self._on_probed)
+
+    # ------------------------------------------------------ model plumbing ---
+    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt override
+        return 0 if parent.isValid() else len(self._tracks)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not (0 <= index.row() < len(self._tracks)):
+            return None
+        track = self._tracks[index.row()]
+        if role in (self.TitleRole, Qt.ItemDataRole.DisplayRole):
+            return track.title
+        if role == self.PathRole:
+            return track.path
+        if role == self.DurationRole:
+            return track.duration_ms
+        if role == self.IsCurrentRole:
+            return index.row() == self._current
+        if role == self.IsAudioRole:
+            return track.is_audio
+        return None
+
+    def roleNames(self) -> dict:  # noqa: N802 - Qt override
+        return {
+            self.PathRole: QByteArray(b"path"),
+            self.TitleRole: QByteArray(b"title"),
+            self.DurationRole: QByteArray(b"duration"),
+            self.IsCurrentRole: QByteArray(b"isCurrent"),
+            self.IsAudioRole: QByteArray(b"isAudio"),
+        }
+
+    # -------------------------------------------------------------- adding ---
+    @Slot(list)
+    def add_paths(self, paths: list[str]) -> int:
+        """The single append implementation (§4.1).
+
+        Add Files, Add Folder, ``Ctrl+O`` and Explorer drag-and-drop all end up
+        here. There is no second path that adds to the queue.
+        """
+        incoming: list[Track] = []
+        for raw in paths:
+            p = Path(str(raw).replace("file://", "")).expanduser()
+            if p.is_dir():
+                incoming.extend(self._scan_folder(p))
+            elif p.is_file() and p.suffix.lower() in MEDIA_EXTENSIONS:
+                incoming.append(Track(str(p), p.stem))
+        if not incoming:
+            return 0
+
+        start = len(self._tracks)
+        self.beginInsertRows(QModelIndex(), start, start + len(incoming) - 1)
+        self._tracks.extend(incoming)
+        self.endInsertRows()
+        self.countChanged.emit()
+        self._rebuild_shuffle()
+        for track in incoming:
+            self._pool.start(_ProbeTask(track.path, self._probe_signals))
+        return len(incoming)
+
+    def _scan_folder(self, folder: Path) -> list[Track]:
+        """Recursive, media extensions only (§P1.5)."""
+        found: list[Track] = []
+        try:
+            for path in sorted(folder.rglob("*")):
+                if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
+                    found.append(Track(str(path), path.stem))
+        except OSError:
+            log.warning("could not scan %s", folder)
+        return found
+
+    def _on_probed(self, path: str, duration_ms: int) -> None:
+        for row, track in enumerate(self._tracks):
+            if track.path == path and not track.probed:
+                track.duration_ms = duration_ms
+                track.probed = True
+                idx = self.index(row, 0)
+                self.dataChanged.emit(idx, idx, [self.DurationRole])
+                break
+
+    # ------------------------------------------------------------ removing ---
+    @Slot(list)
+    def remove_rows(self, rows: list[int]) -> None:
+        """Clear Selected. The Delete key routes to the same Actions entry that
+        the toolbar button does, so this has exactly one caller path."""
+        for row in sorted({int(r) for r in rows}, reverse=True):
+            if 0 <= row < len(self._tracks):
+                self.beginRemoveRows(QModelIndex(), row, row)
+                self._tracks.pop(row)
+                self.endRemoveRows()
+                if row == self._current:
+                    self._set_current(-1)
+                elif row < self._current:
+                    self._set_current(self._current - 1)
+        self.countChanged.emit()
+        self._rebuild_shuffle()
+
+    @Slot()
+    def clear(self) -> None:
+        self.beginResetModel()
+        self._tracks.clear()
+        self._current = -1
+        self.endResetModel()
+        self.countChanged.emit()
+        self.currentIndexChanged.emit(-1)
+        self._rebuild_shuffle()
+
+    @Slot(int, int)
+    def move_row(self, source: int, target: int) -> None:
+        """Drag-to-reorder."""
+        n = len(self._tracks)
+        if not (0 <= source < n) or not (0 <= target < n) or source == target:
+            return
+        self.beginMoveRows(
+            QModelIndex(), source, source, QModelIndex(),
+            target + 1 if target > source else target,
+        )
+        track = self._tracks.pop(source)
+        self._tracks.insert(target, track)
+        self.endMoveRows()
+        if self._current == source:
+            self._set_current(target)
+        elif source < self._current <= target:
+            self._set_current(self._current - 1)
+        elif target <= self._current < source:
+            self._set_current(self._current + 1)
+
+    # ----------------------------------------------------------- playback ---
+    @Slot(int)
+    def play_index(self, row: int) -> None:
+        if 0 <= row < len(self._tracks):
+            self._set_current(row)
+            self.playRequested.emit(self._tracks[row].path, row)
+
+    @Slot(result=bool)
+    def play_next(self) -> bool:
+        nxt = self.next_index()
+        if nxt < 0:
+            return False
+        self.play_index(nxt)
+        return True
+
+    @Slot(result=bool)
+    def play_previous(self) -> bool:
+        prev = self.previous_index()
+        if prev < 0:
+            return False
+        self.play_index(prev)
+        return True
+
+    def next_index(self) -> int:
+        """Repeat and shuffle are honoured here, in one place, so every caller
+        (Next button, track-ended, hotkey) behaves identically."""
+        n = len(self._tracks)
+        if n == 0:
+            return -1
+        if self._repeat == RepeatMode.One and self._current >= 0:
+            return self._current
+        if self._shuffle:
+            return self._shuffle_next()
+        if self._current + 1 < n:
+            return self._current + 1
+        return 0 if self._repeat == RepeatMode.All else -1
+
+    def previous_index(self) -> int:
+        n = len(self._tracks)
+        if n == 0:
+            return -1
+        if self._current > 0:
+            return self._current - 1
+        return n - 1 if self._repeat == RepeatMode.All else -1
+
+    def _shuffle_next(self) -> int:
+        if not self._shuffle_order:
+            self._rebuild_shuffle()
+        if not self._shuffle_order:
+            return -1
+        try:
+            pos = self._shuffle_order.index(self._current)
+        except ValueError:
+            pos = -1
+        if pos + 1 < len(self._shuffle_order):
+            return self._shuffle_order[pos + 1]
+        if self._repeat == RepeatMode.All:
+            self._rebuild_shuffle()
+            return self._shuffle_order[0] if self._shuffle_order else -1
+        return -1
+
+    def _rebuild_shuffle(self) -> None:
+        self._shuffle_order = list(range(len(self._tracks)))
+        random.shuffle(self._shuffle_order)
+        if self._current in self._shuffle_order:
+            self._shuffle_order.remove(self._current)
+            self._shuffle_order.insert(0, self._current)
+
+    def _set_current(self, row: int) -> None:
+        if row == self._current:
+            return
+        previous = self._current
+        self._current = row
+        for changed in (previous, row):
+            if 0 <= changed < len(self._tracks):
+                idx = self.index(changed, 0)
+                self.dataChanged.emit(idx, idx, [self.IsCurrentRole])
+        self.currentIndexChanged.emit(row)
+
+    @Slot(str)
+    def set_current_by_path(self, path: str) -> None:
+        for row, track in enumerate(self._tracks):
+            if track.path == path:
+                self._set_current(row)
+                return
+
+    # --------------------------------------------------------- properties ---
+    @Slot(result=int)
+    def count(self) -> int:
+        return len(self._tracks)
+
+    @Slot(result=int)
+    def current_index(self) -> int:
+        return self._current
+
+    @Slot(int, result=str)
+    def path_at(self, row: int) -> str:
+        return self._tracks[row].path if 0 <= row < len(self._tracks) else ""
+
+    @Slot(result=int)
+    def repeat_mode(self) -> int:
+        return int(self._repeat)
+
+    @Slot()
+    def cycle_repeat(self) -> None:
+        self._repeat = RepeatMode((int(self._repeat) + 1) % 3)
+        self.repeatModeChanged.emit()
+
+    @Slot(int)
+    def set_repeat_mode(self, mode: int) -> None:
+        self._repeat = RepeatMode(int(mode) % 3)
+        self.repeatModeChanged.emit()
+
+    @Slot(result=bool)
+    def shuffle(self) -> bool:
+        return self._shuffle
+
+    @Slot()
+    def toggle_shuffle(self) -> None:
+        self._shuffle = not self._shuffle
+        if self._shuffle:
+            self._rebuild_shuffle()
+        self.shuffleChanged.emit()
+
+    def to_list(self) -> list[dict]:
+        return [
+            {"path": t.path, "title": t.title, "duration": t.duration_ms}
+            for t in self._tracks
+        ]
+
+    def restore(self, items: list[dict]) -> None:
+        self.beginResetModel()
+        self._tracks = [
+            Track(i["path"], i.get("title", Path(i["path"]).stem), i.get("duration", 0), True)
+            for i in items
+            if i.get("path")
+        ]
+        self._current = -1
+        self.endResetModel()
+        self.countChanged.emit()
+        self._rebuild_shuffle()

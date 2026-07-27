@@ -1,0 +1,28 @@
+# --- Halcyon ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# builds
+build/
+dist/
+*.spec
+*.build/
+*.dist/
+*.onefile-build/
+
+# bundled libVLC binaries (see README — fetched, never committed)
+vendor/vlc/
+
+# compiled shaders are generated from .frag sources
+*.qsb
+
+# runtime / local
+.halcyon-appdata/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

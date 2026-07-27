@@ -1,0 +1,8 @@
+module Halcyon.Transport
+
+SeekBar 1.0 SeekBar.qml
+VolumeControl 1.0 VolumeControl.qml
+TimeDisplay 1.0 TimeDisplay.qml
+TrackPopover 1.0 TrackPopover.qml
+TrackSection 1.0 TrackSection.qml
+TransportScrim 1.0 TransportScrim.qml
