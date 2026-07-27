@@ -10,8 +10,13 @@ Two pixel paths
 ``i420``  The Y plane and the interleaved-by-stacking U/V planes are uploaded as
           single-channel (``QImage.Format_Grayscale8``) textures, and a QML
           ``ShaderEffect`` does the BT.709 matrix multiply. 1.5 bytes/px.
-``rv32``  One BGRA texture, no shader. 4 bytes/px. Fallback for hardware or
-          drivers that dislike the shader path (§9, "Shader fails on old iGPU").
+``rv32``  One packed RGB texture, no shader. 4 bytes/px. Fallback for hardware
+          or drivers that dislike the shader path (§9, "Shader fails on old
+          iGPU"). **Important:** libVLC's RV32 is host-byte-order RGB — on
+          little-endian Windows/x86 the bytes are R, G, B, X, *not* BGRA. The
+          QImage must therefore be :pyattr:`~QImage.Format.Format_RGBX8888`;
+          creating it as ``Format_RGB32`` (which reads B, G, R) is what swaps
+          red and blue on every frame. See :meth:`VideoSurface._update_packed`.
 
 **Implementation note — why plane *items* rather than a QSGMaterial.**
 The plan (§0.4) describes a custom ``QSGMaterialShader`` binding three samplers.
@@ -100,7 +105,7 @@ class PlaneSurface(QQuickItem):
 
     # -- content ------------------------------------------------------------
     def set_image(self, image: QImage | None) -> None:
-        """Give this plane a new QImage *view*.
+        """Stage a new QImage *view* for the next commit.
 
         Called from :meth:`VideoSurface.updatePaintNode`, i.e. during the
         render-thread sync phase while the GUI thread is blocked. Scheduling
@@ -112,26 +117,49 @@ class PlaneSurface(QQuickItem):
         self._dirty = True
         self.update()
 
+    def commit_texture(self, window) -> None:
+        """Build the QSGTexture from the staged image and publish it.
+
+        Runs on the **render thread**, while the owning :class:`VideoSurface`
+        holds the ring pin — so the one DMA upload reads stable pixels and no
+        reader/writer race is possible.
+
+        The plane item itself is invisible (only the QML ``ShaderEffect``
+        samples it), so its own ``updatePaintNode`` is never invoked by Qt.
+        Committing here, from the surface's ``updatePaintNode``, is therefore
+        the *only* path by which a plane ever receives a texture. Leaving it
+        to ``updatePaintNode`` left three texture providers holding ``None``,
+        which is exactly why the I420 path rendered black whenever the shader
+        was present.
+        """
+        image = self._pending
+        if image is None or image.isNull():
+            texture = None
+        else:
+            # One DMA upload. NoOwnership: the pixels belong to the ring, and
+            # the ring outlives this texture.
+            texture = window.createTextureFromImage(
+                image, QQuickWindow.CreateTextureOption.TextureIsOpaque
+            )
+            self._image = image  # keep the view alive while Qt reads it
+        self._texture = texture
+        self._dirty = False
+        # Ensure the provider exists so the ShaderEffect always has a texture to
+        # sample, even on the first frame before it has queried us. Safe on the
+        # render thread (we are inside the surface's updatePaintNode).
+        self.textureProvider().set_texture(texture)
+
     def updatePaintNode(self, node, _data):  # noqa: N802 - Qt override
         window = self.window()
         if window is None:
             return None
 
         if self._dirty:
-            self._dirty = False
-            image = self._pending
-            if image is None or image.isNull():
-                self._texture = None
-            else:
-                # One DMA upload. NoOwnership: the pixels belong to the ring, and
-                # the ring outlives this texture.
-                self._texture = window.createTextureFromImage(
-                    image, QQuickWindow.CreateTextureOption.TextureIsOpaque
-                )
-                self._image = image  # keep the view alive while Qt reads it
-            if self._provider is not None:
-                self._provider.set_texture(self._texture)
+            self.commit_texture(window)
 
+        # Planes are invisible in normal operation, so this is only reached if
+        # a plane is made visible for debugging; it then draws its own texture
+        # as a flat rectangle.
         if self._texture is None:
             return None
 
@@ -196,11 +224,13 @@ class VideoSurface(QQuickItem):
         # RV32 path: this item draws the picture itself.
         self._texture: QSGTexture | None = None
         self._image: QImage | None = None
+        self._image_buf: object | None = None  # keep the ring view alive for upload
 
         # I420 path: three child plane items, sampled by a ShaderEffect in QML.
         self._plane_y: PlaneSurface | None = None
         self._plane_u: PlaneSurface | None = None
         self._plane_v: PlaneSurface | None = None
+        self._plane_bufs: tuple = ()  # one ctypes view per plane, kept until upload lands
 
         self.widthChanged.connect(self._recompute_content_rect)
         self.heightChanged.connect(self._recompute_content_rect)
@@ -292,6 +322,8 @@ class VideoSurface(QQuickItem):
         self._last_serial = -1
         self._texture = None
         self._image = None
+        self._image_buf = None
+        self._plane_bufs = ()
         self._set_has_video(False)
         self.frameFormatChanged.emit()
         self.update()
@@ -374,31 +406,52 @@ class VideoSurface(QQuickItem):
         return node
 
     def _plane_view(self, address: int, offset: int, pitch: int, lines: int,
-                    width: int, height: int) -> QImage:
+                    width: int, height: int) -> tuple[QImage, object]:
         """A QImage that *views* ring memory — no copy, no ownership.
 
         ``pitch`` is honoured as bytesPerLine so padded strides do not shear the
         picture; the visible ``width``/``height`` crop off the alignment padding.
+
+        Returns ``(image, buffer)``; the caller must keep ``buffer`` reachable
+        for as long as Qt might still read from the image (until the texture
+        upload completes). The pixels themselves live in the ring and are never
+        freed here.
         """
         import ctypes
 
         size = pitch * lines
         buf = (ctypes.c_ubyte * size).from_address(address + offset)
-        return QImage(
+        image = QImage(
             memoryview(buf), width, height, pitch, QImage.Format.Format_Grayscale8
         )
+        return image, buf
 
     def _update_planar(self, window, address: int, fmt: FrameFormat, node):
         self._ensure_planes()
         cw, ch = (fmt.width + 1) // 2, (fmt.height + 1) // 2
-        y_img = self._plane_view(address, 0, fmt.y_pitch, fmt.y_lines, fmt.width, fmt.height)
-        u_img = self._plane_view(address, fmt.y_size, fmt.uv_pitch, fmt.uv_lines, cw, ch)
-        v_img = self._plane_view(
+        y_img, y_buf = self._plane_view(
+            address, 0, fmt.y_pitch, fmt.y_lines, fmt.width, fmt.height
+        )
+        u_img, u_buf = self._plane_view(
+            address, fmt.y_size, fmt.uv_pitch, fmt.uv_lines, cw, ch
+        )
+        v_img, v_buf = self._plane_view(
             address, fmt.y_size + fmt.uv_size, fmt.uv_pitch, fmt.uv_lines, cw, ch
         )
+        # Commit every plane *here*, while the ring pin held by updatePaintNode
+        # keeps the slot stable. The plane items are invisible, so deferring
+        # their texture build to their own updatePaintNode (as the old code did)
+        # never ran — the providers never received a texture and the ShaderEffect
+        # sampled nothing, i.e. black video on the I420 path.
         self._plane_y.set_image(y_img)
         self._plane_u.set_image(u_img)
         self._plane_v.set_image(v_img)
+        for plane in (self._plane_y, self._plane_u, self._plane_v):
+            plane.commit_texture(window)
+        # Hold the ctypes wrappers until the next frame. The textures are already
+        # uploaded, but this is cheap insurance against any RHI that defers its
+        # GPU read past this sync phase.
+        self._plane_bufs = (y_buf, u_buf, v_buf)
         return node
 
     def _update_packed(self, window, address: int, fmt: FrameFormat, node):
@@ -406,17 +459,24 @@ class VideoSurface(QQuickItem):
 
         size = fmt.y_pitch * fmt.y_lines
         buf = (ctypes.c_ubyte * size).from_address(address)
+        # libVLC's RV32 is packed RGB in host byte order. On little-endian x86
+        # the bytes therefore land as R, G, B, X — NOT B, G, R, A. The old code
+        # created this QImage as Format_RGB32, which Qt reads as B, G, R, and so
+        # every frame rendered with red and blue swapped. Format_RGBX8888 is a
+        # fixed byte order of R, G, B, X regardless of CPU endianness, which is
+        # exactly what VLC writes. Do not "simplify" this back to RGB32.
         image = QImage(
             memoryview(buf),
             fmt.width,
             fmt.height,
             fmt.y_pitch,
-            QImage.Format.Format_RGB32,
+            QImage.Format.Format_RGBX8888,
         )
         self._texture = window.createTextureFromImage(
             image, QQuickWindow.CreateTextureOption.TextureIsOpaque
         )
         self._image = image
+        self._image_buf = buf  # keep the ring view alive until the upload lands
         tex_node = node if isinstance(node, QSGSimpleTextureNode) else QSGSimpleTextureNode()
         tex_node.setTexture(self._texture)
         tex_node.setOwnsTexture(False)
@@ -427,6 +487,8 @@ class VideoSurface(QQuickItem):
     def releaseResources(self) -> None:  # noqa: N802 - Qt override
         self._texture = None
         self._image = None
+        self._image_buf = None
+        self._plane_bufs = ()
 
     # ---------------------------------------------------------- properties ---
     @Property(bool, notify=hasVideoChanged)

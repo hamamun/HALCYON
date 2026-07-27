@@ -39,6 +39,41 @@ def find_qsb() -> str | None:
     return None
 
 
+def _shader_sources() -> list[Path]:
+    return sorted(SHADER_DIR.glob("*.frag")) + sorted(SHADER_DIR.glob("*.vert"))
+
+
+def build_all() -> tuple[int, int]:
+    """Compile every shader source under ``ui/shaders``.
+
+    Returns ``(built, failed)``. When the ``qsb`` tool is unavailable, every
+    source counts as failed so callers can tell nothing was produced (the
+    ``.qsb`` files simply will not exist). Importable from :mod:`main` so the
+    first run can self-heal a missing shader instead of silently dropping to
+    the RV32 fallback.
+    """
+    sources = _shader_sources()
+    if not sources:
+        return 0, 0
+
+    qsb = find_qsb()
+    if not qsb:
+        return 0, len(sources)
+
+    built = failed = 0
+    for src in sources:
+        out = src.with_suffix(src.suffix + ".qsb")
+        cmd = [qsb, *QSB_ARGS, "-o", str(out), str(src)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            failed += 1
+            print(f"FAIL {src.name}\n{result.stderr.strip()}", file=sys.stderr)
+        else:
+            built += 1
+            print(f"  ok {src.name} -> {out.name}")
+    return built, failed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -48,7 +83,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    sources = sorted(SHADER_DIR.glob("*.frag")) + sorted(SHADER_DIR.glob("*.vert"))
+    sources = _shader_sources()
     if not sources:
         print("no shader sources found in", SHADER_DIR)
         return 0
@@ -69,22 +104,12 @@ def main() -> int:
         print(f"all {len(sources)} shader(s) up to date")
         return 0
 
-    qsb = find_qsb()
-    if not qsb:
+    if not find_qsb():
         print("error: pyside6-qsb not found — is PySide6 installed in this venv?",
               file=sys.stderr)
         return 2
 
-    failed = 0
-    for src in sources:
-        out = src.with_suffix(src.suffix + ".qsb")
-        cmd = [qsb, *QSB_ARGS, "-o", str(out), str(src)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            failed += 1
-            print(f"FAIL {src.name}\n{result.stderr.strip()}", file=sys.stderr)
-        else:
-            print(f"  ok {src.name} -> {out.name}")
+    built, failed = build_all()
     return 1 if failed else 0
 
 

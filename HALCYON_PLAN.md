@@ -235,14 +235,16 @@ A `QImage` constructed over a raw pointer is a **view, not a copy**. It goes str
 
 ### 0.4 Format choice: I420, not RV32
 
-Every example online uses `RV32` (BGRA, 4 bytes/px). Wrong default:
+Every example online uses `RV32` (host-order RGB, 4 bytes/px). Wrong default:
 
 | Format | Bytes/px | 1080p frame | @60 fps |
 |---|---|---|---|
-| RV32 (BGRA) | 4.0 | 8.29 MB | 498 MB/s |
+| RV32 (RGB) | 4.0 | 8.29 MB | 498 MB/s |
 | **I420 (YUV 4:2:0)** | **1.5** | **3.11 MB** | **187 MB/s** |
 
 **2.67× less traffic**, and I420 is what the decoder natively produces — requesting RV32 forces a CPU colour-space conversion on every frame before we even see it.
+
+> **Byte-order gotcha (cost a bug):** libVLC's `RV32` is **not** BGRA. It is host-byte-order RGB — on little-endian x86 the bytes land as R, G, B, X. The QImage over that buffer must therefore be `Format_RGBX8888`; creating it as `Format_RGB32` (which reads B, G, R) swaps red and blue on every frame. The same trap catches `Format_BGRA8888`. See `engine/surface.py:_update_packed`.
 
 YUV→RGB happens in a **fragment shader**, free on the GPU. Three single-channel textures, one BT.709 matrix multiply, ~20 lines of GLSL through `qsb`.
 
@@ -797,7 +799,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | **Foundation wrong, discovered in Phase 2** | **High** | **Registry + isolation guard from Milestone 1.2.** If Phase 2 needs a Phase 1 edit, stop and fix Phase 1 — don't patch around it |
 | UI duplication creeping back | Med | `Actions` singleton + §4.1 review question |
 | PiP window steals the ring buffer | Med | Buffer read-only to surfaces; refcount readers; main Stage never unbinds |
-| Shader fails on old iGPU | Low | RV32 + `Format_BGRA8888` fallback |
+| Shader fails on old iGPU | Low | RV32 + `Format_RGBX8888` fallback (VLC RV32 is host-order RGB, **not** BGRA — see §0.4) |
 | Nuitka misses VLC plugins | Med | Explicit `--include-data-dir`; set `VLC_PLUGIN_PATH` at startup |
 | HiDPI fractional scaling blur | Low | `PassThrough` rounding, DPR-aware texture sizing |
 | QtWebEngine blank / backend mismatch | Med | Force `GraphicsApi.OpenGL` before app construction; call `QtWebEngineQuick.initialize()` first (§P3.2) |

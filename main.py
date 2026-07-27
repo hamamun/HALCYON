@@ -30,6 +30,7 @@ hypothetical: it swapped the VlcEngine instance for a module object, so QML's
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -201,31 +202,78 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _resolve_backend(requested: str, paths, log) -> str:
-    """Pick the video backend, downgrading to RV32 if the shader is missing.
+    """Pick the video backend, downgrading to RV32 only if I420 can't work.
 
-    The I420 path needs ``ui/shaders/yuv420p.frag.qsb``, a build product that is
-    gitignored and produced by ``tools/build_shaders.py``. Without it Qt logs a
-    wall of ShaderEffect errors and plays perfectly good audio over a black
-    rectangle — a genuinely baffling first run.
+    The I420 path needs ``ui/shaders/yuv420p.frag.qsb``. Rather than demand a
+    manual ``tools/build_shaders.py`` run on every fresh clone — the silent
+    fallback that used to baffle first runs — :func:`_ensure_shader` compiles it
+    on the spot from the bundled ``.frag`` whenever ``pyside6-qsb`` is on the
+    PATH. Only when the shader genuinely cannot be produced do we fall back.
 
-    RV32 costs more bandwidth (4 bytes/px against 1.5) and no shader, so it is
-    the right automatic answer: the user sees a picture and one actionable line
-    in the log instead of a black stage and a stack of Qt diagnostics.
+    RV32 is now colour-correct (``engine.surface`` reads VLC's host-order RGB
+    buffer as ``Format_RGBX8888``, not ``Format_RGB32``), so the fallback is a
+    real, working picture rather than a black stage. It just costs more bus
+    bandwidth (4 bytes/px vs 1.5) and a CPU YUV→RGB step, so it stays the
+    fallback rather than the default.
     """
+    requested = _backend_from_env(requested)
     if requested == "rv32":
         return "rv32"
 
-    shader_src = paths.SHADERS / "yuv420p.frag"
-    shader_qsb = paths.SHADERS / "yuv420p.frag.qsb"
-    # Only second-guess a source checkout. A frozen build serves the shader from
-    # qrc:, where there is no .frag on disk to compare against.
-    if shader_src.exists() and not shader_qsb.exists():
+    if _ensure_shader(paths, log):
+        return requested  # "auto" or "i420"
+
+    log.warning(
+        "compiled shader %s is missing and could not be built — falling back to "
+        "the RV32 video path. Install/repair PySide6 (for pyside6-qsb) to enable "
+        "the faster I420 path.",
+        (paths.SHADERS / "yuv420p.frag.qsb").name,
+    )
+    return "rv32"
+
+
+def _ensure_shader(paths, log) -> bool:
+    """Make sure the compiled YUV shader is present, building it if possible.
+
+    Returns ``True`` when ``yuv420p.frag.qsb`` is usable. On a source checkout
+    we (re)compile it from the bundled ``.frag`` whenever it is missing or stale
+    and ``pyside6-qsb`` is available, so first run just works. A frozen build
+    ships the shader from qrc: and has no ``.frag`` on disk to compare against,
+    so this is a no-op there.
+    """
+    src = paths.SHADERS / "yuv420p.frag"
+    qsb = paths.SHADERS / "yuv420p.frag.qsb"
+    if qsb.exists() and (not src.exists() or qsb.stat().st_mtime >= src.stat().st_mtime):
+        return True
+    if not src.exists():
+        return qsb.exists()
+    try:
+        # Local import: needs the repo root on sys.path (main() inserts it).
+        from tools.build_shaders import build_all
+
+        built, failed = build_all()
+    except Exception:  # never let a build hiccup block startup
+        log.debug("shader build not available", exc_info=True)
+        return qsb.exists()
+    if failed:
         log.warning(
-            "compiled shader %s is missing — falling back to the RV32 video path. "
-            "Run `python tools/build_shaders.py` for the faster I420 path.",
-            shader_qsb.name,
+            "shader build reported %d failure(s); using the RV32 path", failed
         )
-        return "rv32"
+    elif built:
+        log.info("compiled %d shader(s) for the I420 video path", built)
+    return qsb.exists()
+
+
+def _backend_from_env(requested: str) -> str:
+    """``HALCYON_VIDEO_BACKEND`` overrides the settings value (see README).
+
+    Handy for forcing a path to diagnose a rendering problem without editing
+    the settings file. Accepts ``auto`` / ``i420`` / ``rv32``; anything else is
+    ignored so a typo cannot silently switch paths.
+    """
+    env = os.environ.get("HALCYON_VIDEO_BACKEND", "").strip().lower()
+    if env in ("auto", "i420", "rv32"):
+        return env
     return requested
 
 
