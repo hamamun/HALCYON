@@ -102,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
     qml_engine = QQmlApplicationEngine()
     qml_engine.addImportPath(str(ROOT / "ui"))
+    qml_engine.addImportPath(str(ROOT / "ui" / "shell"))
     qml_engine.addImportPath(str(ROOT))
 
     ctx = qml_engine.rootContext()
