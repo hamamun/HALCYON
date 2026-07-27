@@ -54,7 +54,10 @@ Item {
             glyph: Glyphs.clearItem
             tooltip: "Clear selected (Delete)"
             enabled: root.selection.length > 0     // §P1.5: only with a selection
-            onClicked: Actions.clearSelected()
+            onClicked: {
+                Actions.clearSelected();
+                root.selection = [];
+            }
         }
         IconButton {
             glyph: Glyphs.clearAll

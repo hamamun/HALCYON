@@ -242,21 +242,32 @@ class PlaylistModel(QAbstractListModel):
                 break
 
     # ------------------------------------------------------------ removing ---
-    @Slot(list)
-    def remove_rows(self, rows: list[int]) -> None:
+    @Slot(list, result=bool)
+    def remove_rows(self, rows: list[int]) -> bool:
         """Clear Selected. The Delete key routes to the same Actions entry that
-        the toolbar button does, so this has exactly one caller path."""
-        for row in sorted({int(r) for r in rows}, reverse=True):
+        the toolbar button does, so this has exactly one caller path.
+
+        Returns True if the currently playing track was among the removed rows.
+        """
+        playing_removed = False
+        playing_row = self._current
+        wanted = sorted({int(r) for r in rows}, reverse=True)
+        for row in wanted:
             if 0 <= row < len(self._tracks):
+                if row == playing_row:
+                    playing_removed = True
                 self.beginRemoveRows(QModelIndex(), row, row)
                 self._tracks.pop(row)
                 self.endRemoveRows()
-                if row == self._current:
-                    self._set_current(-1)
-                elif row < self._current:
+                if row < self._current:
                     self._set_current(self._current - 1)
+
+        if playing_removed:
+            self._set_current(-1)
+
         self.countChanged.emit()
         self._rebuild_shuffle()
+        return playing_removed
 
     @Slot()
     def clear(self) -> None:
@@ -329,12 +340,16 @@ class PlaylistModel(QAbstractListModel):
         n = len(self._tracks)
         if n == 0:
             return -1
+        if self._repeat == RepeatMode.One and self._current >= 0:
+            return self._current
+        if self._shuffle:
+            return self._shuffle_previous()
         if self._current > 0:
             return self._current - 1
         return n - 1 if self._repeat == RepeatMode.All else -1
 
     def _shuffle_next(self) -> int:
-        if not self._shuffle_order:
+        if not self._shuffle_order or len(self._shuffle_order) != len(self._tracks):
             self._rebuild_shuffle()
         if not self._shuffle_order:
             return -1
@@ -345,16 +360,43 @@ class PlaylistModel(QAbstractListModel):
         if pos + 1 < len(self._shuffle_order):
             return self._shuffle_order[pos + 1]
         if self._repeat == RepeatMode.All:
-            self._rebuild_shuffle()
+            self._rebuild_shuffle(avoid_first=self._current)
             return self._shuffle_order[0] if self._shuffle_order else -1
         return -1
 
-    def _rebuild_shuffle(self) -> None:
-        self._shuffle_order = list(range(len(self._tracks)))
-        random.shuffle(self._shuffle_order)
-        if self._current in self._shuffle_order:
-            self._shuffle_order.remove(self._current)
-            self._shuffle_order.insert(0, self._current)
+    def _shuffle_previous(self) -> int:
+        if not self._shuffle_order or len(self._shuffle_order) != len(self._tracks):
+            self._rebuild_shuffle()
+        if not self._shuffle_order:
+            return -1
+        try:
+            pos = self._shuffle_order.index(self._current)
+        except ValueError:
+            pos = -1
+        if pos > 0:
+            return self._shuffle_order[pos - 1]
+        if self._repeat == RepeatMode.All:
+            return self._shuffle_order[-1]
+        return -1
+
+    def _rebuild_shuffle(self, avoid_first: int = -1) -> None:
+        n = len(self._tracks)
+        if n == 0:
+            self._shuffle_order = []
+            return
+
+        order = list(range(n))
+        random.shuffle(order)
+
+        if avoid_first >= 0 and avoid_first in order and n > 1:
+            if order[0] == avoid_first:
+                swap_idx = random.randint(1, n - 1)
+                order[0], order[swap_idx] = order[swap_idx], order[0]
+        elif 0 <= self._current < n and self._current in order:
+            order.remove(self._current)
+            order.insert(0, self._current)
+
+        self._shuffle_order = order
 
     def _set_current(self, row: int) -> None:
         if row == self._current:
