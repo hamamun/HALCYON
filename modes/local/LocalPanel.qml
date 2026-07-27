@@ -59,7 +59,7 @@ Item {
         IconButton {
             glyph: Glyphs.clearAll
             tooltip: "Clear playlist"
-            enabled: root.model && root.model.count() > 0
+            enabled: root.model && root.model.count > 0
             onClicked: Actions.clearPlaylist()
         }
     }
@@ -75,7 +75,7 @@ Item {
         clip: true
         model: root.model
         spacing: 1
-        visible: root.model && root.model.count() > 0
+        visible: root.model && root.model.count > 0
         boundsBehavior: Flickable.StopAtBounds
 
         ScrollBar.vertical: ScrollBar {
@@ -160,7 +160,7 @@ Item {
         anchors.centerIn: parent
         width: parent.width - Theme.spaceXl * 2
         spacing: Theme.spaceMd
-        visible: !root.model || root.model.count() === 0
+        visible: !root.model || root.model.count === 0
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter

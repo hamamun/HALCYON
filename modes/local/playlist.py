@@ -20,6 +20,7 @@ from enum import IntEnum
 from pathlib import Path
 
 from PySide6.QtCore import (
+    Property,
     QAbstractListModel,
     QByteArray,
     QModelIndex,
@@ -30,6 +31,8 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
+
+from core import paths as path_utils
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +68,18 @@ class Track:
 
 
 class _ProbeSignals(QObject):
+    """Carries probe results back to the GUI thread.
+
+    Parented to the model so its lifetime is Qt's business, and carrying a
+    ``cancelled`` flag so in-flight probes stop talking to it once the model is
+    going away.
+    """
+
     done = Signal(str, int)  # path, duration_ms
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.cancelled = False
 
 
 class _ProbeTask(QRunnable):
@@ -78,6 +92,10 @@ class _ProbeTask(QRunnable):
         self.setAutoDelete(True)
 
     def run(self) -> None:
+        # Bail before doing any work if the queue was cleared or the app is
+        # quitting — a folder of 500 files leaves a lot of these queued.
+        if self._signals.cancelled:
+            return
         duration = 0
         try:
             import vlc
@@ -92,7 +110,15 @@ class _ProbeTask(QRunnable):
                 instance.release()
         except Exception:
             log.debug("probe failed for %s", self._path, exc_info=True)
-        self._signals.done.emit(self._path, duration)
+
+        # Re-check: the model may have been torn down during the parse above,
+        # and emitting into a deleted QObject raises out of a pool thread.
+        if self._signals.cancelled:
+            return
+        try:
+            self._signals.done.emit(self._path, duration)
+        except RuntimeError:
+            pass  # receiver already gone; nothing to report to
 
 
 class PlaylistModel(QAbstractListModel):
@@ -118,7 +144,7 @@ class PlaylistModel(QAbstractListModel):
         self._shuffle = False
         self._shuffle_order: list[int] = []
         self._pool = QThreadPool.globalInstance()
-        self._probe_signals = _ProbeSignals()
+        self._probe_signals = _ProbeSignals(self)
         self._probe_signals.done.connect(self._on_probed)
 
     # ------------------------------------------------------ model plumbing ---
@@ -159,13 +185,30 @@ class PlaylistModel(QAbstractListModel):
         here. There is no second path that adds to the queue.
         """
         incoming: list[Track] = []
-        for raw in paths:
-            p = Path(str(raw).replace("file://", "")).expanduser()
+        for raw in paths or []:
+            # Shared normaliser: percent-decoding and the Windows drive-letter
+            # fix live in exactly one place (core.paths). The old
+            # `.replace("file://", "")` left "/E:/drvie%20personal/..." behind,
+            # which is not a file anywhere, so the item was dropped in silence.
+            text = path_utils.normalise_path(raw)
+            if not text:
+                continue
+            p = Path(text).expanduser()
             if p.is_dir():
                 incoming.extend(self._scan_folder(p))
-            elif p.is_file() and p.suffix.lower() in MEDIA_EXTENSIONS:
-                incoming.append(Track(str(p), p.stem))
+            elif p.is_file():
+                if p.suffix.lower() in MEDIA_EXTENSIONS:
+                    incoming.append(Track(str(p), p.stem))
+                else:
+                    # Explicitly chosen through a dialog: the user knows what
+                    # they picked better than our extension list does.
+                    log.info("adding %s despite unknown extension", p.name)
+                    incoming.append(Track(str(p), p.stem))
+            else:
+                log.warning("skipped, not found on disk: %s", text)
+
         if not incoming:
+            log.info("add_paths: nothing to add from %d input(s)", len(paths or []))
             return 0
 
         start = len(self._tracks)
@@ -332,21 +375,45 @@ class PlaylistModel(QAbstractListModel):
                 return
 
     # --------------------------------------------------------- properties ---
-    @Slot(result=int)
+    # These are Properties, not Slots, and that distinction is the whole reason
+    # the panel updates. A `@Slot(result=int) def count()` is callable from QML
+    # as `model.count()` — but a *call* is not a binding: QML has no idea the
+    # answer ever changes, so `visible: model.count() > 0` is evaluated once, at
+    # load, when the queue is empty, and never again. Files were being added to
+    # the model correctly and the list stayed hidden behind the empty state.
+    #
+    # A Property with a notify signal makes the same expression a live binding.
+
+    @Property(int, notify=countChanged)
     def count(self) -> int:
         return len(self._tracks)
 
-    @Slot(result=int)
+    @Property(int, notify=currentIndexChanged)
+    def currentIndex(self) -> int:  # noqa: N802 - QML-facing
+        return self._current
+
+    @Property(int, notify=repeatModeChanged)
+    def repeatMode(self) -> int:  # noqa: N802 - QML-facing
+        return int(self._repeat)
+
+    @Property(bool, notify=shuffleChanged)
+    def shuffle(self) -> bool:
+        return self._shuffle
+
+    # Python-side accessors. The controller uses these; QML uses the properties
+    # above. Same state, one storage location.
     def current_index(self) -> int:
         return self._current
+
+    def repeat_mode(self) -> int:
+        return int(self._repeat)
+
+    def is_shuffled(self) -> bool:
+        return self._shuffle
 
     @Slot(int, result=str)
     def path_at(self, row: int) -> str:
         return self._tracks[row].path if 0 <= row < len(self._tracks) else ""
-
-    @Slot(result=int)
-    def repeat_mode(self) -> int:
-        return int(self._repeat)
 
     @Slot()
     def cycle_repeat(self) -> None:
@@ -358,16 +425,17 @@ class PlaylistModel(QAbstractListModel):
         self._repeat = RepeatMode(int(mode) % 3)
         self.repeatModeChanged.emit()
 
-    @Slot(result=bool)
-    def shuffle(self) -> bool:
-        return self._shuffle
-
     @Slot()
     def toggle_shuffle(self) -> None:
         self._shuffle = not self._shuffle
         if self._shuffle:
             self._rebuild_shuffle()
         self.shuffleChanged.emit()
+
+    # ---------------------------------------------------------- shutdown ---
+    def shutdown(self) -> None:
+        """Stop accepting probe results. Called before the app tears down."""
+        self._probe_signals.cancelled = True
 
     def to_list(self) -> list[dict]:
         return [

@@ -38,8 +38,18 @@ class ModeList(QObject):
 
     @Slot(str, result="QVariant")
     def spec(self, mode_id: str):
+        """Look up a mode, falling back to the default rather than to null.
+
+        QML calls this during binding evaluation, sometimes before
+        ``App.activeMode`` has propagated. Returning ``None`` there turns every
+        downstream ``modeSpec.usesPlayer`` into a TypeError, so an unknown id
+        resolves to the default mode — Local — which is always registered.
+        """
         found = mode_registry.find(mode_id)
-        return self._as_dict(found) if found else None
+        if found is None:
+            log.warning("unknown mode %r — falling back to the default", mode_id)
+            found = mode_registry.default_mode()
+        return self._as_dict(found)
 
     @staticmethod
     def _as_dict(spec: ModeSpec) -> dict:
@@ -133,15 +143,35 @@ class AppController(QObject):
 
     # -------------------------------------------------------------- playlist ---
     @Slot(list)
-    def addPaths(self, paths: list) -> None:  # noqa: N802 - QML-facing
+    @Slot("QVariant")
+    def addPaths(self, incoming) -> None:  # noqa: N802 - QML-facing
         """The one append path — Add Files, Add Folder, Ctrl+O and drag-and-drop
-        all arrive here (§4.1)."""
+        all arrive here (§4.1).
+
+        The parameter is deliberately **not** called ``paths``: this module
+        imports a module of that name, and shadowing it inside the one method
+        that does path handling is how you get an ``AttributeError`` at the
+        worst possible moment.
+
+        Overloaded on ``QVariant`` as well as ``list`` so a JS array from QML
+        binds whichever way PySide marshals it.
+        """
         target = self.playlist
         if target is None or not hasattr(target, "add_paths"):
+            log.warning("addPaths: active mode %r has no queue", self._active_mode)
             return
-        cleaned = [_normalise(p) for p in paths]
+
+        if isinstance(incoming, (str, bytes)):
+            incoming = [incoming]
+        cleaned = [_normalise(p) for p in incoming or []]
+        cleaned = [p for p in cleaned if p]
+        if not cleaned:
+            return
+
+        was_empty = target.current_index() < 0
         added = target.add_paths(cleaned)
-        if added and target.current_index() < 0:
+        log.info("addPaths: %d path(s) in, %d track(s) queued", len(cleaned), added)
+        if added and was_empty:
             target.play_index(0)
 
     @Slot(list)
@@ -291,23 +321,26 @@ class AppController(QObject):
 
     # -------------------------------------------------------------- shutdown ---
     def shutdown(self) -> None:
-        self._library.shutdown()
-        self._equalizer.release()
-        self._settings.flush()
+        # Modes first: stop background work (duration probes) before the objects
+        # it reports into start disappearing. Each step is independent, so one
+        # failure must not skip the settings flush that follows it.
+        for mode_id, context in self._contexts.items():
+            shutdown = getattr(context, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    log.exception("mode %r failed to shut down", mode_id)
+        for step in (self._library.shutdown, self._equalizer.release, self._settings.flush):
+            try:
+                step()
+            except Exception:
+                log.exception("shutdown step %s failed", getattr(step, "__name__", step))
 
 
 def _normalise(raw) -> str:
-    text = str(raw)
-    if text.startswith("file://"):
-        from urllib.parse import unquote, urlparse
-
-        parsed = urlparse(text)
-        path = unquote(parsed.path)
-        # Windows: file:///C:/x -> /C:/x, strip the leading slash
-        if len(path) > 2 and path[0] == "/" and path[2] == ":":
-            path = path[1:]
-        return path
-    return text
+    """One URL->path implementation, shared with the playlist model (§4.1)."""
+    return paths.normalise_path(raw)
 
 
 def _from_uri(mrl: str) -> str:
