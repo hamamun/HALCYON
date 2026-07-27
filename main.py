@@ -169,6 +169,15 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- shutdown, in the right order (§9) ---------------------------------
     def on_quit() -> None:
+        # Break QML's signal bindings while their target QObjects are still
+        # alive. Otherwise QQmlApplicationEngine may tear down a Connections
+        # object after Player has already been destroyed and Qt prints
+        # ``QObject::disconnect: Unexpected nullptr parameter``.
+        try:
+            qml_engine.rootContext().setContextProperty("Player", None)
+        except Exception:
+            log.debug("could not clear Player QML context property", exc_info=True)
+
         # Neither half may be skipped because the other threw: a failed
         # controller flush must not leave libVLC's threads running.
         try:
