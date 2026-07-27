@@ -34,6 +34,27 @@ UI_DIR = ROOT / "ui"
 SHADERS = UI_DIR / "shaders"
 
 
+def qml_url(url: str) -> str:
+    """Resolve a ``qrc:/`` QML URL for the way Halcyon is actually running.
+
+    ``ModeSpec`` declares its QML as ``qrc:/modes/local/LocalPanel.qml`` — the
+    right form for a frozen build, where everything is compiled into a Qt
+    resource. Running from a source checkout there is no resource bundle, so
+    that URL resolves to nothing and the Loader silently renders an empty panel.
+
+    This maps the URL onto the equivalent file on disk when that file exists,
+    and otherwise hands the ``qrc:`` URL back untouched so a packaged build
+    keeps using its resources. Non-``qrc:`` URLs pass straight through.
+    """
+    if not url.startswith("qrc:"):
+        return url
+    relative = url[len("qrc:") :].lstrip("/")
+    on_disk = ROOT / relative
+    if on_disk.exists():
+        return on_disk.as_uri()
+    return url
+
+
 def _platform_data_dir() -> Path:
     override = os.environ.get("HALCYON_DATA_DIR")
     if override:

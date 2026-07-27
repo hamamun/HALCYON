@@ -1,8 +1,8 @@
 module Halcyon.Shell
 
-Shell 1.0 Shell.qml
-TitleBar 1.0 TitleBar.qml
-PanelHost 1.0 PanelHost.qml
-Stage 1.0 Stage.qml
-VideoStage 1.0 VideoStage.qml
-AuroraBackground 1.0 AuroraBackground.qml
+Shell 1.0 ../../ui/shell/Shell.qml
+TitleBar 1.0 ../../ui/shell/TitleBar.qml
+PanelHost 1.0 ../../ui/shell/PanelHost.qml
+Stage 1.0 ../../ui/shell/Stage.qml
+VideoStage 1.0 ../../ui/shell/VideoStage.qml
+AuroraBackground 1.0 ../../ui/shell/AuroraBackground.qml

@@ -16,7 +16,10 @@ import Halcyon.Ui
 Item {
     id: root
 
-    property bool enabled: true
+    // Named osdEnabled, not enabled: Item already has an `enabled` property, and
+    // shadowing it both trips a QML warning and silently changes input handling
+    // for the whole subtree.
+    property bool osdEnabled: true
     property bool suppressed: false     // set while a popover/menu owns focus
 
     // Bottom 20% is the subtitle safe area. Nothing here may enter it.
@@ -54,7 +57,7 @@ Item {
     }
 
     function _can() {
-        return root.enabled && !root.suppressed;
+        return root.osdEnabled && !root.suppressed;
     }
 
     // ----------------------------------------------- top-left status line --

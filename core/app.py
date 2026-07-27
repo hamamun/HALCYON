@@ -18,6 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from core import modes as mode_registry
+from core import paths
 from core.mode_api import ModeSpec
 
 log = logging.getLogger(__name__)
@@ -42,12 +43,14 @@ class ModeList(QObject):
 
     @staticmethod
     def _as_dict(spec: ModeSpec) -> dict:
+        # Modes declare their QML as qrc: URLs (the packaged form). Resolve them
+        # to real files when running from a checkout — see core.paths.qml_url.
         return {
             "id": spec.id,
             "title": spec.title,
-            "panelQml": spec.panel_qml,
-            "stageQml": spec.stage_qml,
-            "transportQml": spec.transport_qml,
+            "panelQml": paths.qml_url(spec.panel_qml),
+            "stageQml": paths.qml_url(spec.stage_qml),
+            "transportQml": paths.qml_url(spec.transport_qml),
             "osdEnabled": spec.osd_enabled,
             "mediaKeysEnabled": spec.media_keys_enabled,
             "usesPlayer": spec.uses_player,

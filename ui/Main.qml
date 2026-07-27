@@ -3,6 +3,8 @@ import QtQuick.Window
 import QtQuick.Dialogs
 import Halcyon.Ui
 import Halcyon.Shell
+import Halcyon.Panels
+import Halcyon.Overlay
 
 // The window — §P1.4.
 //
@@ -221,7 +223,7 @@ Shell {
                 Osd {
                     id: osdLayer
                     anchors.fill: parent
-                    enabled: window.osdEnabled()
+                    osdEnabled: window.osdEnabled()
                     suppressed: settingsDialog.visible || confirmClear.visible
                 }
 

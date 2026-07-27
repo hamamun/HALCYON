@@ -16,16 +16,19 @@ layout(std140, binding = 0) uniform buf {
     float qt_Opacity;
 } ubuf;
 
-layout(binding = 1) uniform sampler2D y;
-layout(binding = 2) uniform sampler2D u;
-layout(binding = 3) uniform sampler2D v;
+// Named texY/texU/texV, not y/u/v: a ShaderEffect exposes each sampler as a QML
+// property, and a property called `y` would shadow Item.y — QML rejects that
+// with "Property value set multiple times".
+layout(binding = 1) uniform sampler2D texY;
+layout(binding = 2) uniform sampler2D texU;
+layout(binding = 3) uniform sampler2D texV;
 
 void main()
 {
     // Limited-range (16-235 / 16-240) to full-range, per BT.709.
-    float Y = texture(y, qt_TexCoord0).r - 0.0625;
-    float U = texture(u, qt_TexCoord0).r - 0.5;
-    float V = texture(v, qt_TexCoord0).r - 0.5;
+    float Y = texture(texY, qt_TexCoord0).r - 0.0625;
+    float U = texture(texU, qt_TexCoord0).r - 0.5;
+    float V = texture(texV, qt_TexCoord0).r - 0.5;
 
     vec3 rgb;
     rgb.r = 1.1643 * Y + 1.7927 * V;

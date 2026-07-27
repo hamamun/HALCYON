@@ -1,8 +1,0 @@
-module Halcyon.Panels
-
-InfoPanel 1.0 InfoPanel.qml
-InfoTab 1.0 InfoTab.qml
-LyricsTab 1.0 LyricsTab.qml
-EqualizerTab 1.0 EqualizerTab.qml
-SettingsDialog 1.0 SettingsDialog.qml
-SettingRow 1.0 SettingRow.qml

@@ -101,8 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     import engine.surface  # noqa: F401
 
     qml_engine = QQmlApplicationEngine()
-    qml_engine.addImportPath(str(ROOT / "ui"))
-    qml_engine.addImportPath(str(ROOT / "ui" / "shell"))
+    # One import path: the repository root. Qt maps `import Halcyon.Ui` to
+    # <import path>/Halcyon/Ui/qmldir, so the module directories under Halcyon/
+    # are what make the imports resolve. Adding ui/ or ui/shell/ here does
+    # nothing — a directory only provides a module if its *path* spells the URI.
     qml_engine.addImportPath(str(ROOT))
 
     ctx = qml_engine.rootContext()
