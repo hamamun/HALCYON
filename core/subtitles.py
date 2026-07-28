@@ -38,7 +38,6 @@ from PySide6.QtCore import (
     Property,
     QByteArray,
     QObject,
-    QTimer,
     QUrl,
     QUrlQuery,
     Signal,
@@ -202,6 +201,51 @@ def guess_query(path: str | Path) -> dict[str, Any]:
     }
 
 
+def _int(value, default: int = 0) -> int:
+    """Coerce a JSON field to int, never raising.
+
+    Every number here arrives from the network. opensubtitles.com sends clean
+    JSON today, but a proxy, a cached error page or a future schema change can
+    put a string (or null, or a float) where an int belonged — and an
+    unguarded ``int(attrs["download_count"])`` turns that into a ValueError
+    that escapes the reply handler and leaves the dialog spinning with no
+    message. Untrusted input must degrade, not throw.
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    # A Python int is already exact and may be far too large for float(), which
+    # raises OverflowError rather than returning inf. Handle it before any
+    # float conversion happens.
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    # NaN and ±inf survive float() and then blow up in int(). JSON has no
+    # literal for them, but "Infinity"/"NaN" are what several encoders emit and
+    # Python's json module accepts them by default, so they can genuinely reach
+    # here from the wire.
+    if number != number or number in (float("inf"), float("-inf")):
+        return default
+    try:
+        return int(number)
+    except (OverflowError, ValueError):
+        return default
+
+
+def _float(value, default: float = 0.0) -> float:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if number != number or number in (float("inf"), float("-inf")):
+        return default
+    return number
+
+
 def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
 
@@ -236,19 +280,30 @@ def rank_results(
     # Release tokens are a *bonus* signal, weighted separately below, so a
     # matching group or source nudges the order without setting the badge.
     release_hint = _tokens(guess_query(file_name).get("query", "")) if file_name else set()
-    season, episode = int(query.get("season") or 0), int(query.get("episode") or 0)
+    season, episode = _int(query.get("season")), _int(query.get("episode"))
 
     entries: list[dict] = []
-    for item in raw or []:
-        attrs = item.get("attributes") or {}
-        files = attrs.get("files") or []
-        first = files[0] if files else {}
-        file_id = first.get("file_id")
+    if not isinstance(raw, list):
+        raw = []
+    for item in raw:
+        # Every level is type-checked, not just truth-checked. `x or {}` turns
+        # None into a dict but happily passes a list straight through to
+        # `.get`, which is an AttributeError out of the reply handler. The
+        # payload is untrusted; a malformed entry should be skipped, not fatal
+        # to the whole result list.
+        attrs = item.get("attributes") if isinstance(item, dict) else None
+        if not isinstance(attrs, dict):
+            continue
+        files = attrs.get("files")
+        files = files if isinstance(files, list) else []
+        first = next((f for f in files if isinstance(f, dict)), {})
+        file_id = _int(first.get("file_id"))
         if not file_id:
             continue
 
         release = str(attrs.get("release") or first.get("file_name") or "Subtitle")
-        feature = attrs.get("feature_details") or {}
+        feature = attrs.get("feature_details")
+        feature = feature if isinstance(feature, dict) else {}
         hash_match = bool(attrs.get("moviehash_match"))
 
         got = _tokens(release) | _tokens(feature.get("title") or "")
@@ -258,8 +313,8 @@ def rank_results(
         # The episode numbers the *release name* carries are as good as the
         # feature metadata, and far more often present.
         release_meta = guess_query(release)
-        release_season = int(feature.get("season_number") or release_meta["season"] or 0)
-        release_episode = int(feature.get("episode_number") or release_meta["episode"] or 0)
+        release_season = _int(feature.get("season_number")) or _int(release_meta["season"])
+        release_episode = _int(feature.get("episode_number")) or _int(release_meta["episode"])
 
         episode_ok = True
         if season and release_season:
@@ -267,8 +322,8 @@ def rank_results(
         if episode and release_episode:
             episode_ok = episode_ok and release_episode == episode
 
-        downloads = int(attrs.get("download_count") or 0)
-        ratings = float(attrs.get("ratings") or 0.0)
+        downloads = max(0, _int(attrs.get("download_count")))
+        ratings = _float(attrs.get("ratings"))
 
         if hash_match:
             match_kind, score = "hash", 1000.0
@@ -286,28 +341,28 @@ def rank_results(
 
         entries.append(
             {
-                "fileId": int(file_id),
+                "fileId": file_id,
                 "subtitleId": str(attrs.get("subtitle_id") or item.get("id") or ""),
                 "release": release,
                 "fileName": str(first.get("file_name") or release),
                 "language": str(attrs.get("language") or "").lower(),
                 "title": str(feature.get("title") or feature.get("movie_name") or ""),
-                "year": int(feature.get("year") or 0) if feature.get("year") else 0,
-                "season": int(feature.get("season_number") or 0)
-                if feature.get("season_number")
-                else 0,
-                "episode": int(feature.get("episode_number") or 0)
-                if feature.get("episode_number")
-                else 0,
+                "year": _int(feature.get("year")),
+                "season": _int(feature.get("season_number")),
+                "episode": _int(feature.get("episode_number")),
                 "downloads": downloads,
                 "rating": round(ratings, 1),
-                "fps": float(attrs.get("fps") or 0.0),
+                "fps": _float(attrs.get("fps")),
                 "hearingImpaired": bool(attrs.get("hearing_impaired")),
                 "trusted": bool(attrs.get("from_trusted")),
                 "machineTranslated": bool(
                     attrs.get("machine_translated") or attrs.get("ai_translated")
                 ),
-                "uploader": str(((attrs.get("uploader") or {}).get("name")) or ""),
+                "uploader": str(
+                    (attrs.get("uploader") or {}).get("name") or ""
+                    if isinstance(attrs.get("uploader"), dict)
+                    else ""
+                ),
                 "matchKind": match_kind,
                 "score": round(score, 3),
             }
@@ -590,8 +645,17 @@ class SubtitleService(QObject):
         self.downloadFinished.emit(str(target))
 
     def _save(self, data: bytes, suggested_name: str) -> Path:
+        """Write the subtitle next to the media, or into the cache.
+
+        Everything that reaches a filename here is sanitised first, because
+        both inputs come off the network. The *stem* is taken from the media
+        file rather than from ``suggested_name``, so a hostile
+        ``../../etc/passwd.srt`` cannot escape — but the language tag is a
+        server-supplied string that was being interpolated straight in, and
+        ``../../evil`` in that field walked straight out of the directory.
+        """
         entry = self._pending_download or {}
-        language = str(entry.get("language") or "")
+        language = _safe_tag(entry.get("language"))
         suffix = Path(suggested_name).suffix.lower() or ".srt"
         if suffix not in (".srt", ".ass", ".ssa", ".sub", ".vtt"):
             suffix = ".srt"
@@ -599,19 +663,27 @@ class SubtitleService(QObject):
         media = Path(self._media_path) if self._media_path else None
         alongside = bool(self._settings.get("subs.online.saveAlongsideMedia", True))
         if media and alongside and os.access(media.parent, os.W_OK):
+            expected_dir = media.parent
             stem = media.stem + (f".{language}" if language else "")
-            target = media.parent / f"{stem}{suffix}"
+            target = expected_dir / f"{stem}{suffix}"
         else:
-            folder = paths.cache_dir() / "subtitles"
-            folder.mkdir(parents=True, exist_ok=True)
-            base = (media.stem if media else Path(suggested_name).stem) or "subtitle"
-            target = folder / f"{base}{('.' + language) if language else ''}{suffix}"
+            expected_dir = paths.cache_dir() / "subtitles"
+            expected_dir.mkdir(parents=True, exist_ok=True)
+            base = _safe_stem(media.stem if media else Path(suggested_name).name)
+            target = expected_dir / f"{base}{('.' + language) if language else ''}{suffix}"
 
         # Never clobber a subtitle the user already has.
         counter = 2
         while target.exists():
             target = target.with_name(f"{target.stem}.{counter}{suffix}")
             counter += 1
+        # Belt and braces: whatever the inputs were, the result must be inside
+        # the directory we chose. A single assertion here is cheaper than
+        # trusting that every future edit to the naming above stays safe.
+        parent = target.parent.resolve()
+        if parent != expected_dir.resolve():
+            raise OSError(f"refusing to write outside {expected_dir}")
+
         target.write_bytes(data)
         log.info("saved subtitle %s", target)
         return target
@@ -677,6 +749,24 @@ class SubtitleService(QObject):
         self.statusChanged.emit()
 
 
+#: A language tag is ``en`` / ``pt-BR`` — letters and one hyphen, nothing else.
+#: Anything the server sends that is not that shape is dropped rather than
+#: interpolated into a path.
+_SAFE_TAG_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
+
+
+def _safe_tag(value) -> str:
+    tag = str(value or "").strip()
+    return tag if _SAFE_TAG_RE.match(tag) else ""
+
+
+def _safe_stem(value) -> str:
+    """A filename stem with every path separator and reserved character gone."""
+    stem = Path(str(value or "")).name
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem).strip(" .")
+    return stem[:120] or "subtitle"
+
+
 def _http_message(status: int, payload: dict) -> str:
     detail = str(payload.get("message") or payload.get("errors") or "").strip()
     known = {
@@ -689,11 +779,3 @@ def _http_message(status: int, payload: dict) -> str:
     }
     base = known.get(status, f"OpenSubtitles returned HTTP {status}.")
     return f"{base} {detail}".strip()
-
-
-def install_debounce(service: SubtitleService, ms: int = 250) -> QTimer:
-    """Small helper for callers that want to coalesce rapid searches."""
-    timer = QTimer(service)
-    timer.setSingleShot(True)
-    timer.setInterval(ms)
-    return timer

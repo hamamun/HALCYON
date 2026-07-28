@@ -227,3 +227,93 @@ class TestRestoring:
         controller._on_media_changed("file://" + other)
 
         assert engine.selected_audio == 2
+
+
+class TestIncrementalDiscovery:
+    """libVLC does not hand over every track at once.
+
+    A real file raises ESAdded for its audio stream first and its subtitle
+    streams a moment later. A single shared "already restored" latch closed on
+    the audio pass, so the remembered *subtitle* was never restored — silently,
+    and only for real files. The tests above missed it because they populated
+    both lists in one go, which no actual demuxer does.
+    """
+
+    class _Staggered:
+        def __init__(self):
+            self.a: list = []
+            self.s: list = []
+            self.sel_a = -1
+            self.sel_s = -1
+            self.currentMedia = "file://" + FILM
+
+        def audio_tracks(self):
+            return list(self.a)
+
+        def subtitle_tracks(self):
+            return list(self.s)
+
+        def current_audio_track(self):
+            return self.sel_a
+
+        def current_subtitle_track(self):
+            return self.sel_s
+
+        def set_audio_track(self, i):
+            self.sel_a = int(i)
+
+        def set_subtitle_track(self, i):
+            self.sel_s = int(i)
+
+    def _wired(self, library):
+        settings = MagicMock()
+        settings.get.return_value = True
+        engine = self._Staggered()
+        controller = build_controller(engine, settings=settings, library=library)
+        controller._resume_path = FILM
+        return controller, engine
+
+    def test_a_late_arriving_subtitle_track_is_still_restored(self, library, qt_app):
+        library.remember_audio_track(FILM, "Japanese AAC 2.0")
+        library.remember_subtitle_track(FILM, "English")
+        controller, engine = self._wired(library)
+
+        # ESAdded #1 — audio only, which is the usual order.
+        engine.a = [(-1, "Disable"), (1, "English AC3 5.1"), (2, "Japanese AAC 2.0")]
+        controller._refresh_tracks()
+        assert engine.sel_a == 2
+        assert engine.sel_s == -1, "no subtitle tracks exist yet"
+
+        # ESAdded #2 — the subtitle streams turn up.
+        engine.s = [(-1, "Disable"), (4, "English")]
+        controller._refresh_tracks()
+
+        assert engine.sel_s == 4, (
+            "a shared latch closed on the audio pass and this never fired"
+        )
+
+    def test_audio_arriving_late_is_also_restored(self, library, qt_app):
+        """The mirror case — order is not guaranteed."""
+        library.remember_audio_track(FILM, "Japanese AAC 2.0")
+        controller, engine = self._wired(library)
+
+        engine.s = [(-1, "Disable"), (4, "English")]
+        controller._refresh_tracks()
+        engine.a = [(-1, "Disable"), (1, "English AC3 5.1"), (2, "Japanese AAC 2.0")]
+        controller._refresh_tracks()
+
+        assert engine.sel_a == 2
+
+    def test_each_kind_still_gets_only_one_attempt(self, library, qt_app):
+        """Per-kind latches must not become no latch at all: an external .srt
+        attaching later raises ESAdded, and that must not undo a switch."""
+        library.remember_audio_track(FILM, "Japanese AAC 2.0")
+        controller, engine = self._wired(library)
+        engine.a = [(-1, "Disable"), (1, "English AC3 5.1"), (2, "Japanese AAC 2.0")]
+        controller._refresh_tracks()
+
+        controller.setAudioTrack(1)              # user switches to English
+        engine.s = [(-1, "Disable"), (4, "English")]
+        controller._refresh_tracks()             # external subtitle attaches
+
+        assert engine.sel_a == 1, "the in-session choice must survive"

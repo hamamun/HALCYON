@@ -357,3 +357,173 @@ class TestGuards:
             "an unconfigured key is a state the UI explains, not a silent no-op"
         )
         assert not svc.busy, "a refused search must not leave the UI spinning"
+
+
+class TestHostilePayloads:
+    """The payload comes off the internet. It must degrade, never throw.
+
+    opensubtitles.com sends clean JSON today, but a caching proxy, a captive
+    portal, an error page or a future schema change can put a string where an
+    int belonged or a list where an object belonged. An exception escaping the
+    reply handler leaves the dialog spinning with no message and no results —
+    the worst possible failure, because it looks like the app hung.
+
+    Found by fuzzing, not by reading: `download_count: "x"` raised ValueError,
+    and `feature_details: []` raised AttributeError, in code that looked
+    perfectly defensive because it used `or {}` everywhere.
+    """
+
+    QUERY = {"query": "andor", "season": 2, "episode": 1}
+
+    def _one(self, **attrs):
+        base = {"release": "Andor.S02E01", "files": [{"file_id": 5, "file_name": "a.srt"}]}
+        base.update(attrs)
+        return [{"attributes": base}]
+
+    @pytest.mark.parametrize(
+        "value",
+        ["x", None, "", [], {}, True, 1.5, float("nan"), float("inf"), 10**400],
+        ids=repr,
+    )
+    def test_a_junk_download_count_does_not_raise(self, value):
+        got = rank_results(
+            self._one(download_count=value), mode=MATCH_ALL, query=self.QUERY
+        )
+
+        assert len(got) == 1
+        assert isinstance(got[0]["downloads"], int)
+
+    @pytest.mark.parametrize(
+        "value", ["x", None, [], float("nan"), float("inf"), 10**400], ids=repr
+    )
+    def test_a_junk_rating_does_not_raise(self, value):
+        got = rank_results(self._one(ratings=value), mode=MATCH_ALL, query=self.QUERY)
+
+        assert len(got) == 1
+        assert isinstance(got[0]["rating"], float)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            "a string",
+            {},
+            [None],
+            [[]],
+            [{"attributes": None}],
+            [{"attributes": []}],
+            [{"attributes": {"files": {}}}],
+            [{"attributes": {"files": "x"}}],
+            [{"attributes": {"files": [None]}}],
+            [{"attributes": {"files": [{"file_id": 3}], "feature_details": []}}],
+            [{"attributes": {"files": [{"file_id": 3}], "uploader": "bob"}}],
+        ],
+        ids=lambda p: repr(p)[:40],
+    )
+    def test_a_malformed_payload_shape_does_not_raise(self, payload):
+        for mode in (MATCH_BEST, MATCH_ALL):
+            rank_results(payload, mode=mode, query=self.QUERY, file_name="a.mkv")
+
+    def test_a_good_entry_survives_a_malformed_sibling(self):
+        """One bad row must not lose the whole result list."""
+        payload = [
+            {"attributes": None},
+            {"attributes": {
+                "release": "Andor.S02E01.WEB",
+                "files": [None, {"file_id": 7, "file_name": "a.srt"}],
+            }},
+        ]
+
+        got = rank_results(payload, mode=MATCH_ALL, query=self.QUERY)
+
+        assert [e["fileId"] for e in got] == [7]
+
+    def test_a_junk_feature_block_still_yields_a_row(self):
+        got = rank_results(
+            self._one(feature_details={"year": "x", "season_number": [], "episode_number": None}),
+            mode=MATCH_ALL,
+            query=self.QUERY,
+        )
+
+        assert len(got) == 1
+        assert got[0]["year"] == 0
+
+
+class TestSavePathSafety:
+    """Both inputs to the filename come off the network.
+
+    The stem is taken from the *media* file, so a hostile
+    ``../../../../etc/passwd.srt`` in the server's ``file_name`` was already
+    harmless. The language tag was not: it was interpolated straight into the
+    path, so ``"language": "../../evil"`` walked out of the directory and
+    raised FileNotFoundError — which on a differently-shaped tree would have
+    been a silent write to the wrong place instead.
+    """
+
+    @pytest.fixture
+    def service(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HALCYON_DATA_DIR", str(tmp_path / "profile"))
+        from PySide6.QtCore import QCoreApplication
+
+        from core.settings import Settings
+        from core.subtitles import SubtitleService
+
+        QCoreApplication.instance() or QCoreApplication([])
+        settings = Settings(path=tmp_path / "profile" / "settings.json")
+        svc = SubtitleService(settings)
+        media = tmp_path / "media" / "Andor.S02E01.mkv"
+        media.parent.mkdir(parents=True)
+        media.write_bytes(b"video")
+        svc.set_media(str(media))
+        return svc, media, settings
+
+    @pytest.mark.parametrize(
+        "language",
+        ["../../evil", "e/n", "..", ".", "en\x00", "<script>", "a" * 50, "/abs"],
+        ids=repr,
+    )
+    def test_a_hostile_language_tag_cannot_escape(self, service, language):
+        svc, media, _ = service
+        svc._pending_download = {"language": language}
+
+        saved = svc._save(b"subtitle", "sub.srt")
+
+        assert saved.parent.resolve() == media.parent.resolve()
+
+    @pytest.mark.parametrize("language", ["en", "pt-BR", "zh-CN"])
+    def test_a_real_language_tag_is_kept(self, service, language):
+        svc, media, _ = service
+        svc._pending_download = {"language": language}
+
+        saved = svc._save(b"subtitle", "sub.srt")
+
+        assert saved.name == f"{media.stem}.{language}.srt", (
+            "sanitising must not throw away legitimate tags like pt-BR"
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../../../../etc/passwd.srt",
+            "..\\..\\windows\\system32\\evil.srt",
+            "a/b/c.srt",
+            "",
+        ],
+        ids=repr,
+    )
+    def test_a_hostile_suggested_name_cannot_escape(self, service, name):
+        svc, media, _ = service
+        svc._pending_download = {"language": "en"}
+
+        saved = svc._save(b"subtitle", name)
+
+        assert saved.parent.resolve() == media.parent.resolve()
+
+    def test_the_cache_fallback_is_also_contained(self, service):
+        svc, _, settings = service
+        settings.set("subs.online.saveAlongsideMedia", False)
+        svc._pending_download = {"language": "en"}
+
+        saved = svc._save(b"subtitle", "../../../../etc/passwd.srt")
+
+        assert saved.parent.name == "subtitles"

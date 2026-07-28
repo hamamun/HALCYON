@@ -108,8 +108,8 @@ class AppController(QObject):
         self._current_audio = -1
         self._current_subtitle = -1
         self._resume_path = ""
-        self._resume_ms = 0
-        self._tracks_restored = False
+        self._audio_restored = False
+        self._subtitle_restored = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -385,8 +385,8 @@ class AppController(QObject):
         if self._settings.get("playback.resumeEnabled", True):
             resume_ms = self._library.resume_position(path)
         self._resume_path = path
-        self._resume_ms = int(resume_ms)
-        self._tracks_restored = False
+        self._audio_restored = False
+        self._subtitle_restored = False
         self._engine.open(path, resume_ms)
         if resume_ms:
             self.resumePrompted.emit(path, int(resume_ms))
@@ -400,12 +400,7 @@ class AppController(QObject):
         """
         if self._resume_path:
             self._library.clear_position(self._resume_path)
-        self._resume_ms = 0
         self._engine.seek(0)
-
-    @Property(int, notify=resumePrompted)
-    def resumeMs(self) -> int:  # noqa: N802 - QML-facing
-        return self._resume_ms
 
     def _on_media_changed(self, mrl: str) -> None:
         path = _from_uri(mrl)
@@ -414,7 +409,8 @@ class AppController(QObject):
         # end-of-file), and a stale `_resume_path` would file the next film's
         # track choice against the previous one.
         self._resume_path = path
-        self._tracks_restored = False
+        self._audio_restored = False
+        self._subtitle_restored = False
         self._library.note_opened(path)
         self._metadata.load(path)
         self._lyrics.load(path)
@@ -485,29 +481,40 @@ class AppController(QObject):
         Runs off the track refresh rather than off media-open because the track
         list does not exist yet when the file opens — libVLC discovers the
         elementary streams asynchronously, which is exactly why ESAdded exists.
-        The ``_tracks_restored`` latch keeps it to one attempt per file, so a
-        later ESAdded (an external subtitle being attached, say) cannot yank the
-        user's in-session choice back to the remembered one.
-        """
-        if self._tracks_restored or not self._resume_path:
-            return
-        if not self._audio_tracks and not self._subtitle_tracks:
-            return          # nothing discovered yet; wait for the next ESAdded
-        self._tracks_restored = True
 
-        wanted_audio = self._library.remembered_audio_track(self._resume_path)
-        if wanted_audio:
-            self._select_by_label(
-                self._audio_tracks, wanted_audio, self._engine.set_audio_track, "audio"
-            )
-        wanted_subtitle = self._library.remembered_subtitle_track(self._resume_path)
-        if wanted_subtitle:
-            self._select_by_label(
-                self._subtitle_tracks,
-                wanted_subtitle,
-                self._engine.set_subtitle_track,
-                "subtitle",
-            )
+        **The latch is per kind, and that is load-bearing.** libVLC discovers
+        elementary streams incrementally, so a typical file raises ESAdded for
+        its audio track first and its subtitle tracks a moment later. A single
+        shared latch closed on the audio pass and the remembered *subtitle* was
+        then never restored — silently, and only for real files, which is why
+        a test that populated both lists at once did not catch it.
+
+        Each kind latches when its own list first appears, so each gets exactly
+        one attempt: late-arriving subtitles are still restored, and a later
+        ESAdded (an external .srt being attached, say) cannot yank an
+        in-session choice back to the remembered one.
+        """
+        if not self._resume_path:
+            return
+
+        if self._audio_tracks and not self._audio_restored:
+            self._audio_restored = True
+            wanted = self._library.remembered_audio_track(self._resume_path)
+            if wanted:
+                self._select_by_label(
+                    self._audio_tracks, wanted, self._engine.set_audio_track, "audio"
+                )
+
+        if self._subtitle_tracks and not self._subtitle_restored:
+            self._subtitle_restored = True
+            wanted = self._library.remembered_subtitle_track(self._resume_path)
+            if wanted:
+                self._select_by_label(
+                    self._subtitle_tracks,
+                    wanted,
+                    self._engine.set_subtitle_track,
+                    "subtitle",
+                )
 
     @staticmethod
     def _select_by_label(tracks: list[dict], label: str, setter, kind: str) -> None:

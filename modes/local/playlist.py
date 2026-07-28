@@ -78,15 +78,25 @@ class Track:
 class _ProbeSignals(QObject):
     """Carries probe results back to the GUI thread.
 
-    Parented to the model so its lifetime is Qt's business, and carrying a
-    ``cancelled`` flag so in-flight probes stop talking to it once the model is
-    going away.
+    **Deliberately unparented.** It used to be parented to the model, which
+    looked tidier and caused an intermittent hard crash: Qt destroys a child
+    with its parent, so a model going away while probe tasks were still in
+    flight left those tasks holding a wrapper around a freed C++ QObject. The
+    next ``done.emit`` from a pool thread then wrote through a dangling pointer
+    and segfaulted the process outright — not a catchable RuntimeError, and
+    only when the timing lined up, which is why it surfaced as a test suite
+    that failed roughly one run in four with no failing test.
+
+    Unparented, its lifetime is Python's: every in-flight ``_ProbeTask`` holds a
+    reference, so the object outlives the model exactly as long as something can
+    still emit through it. Qt drops the connection when the model dies, so those
+    late emissions land nowhere instead of crashing.
     """
 
     done = Signal(str, int)  # path, duration_ms
 
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self) -> None:
+        super().__init__()
         self.cancelled = False
 
 
@@ -174,7 +184,7 @@ class PlaylistModel(QAbstractListModel):
         self._shuffle = False
         self._shuffle_order: list[int] = []
         self._pool = QThreadPool.globalInstance()
-        self._probe_signals = _ProbeSignals(self)
+        self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
 
     # ------------------------------------------------------ model plumbing ---
@@ -513,8 +523,19 @@ class PlaylistModel(QAbstractListModel):
 
     # ---------------------------------------------------------- shutdown ---
     def shutdown(self) -> None:
-        """Stop accepting probe results. Called before the app tears down."""
+        """Stop accepting probe results. Called before the app tears down.
+
+        Setting the flag is not enough on its own: a task can already be past
+        its check and inside ``emit``. Draining the pool is what makes teardown
+        actually safe, so nothing is still running when the interpreter starts
+        tearing Qt down. Bounded, because a probe that has wedged on a network
+        share must not hang the exit.
+        """
         self._probe_signals.cancelled = True
+        try:
+            self._pool.waitForDone(2000)
+        except Exception:
+            log.debug("probe pool did not drain cleanly", exc_info=True)
 
     def to_list(self) -> list[dict]:
         return [

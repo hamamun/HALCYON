@@ -51,7 +51,8 @@ def build_controller(engine, *, playlist=None, settings=None, **services):
     controller._current_subtitle = -1
     controller._resume_path = ""
     controller._resume_ms = 0
-    controller._tracks_restored = False
+    controller._audio_restored = False
+    controller._subtitle_restored = False
     return controller
 
 
