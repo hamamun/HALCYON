@@ -353,8 +353,15 @@ Shell {
     // ======================================================================
     readonly property bool autoHideActive: fullscreen
 
-    // Only ever false in fullscreen — see autoHideActive.
-    onAutoHideActiveChanged: wakeChrome()
+    // Entering or leaving fullscreen resets the cycle. Leaving is the important
+    // direction: without this, exiting while the bar is hidden would drop the
+    // user into a window with no controls and no cursor, and nothing windowed
+    // ever hides or shows them again.
+    onAutoHideActiveChanged: {
+        lastPointerX = -1;      // the pointer's frame of reference just changed
+        lastPointerY = -1;
+        wakeChrome();
+    }
 
     MouseArea {
         id: idleWatcher
@@ -364,7 +371,12 @@ Shell {
         propagateComposedEvents: true
         z: -1
 
-        onPositionChanged: window.wakeChrome()
+        // Same real-movement test as cursorBlanker, for the same reason: a
+        // stationary pointer must not be able to keep the chrome awake. Layout
+        // changes when the bar fades (the stage resizes under the pointer) also
+        // produce positionChanged with the mouse untouched, which would
+        // re-show the bar the instant it hid.
+        onPositionChanged: function(mouse) { window.notePointer(mouse.x, mouse.y) }
     }
 
     // Cursor blanking, fullscreen only.
@@ -376,8 +388,8 @@ Shell {
     // everything and takes `Qt.NoButton`, so it paints the cursor without
     // swallowing a single click — presses still reach the stage and the bar
     // underneath. It exists only while the chrome is hidden, so in windowed
-    // mode, while paused, or the moment the pointer moves it is simply not
-    // there.
+    // mode, while paused, and for as long as the pointer keeps moving it is
+    // simply not instantiated.
     MouseArea {
         id: cursorBlanker
         anchors.fill: parent
@@ -389,8 +401,39 @@ Shell {
         propagateComposedEvents: true
         cursorShape: Qt.BlankCursor
 
-        onPositionChanged: window.wakeChrome()
-        onExited: window.wakeChrome()
+        onPositionChanged: function(mouse) { window.notePointer(mouse.x, mouse.y) }
+    }
+
+    // ------------------------------------------------- pointer bookkeeping --
+    // **Only a real move may wake the chrome.**
+    //
+    // `positionChanged` does not mean "the user moved the mouse". It also fires
+    // when an area appears under a stationary pointer (the pointer has
+    // "entered" something new) and when the scene moves *beneath* a stationary
+    // pointer — which is exactly what happens the moment the transport bar
+    // fades and the stage relayouts under the cursor.
+    //
+    // Waking on those is a self-sustaining loop: hide -> blanker appears and
+    // the layout shifts -> synthetic positionChanged -> wake -> 2.5 s -> hide,
+    // forever. In fullscreen the bar and cursor would flicker on a 2.5 s cycle
+    // and never settle. Comparing against the last seen coordinates is what
+    // separates a genuine move from those artefacts.
+    property real lastPointerX: -1
+    property real lastPointerY: -1
+
+    function notePointer(x, y) {
+        // First sighting: record, do not wake. Otherwise the very first event
+        // after the chrome hides — which is usually synthetic — un-hides it.
+        if (lastPointerX < 0 && lastPointerY < 0) {
+            lastPointerX = x;
+            lastPointerY = y;
+            return;
+        }
+        var moved = Math.abs(x - lastPointerX) > 2 || Math.abs(y - lastPointerY) > 2;
+        lastPointerX = x;
+        lastPointerY = y;
+        if (moved)
+            wakeChrome();
     }
 
     function wakeChrome() {

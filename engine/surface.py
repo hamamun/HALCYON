@@ -125,10 +125,14 @@ class PlaneSurface(QQuickItem):
         Runs on the **render thread**, while the owning :class:`VideoSurface`
         holds the ring pin.
 
-        The plane item itself is invisible (only the QML ``ShaderEffect``
-        samples it), so its own ``updatePaintNode`` is never invoked by Qt.
-        Committing here, from the surface's ``updatePaintNode``, is therefore
-        the *only* path by which a plane ever receives a texture.
+        Committing here, from the surface's ``updatePaintNode``, is what gets a
+        texture onto a plane *in time for the frame being drawn*: the plane is
+        invisible, so Qt schedules its own ``updatePaintNode`` independently and
+        a frame committed only there would land a cycle late.
+
+        (Qt does still call an invisible item's ``updatePaintNode`` — verified,
+        not assumed. That is what lets :meth:`set_image` with ``None`` clear the
+        texture on teardown without anyone calling ``commit_texture`` again.)
 
         **Why the image must already be a deep copy.** ``createTextureFromImage``
         does not upload anything; it wraps the QImage in a ``QSGPlainTexture``

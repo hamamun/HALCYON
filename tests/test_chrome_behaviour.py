@@ -75,20 +75,48 @@ def test_the_cursor_blanker_swallows_no_clicks():
     double-click-to-exit-fullscreen keep working while the cursor is hidden.
     """
     source = _main_qml()
-    blanker = source.split("id: cursorBlanker", 1)[1].split("}", 1)[0]
+    blanker = source.split("id: cursorBlanker", 1)[1].split("onPositionChanged", 1)[0]
 
     assert "acceptedButtons: Qt.NoButton" in blanker
-    assert "onPositionChanged: window.wakeChrome()" in blanker, (
-        "moving the mouse must bring the cursor and chrome straight back"
+
+
+def test_pointer_wakeups_go_through_the_movement_test():
+    """Neither hover area may call wakeChrome() straight from positionChanged.
+
+    ``positionChanged`` also fires when an area appears under a stationary
+    pointer, and when the scene relayouts beneath one — both of which hiding the
+    bar causes. Waking on those unconditionally makes fullscreen oscillate on a
+    2.5 s cycle. ``notePointer()`` is the shared guard that only wakes on a real
+    move; going around it reintroduces the flicker.
+
+    ``test_fullscreen_chrome.py`` proves the behaviour with real events; this
+    keeps the two call sites honest even where those cannot run.
+    """
+    source = _main_qml()
+
+    assert "onPositionChanged: window.wakeChrome()" not in source, (
+        "waking directly from positionChanged reintroduces the fullscreen "
+        "hide/show flicker — route it through notePointer()"
+    )
+    assert source.count("window.notePointer(mouse.x, mouse.y)") == 2, (
+        "both idleWatcher and cursorBlanker must use the movement test"
     )
 
 
 def test_leaving_fullscreen_restores_the_chrome():
+    """Matched on the handler existing and calling wakeChrome, not on its exact
+    text — it is a block rather than a one-liner, and reformatting it is not a
+    regression. ``test_fullscreen_chrome.py`` asserts the actual behaviour.
+    """
     source = _main_qml()
 
-    assert "onAutoHideActiveChanged: wakeChrome()" in source, (
+    assert "onAutoHideActiveChanged" in source, (
         "exiting fullscreen while the bar is hidden must not leave a window "
         "with no controls and no cursor"
+    )
+    handler = source.split("onAutoHideActiveChanged", 1)[1].split("MouseArea", 1)[0]
+    assert "wakeChrome()" in handler, (
+        "the fullscreen transition must wake the chrome"
     )
 
 

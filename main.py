@@ -194,13 +194,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             log.debug("could not clear Player QML context property", exc_info=True)
 
-        # Neither half may be skipped because the other threw: a failed
-        # controller flush must not leave libVLC's threads running.
-        # Let the display sleep again before anything else can throw.
+        # First: let the display sleep again. This is the step that must not be
+        # skipped by an exception in either of the two below, because a wake
+        # request outliving the process is invisible until the user notices
+        # their machine has stopped sleeping.
         try:
             power_guard.release()
         except Exception:
             log.exception("power guard release failed")
+
+        # Neither half may be skipped because the other threw: a failed
+        # controller flush must not leave libVLC's threads running.
         try:
             controller.shutdown()
         except Exception:
