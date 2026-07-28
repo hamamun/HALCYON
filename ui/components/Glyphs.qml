@@ -48,6 +48,8 @@ QtObject {
     readonly property string chevronLeft:  "\uE76B"
     readonly property string chevronRight: "\uE76C"
     readonly property string search:     "\uE721"
+    readonly property string reveal:     "\uE7B3"   // show a masked field
+    readonly property string conceal:    "\uED1A"
 
     // panels
     readonly property string info:       "\uE946"
@@ -62,4 +64,7 @@ QtObject {
     readonly property string globe:      "\uE774"
     readonly property string refresh:    "\uE72C"
     readonly property string home:       "\uE80F"
+    readonly property string download:   "\uE896"
+    readonly property string minus:      "\uE738"
+    readonly property string plus:       "\uE710"
 }

@@ -155,6 +155,10 @@ class TestSubtitleRouting:
         controller._subtitle_delay = 0
         controller._audio_tracks = []
         controller._subtitle_tracks = []
+        # Which track is *selected* is part of the controller's track state, so
+        # a hand-built controller has to seed it like the real __init__ does.
+        controller._current_audio = -1
+        controller._current_subtitle = -1
         return controller
 
     def test_lone_subtitle_is_attached_not_queued(self, qt_app, subtitle_file):

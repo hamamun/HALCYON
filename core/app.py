@@ -104,6 +104,8 @@ class AppController(QObject):
         self._subtitle_delay = 0
         self._audio_tracks: list[dict] = []
         self._subtitle_tracks: list[dict] = []
+        self._current_audio = -1
+        self._current_subtitle = -1
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -416,17 +418,38 @@ class AppController(QObject):
 
     # ---------------------------------------------------------------- tracks ---
     def _refresh_tracks(self) -> None:
+        """Republish the track lists *and* which entry of each is live.
+
+        The lists carry an ``off`` flag rather than the UI matching on the
+        label. libVLC calls the no-track row "Disable", localises it, and gives
+        it id ``-1``; a QML string comparison against "Disable" is therefore
+        both fragile and untranslatable, and it was why the off row could not be
+        told apart from a real track.
+        """
         try:
-            self._audio_tracks = [
-                {"id": tid, "label": label} for tid, label in self._engine.audio_tracks()
-            ]
-            self._subtitle_tracks = [
-                {"id": tid, "label": label} for tid, label in self._engine.subtitle_tracks()
-            ]
+            self._audio_tracks = _track_dicts(self._engine.audio_tracks())
+            self._subtitle_tracks = _track_dicts(
+                self._engine.subtitle_tracks(), off_label="Off"
+            )
         except Exception:
             self._audio_tracks = []
             self._subtitle_tracks = []
+        self._refresh_current_tracks(emit=False)
         self.tracksChanged.emit()
+
+    def _refresh_current_tracks(self, emit: bool = True) -> None:
+        try:
+            audio = int(self._engine.current_audio_track())
+        except Exception:
+            audio = -1
+        try:
+            subtitle = int(self._engine.current_subtitle_track())
+        except Exception:
+            subtitle = -1
+        changed = (audio, subtitle) != (self._current_audio, self._current_subtitle)
+        self._current_audio, self._current_subtitle = audio, subtitle
+        if changed and emit:
+            self.tracksChanged.emit()
 
     @Property("QVariantList", notify=tracksChanged)
     def audioTracks(self) -> list:  # noqa: N802 - QML-facing
@@ -436,27 +459,53 @@ class AppController(QObject):
     def subtitleTracks(self) -> list:  # noqa: N802 - QML-facing
         return self._subtitle_tracks
 
+    @Property(int, notify=tracksChanged)
+    def currentAudioId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_audio
+
+    @Property(int, notify=tracksChanged)
+    def currentSubtitleId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_subtitle
+
     @Slot(int)
     def setAudioTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_audio_track(track_id)
+        self._refresh_current_tracks()
 
     @Slot(int)
     def setSubtitleTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_subtitle_track(track_id)
+        self._refresh_current_tracks()
 
     @Slot()
     def cycleAudioTrack(self) -> None:  # noqa: N802 - QML-facing
-        self._cycle(self._audio_tracks, self._engine.set_audio_track)
+        self._cycle(self._audio_tracks, self._current_audio, self._engine.set_audio_track)
+        self._refresh_current_tracks()
 
     @Slot()
     def cycleSubtitleTrack(self) -> None:  # noqa: N802 - QML-facing
-        self._cycle(self._subtitle_tracks, self._engine.set_subtitle_track)
+        self._cycle(
+            self._subtitle_tracks, self._current_subtitle, self._engine.set_subtitle_track
+        )
+        self._refresh_current_tracks()
 
     @staticmethod
-    def _cycle(tracks: list[dict], setter) -> None:
+    def _cycle(tracks: list[dict], current_id: int, setter) -> None:
+        """Advance to the next track, wrapping.
+
+        It used to always select ``tracks[0]`` — so `A` and `S` selected the
+        same track forever and "cycle" was a misnomer. Cycling from wherever the
+        player actually is makes the hotkey and the popover agree, which is the
+        point of them sharing one implementation.
+        """
         if not tracks:
             return
-        setter(tracks[0]["id"])
+        ids = [int(t["id"]) for t in tracks]
+        try:
+            index = ids.index(int(current_id))
+        except ValueError:
+            index = -1
+        setter(ids[(index + 1) % len(ids)])
 
     @Slot(str)
     def loadSubtitle(self, url: str) -> None:  # noqa: N802 - QML-facing
@@ -490,6 +539,29 @@ class AppController(QObject):
                 step()
             except Exception:
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
+
+
+#: libVLC's id for "no track". Both audio and SPU use it.
+TRACK_OFF_ID = -1
+
+
+def _track_dicts(pairs, off_label: str = "Off") -> list[dict]:
+    """``[(id, label)]`` -> ``[{id, label, off}]``.
+
+    The off row is identified by its **id**, never its text, and is always
+    hoisted to the front so the UI can pin it above a scrolling list without
+    searching for it.
+    """
+    tracks = [
+        {
+            "id": int(tid),
+            "label": (off_label if int(tid) == TRACK_OFF_ID else str(label)),
+            "off": int(tid) == TRACK_OFF_ID,
+        }
+        for tid, label in pairs
+    ]
+    tracks.sort(key=lambda t: 0 if t["off"] else 1)
+    return tracks
 
 
 #: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily

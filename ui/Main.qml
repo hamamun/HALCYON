@@ -115,6 +115,7 @@ Shell {
         function setSubtitleTrack(id) { App.setSubtitleTrack(id) }
         function cycleSubtitleTrack() { App.cycleSubtitleTrack() }
         function loadSubtitleFile()   { subtitleDialog.open() }
+        function searchSubtitlesOnline() { subtitleSearchDialog.openFor() }
         function adjustSubtitleDelay(ms) { App.adjustSubtitleDelay(ms) }
 
         // ---------------------------------------------------- playlist --
@@ -230,6 +231,10 @@ Shell {
             item.audioTracks = Qt.binding(function() { return App.audioTracks });
         if ("subtitleTracks" in item)
             item.subtitleTracks = Qt.binding(function() { return App.subtitleTracks });
+        if ("currentAudioId" in item)
+            item.currentAudioId = Qt.binding(function() { return App.currentAudioId });
+        if ("currentSubtitleId" in item)
+            item.currentSubtitleId = Qt.binding(function() { return App.currentSubtitleId });
         if ("subtitleDelayMs" in item)
             item.subtitleDelayMs = Qt.binding(function() { return App.subtitleDelayMs });
     }
@@ -282,7 +287,7 @@ Shell {
                     id: osdLayer
                     anchors.fill: parent
                     osdEnabled: window.osdEnabled()
-                    suppressed: settingsDialog.visible
+                    suppressed: settingsDialog.visible || subtitleSearchDialog.visible
                 }
 
                 // The mode's own bar, floating over the video (§B.4).
@@ -582,5 +587,9 @@ Shell {
 
     SettingsDialog {
         id: settingsDialog
+    }
+
+    SubtitleSearchDialog {
+        id: subtitleSearchDialog
     }
 }

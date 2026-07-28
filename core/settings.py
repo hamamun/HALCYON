@@ -61,6 +61,27 @@ DEFAULTS: dict[str, Any] = {
     "subs.delayMs": 0,
     "subs.scale": 1.0,
     "subs.encoding": "",
+    # subtitles — online (opensubtitles.com REST API v1)
+    #: The user's own consumer key. Empty is a valid, expected state: the
+    #: download UI renders a "not configured yet" panel rather than failing at
+    #: request time. A key shipped in the binary would be shared by every
+    #: install and throttled to nothing, so there is no default to fall back to.
+    "subs.online.apiKey": "",
+    #: Optional account. Anonymous downloads work with a smaller daily quota;
+    #: signing in raises it. Stored in the same plain settings.json as
+    #: everything else, which is why the UI says so next to the field.
+    "subs.online.username": "",
+    "subs.online.password": "",
+    #: Preferred subtitle language, as an opensubtitles.com language code.
+    "subs.online.language": "en",
+    #: "best" — only what the file hash (or a strict title/episode match)
+    #: vouches for. "all" — everything the query found, partial matches
+    #: included, best-first. Default "best": for a file already on disk the
+    #: hash match is almost always the right subtitle.
+    "subs.online.matchMode": "best",
+    #: Save next to the media (so it auto-loads next time) when the folder is
+    #: writable; otherwise the profile cache is used automatically.
+    "subs.online.saveAlongsideMedia": True,
 }
 
 
