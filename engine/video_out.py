@@ -203,6 +203,29 @@ class FrameRing:
             self._read_serial = 0
         log.info("frame ring allocated: %s x%d slots", fmt.describe(), SLOTS)
 
+    def mark_stopped(self) -> None:
+        """Retire the published frame without releasing the buffers.
+
+        Called when VLC tears the video pipeline down (end of a video track) or
+        when a new media is opened. The distinction from :meth:`free` matters:
+        a reader may be pinned on the render thread right now, so the memory
+        must stay mapped — but the *newest complete frame* must stop being
+        served, otherwise the next repaint happily re-uploads the last frame of
+        the file that just finished.
+
+        That is exactly what kept ``VideoSurface.hasVideo`` latched true after a
+        video ended: ``_on_video_stopped_gui`` cleared the flag and then called
+        ``update()``, whose ``updatePaintNode`` pinned the stale slot, drew it
+        and set the flag straight back to true. The audio-only Now Playing card
+        (album art + title/artist/album) therefore never appeared for the track
+        that followed a video — while a freshly started player, whose ring has
+        never held a frame, showed it correctly.
+        """
+        with self._lock:
+            self._ready = -1
+            self._serial = 0
+            self._read_serial = 0
+
     def free(self) -> None:
         with self._lock:
             self._buffers = []
@@ -210,6 +233,8 @@ class FrameRing:
             self._fmt = None
             self._ready = -1
             self._read = -1
+            self._serial = 0
+            self._read_serial = 0
 
     @property
     def format(self) -> FrameFormat | None:
@@ -516,6 +541,19 @@ class VideoOutput:
         """VLC is done with this video format — the track ended or had no
         video. Runs on a VLC thread, so the handler must only marshal."""
         log.debug("video format cleanup")
+        self.notify_video_stopped()
+
+    def notify_video_stopped(self) -> None:
+        """Retire the last frame and tell the surface there is no video.
+
+        Also called directly by the engine when new media is opened, because
+        libVLC only invokes the cleanup callback when it actually tears a video
+        output down. Going from a video file to an audio file within the same
+        player is not guaranteed to produce one before the audio track starts,
+        which left the stale final frame of the previous video on the stage and
+        suppressed the Now Playing card.
+        """
+        self.ring.mark_stopped()
         cb = self.video_stopped
         if cb is not None:
             try:

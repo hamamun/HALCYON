@@ -396,6 +396,20 @@ class VlcEngine(QObject):
         self._scrubbing = False
         self._reset_timeline()
 
+        # Retire whatever the previous media left on the video surface *before*
+        # the new one starts. libVLC only fires its video cleanup callback when
+        # it genuinely tears a vout down, and going from a video file straight
+        # to an audio file inside the same player does not reliably produce one
+        # before the audio starts. Without this the stage kept showing (and
+        # kept `hasVideo` true for) the final frame of the finished video, so
+        # the audio-only Now Playing card — album art, title, artist, album —
+        # never appeared. A fresh player has no previous frame, which is why
+        # the same audio file looked fine when played first.
+        try:
+            self.video_output.notify_video_stopped()
+        except Exception:
+            log.debug("could not reset the video surface for new media", exc_info=True)
+
         if self._media is not None:
             try:
                 self._media.release()
@@ -494,6 +508,10 @@ class VlcEngine(QObject):
             self._media = None
         self._scrubbing = False
         self._current_mrl = ""
+        try:
+            self.video_output.notify_video_stopped()
+        except Exception:
+            log.debug("could not reset the video surface on stop", exc_info=True)
         self._reset_timeline()
         self._publish_state_now()
 

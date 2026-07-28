@@ -125,10 +125,14 @@ class PlaneSurface(QQuickItem):
         Runs on the **render thread**, while the owning :class:`VideoSurface`
         holds the ring pin.
 
-        The plane item itself is invisible (only the QML ``ShaderEffect``
-        samples it), so its own ``updatePaintNode`` is never invoked by Qt.
-        Committing here, from the surface's ``updatePaintNode``, is therefore
-        the *only* path by which a plane ever receives a texture.
+        Committing here, from the surface's ``updatePaintNode``, is what gets a
+        texture onto a plane *in time for the frame being drawn*: the plane is
+        invisible, so Qt schedules its own ``updatePaintNode`` independently and
+        a frame committed only there would land a cycle late.
+
+        (Qt does still call an invisible item's ``updatePaintNode`` — verified,
+        not assumed. That is what lets :meth:`set_image` with ``None`` clear the
+        texture on teardown without anyone calling ``commit_texture`` again.)
 
         **Why the image must already be a deep copy.** ``createTextureFromImage``
         does not upload anything; it wraps the QImage in a ``QSGPlainTexture``
@@ -255,6 +259,9 @@ class VideoSurface(QQuickItem):
         self._has_video = False
         self._content_rect = QRectF()
         self._last_serial = -1
+        #: Set when the video pipeline goes away; consumed by the next
+        #: updatePaintNode, which then discards the node holding the last frame.
+        self._clear_pending = False
 
         # RV32 path: this item draws the picture itself.
         self._texture: QSGTexture | None = None
@@ -353,6 +360,13 @@ class VideoSurface(QQuickItem):
 
         Without this ``hasVideo`` latched true for the rest of the session, so
         after one video the audio-only Now Playing card never appeared again.
+
+        Clearing the Python-side state is not enough on its own, though: the
+        scene-graph node built for the last frame is still parented into the
+        tree and still references its texture, so the final frame of the video
+        stayed painted over the Now Playing card. ``_clear_pending`` makes the
+        next ``updatePaintNode`` return ``None``, which is how a QQuickItem
+        tells Qt to delete its node.
         """
         self._fmt = None
         self._last_serial = -1
@@ -361,8 +375,13 @@ class VideoSurface(QQuickItem):
         self._image = None
         self._image_buf = None
         self._plane_bufs = ()
+        self._clear_pending = True
+        for plane in (self._plane_y, self._plane_u, self._plane_v):
+            if plane is not None:
+                plane.set_image(None)
         self._set_has_video(False)
         self.frameFormatChanged.emit()
+        self.contentRectChanged.emit()
         self.update()
 
     # ------------------------------------------------------------ layout ---
@@ -416,6 +435,16 @@ class VideoSurface(QQuickItem):
     def updatePaintNode(self, node, _data):  # noqa: N802 - Qt override
         vout = self._vout
         window = self.window()
+
+        # Video has gone away: drop the node so the last decoded frame stops
+        # being painted. Returning None from updatePaintNode is the documented
+        # way to delete an item's node; simply not updating it leaves the old
+        # picture on screen for the rest of the session, which is what hid the
+        # Now Playing card when an audio track followed a video.
+        if self._clear_pending:
+            self._clear_pending = False
+            return None
+
         if vout is None or window is None:
             return node
 

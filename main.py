@@ -99,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.library import Library
     from core.lyrics import Lyrics
     from core.metadata import Metadata
+    from core.power import PowerGuard
     from core.settings import Settings
     from engine.equalizer import Equalizer
     from engine.vlc_engine import VlcEngine
@@ -126,13 +127,27 @@ def main(argv: list[str] | None = None) -> int:
     metadata = Metadata(player, parent=app)
     lyrics = Lyrics(parent=app)
     equalizer = Equalizer(player, parent=app)
+    # Stops Windows blanking the monitor mid-film. Parented to the app and kept
+    # in _KEEP_ALIVE like every other service: if it is collected its release()
+    # never runs and the wake request outlives the playback that justified it.
+    power_guard = PowerGuard(player, parent=app)
 
     controller = AppController(
         player, settings, library, metadata, lyrics, equalizer, parent=app
     )
     mode_list = ModeList(app)
     _KEEP_ALIVE.extend(
-        [settings, player, library, metadata, lyrics, equalizer, controller, mode_list]
+        [
+            settings,
+            player,
+            library,
+            metadata,
+            lyrics,
+            equalizer,
+            power_guard,
+            controller,
+            mode_list,
+        ]
     )
 
     # --- QML types ---------------------------------------------------------
@@ -178,6 +193,15 @@ def main(argv: list[str] | None = None) -> int:
             qml_engine.rootContext().setContextProperty("Player", None)
         except Exception:
             log.debug("could not clear Player QML context property", exc_info=True)
+
+        # First: let the display sleep again. This is the step that must not be
+        # skipped by an exception in either of the two below, because a wake
+        # request outliving the process is invisible until the user notices
+        # their machine has stopped sleeping.
+        try:
+            power_guard.release()
+        except Exception:
+            log.exception("power guard release failed")
 
         # Neither half may be skipped because the other threw: a failed
         # controller flush must not leave libVLC's threads running.
