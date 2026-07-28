@@ -116,6 +116,12 @@ Shell {
         function cycleSubtitleTrack() { App.cycleSubtitleTrack() }
         function loadSubtitleFile()   { subtitleDialog.open() }
         function searchSubtitlesOnline() { subtitleSearchDialog.openFor() }
+
+        // ------------------------------------------------------ resume --
+        function startOver() {
+            App.startOver();
+            osd("Started over", Glyphs.previous);
+        }
         function adjustSubtitleDelay(ms) { App.adjustSubtitleDelay(ms) }
 
         // ---------------------------------------------------- playlist --
@@ -288,6 +294,16 @@ Shell {
                     anchors.fill: parent
                     osdEnabled: window.osdEnabled()
                     suppressed: settingsDialog.visible || subtitleSearchDialog.visible
+                }
+
+                // Sits below the OSD's status pill (same left margin, one pill
+                // height plus a gap down) so a resume notice and a volume
+                // change can be on screen together without overlapping.
+                ResumeToast {
+                    id: resumeToast
+                    x: Theme.spaceXl
+                    y: Theme.spaceXl + 40 + Theme.spaceSm
+                    onStartOverRequested: Actions.startOver()
                 }
 
                 // The mode's own bar, floating over the video (§B.4).
@@ -591,5 +607,24 @@ Shell {
 
     SubtitleSearchDialog {
         id: subtitleSearchDialog
+    }
+
+    // ======================================================================
+    // RESUME — §P1.5
+    //
+    // `App.resumePrompted` was emitted from the day resume was written and
+    // **nothing ever connected to it**, so the feature was invisible: the
+    // position was restored silently, or (before the key fix in core/library)
+    // not at all. This is the missing listener.
+    // ======================================================================
+    Connections {
+        target: (typeof App !== "undefined" && App) ? App : null
+        enabled: target !== null
+
+        function onResumePrompted(path, positionMs) {
+            if (!window.osdEnabled())
+                return;
+            resumeToast.show("Resumed from " + formatTime(positionMs));
+        }
     }
 }

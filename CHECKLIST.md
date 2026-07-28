@@ -238,7 +238,7 @@
 - [ ] Subtitle switch — `Subtitle: English` / `Subtitles Off`
 - [ ] Fullscreen — enter / exit glyph
 - [ ] File open — filename + resolution + duration, 3 s
-- [ ] Resume — `Resuming from 24:31`
+- [x] Resume — `Resumed from 24:31`
 
 ### ◻ Verify
 - ◻ All 10 triggers fire with correct content and position
@@ -284,7 +284,7 @@
 
 ### Build
 - [x] Enumerate audio tracks; live switching · §P1.5
-- [ ] Remember audio track per file
+- [x] Remember audio **and subtitle** track per file — matched by label, not by libVLC's per-run ids
 - [x] Enumerate subtitle tracks; live switching, including "off"
 - [x] **Publish the *selected* track id** (`audio_get_track` / `video_get_spu`) — without it the ⚙ highlight sits on "Disable" while a track plays
 - [x] Identify the off row by libVLC's id (`-1`), never by the localised label
@@ -343,8 +343,8 @@
 ### Build
 - [ ] `core/library.py` — `recent.json`, capped at 200 entries
 - [ ] Position saved every 5 s and on close
-- [ ] Resume prompt when >30 s in **and** >5% remaining · §P1.5
-- [ ] Resume announced by OSD
+- [x] Resume prompt when >30 s in **and** >5% remaining · §P1.5 — **video only**
+- [x] Resume announced by OSD — `ResumeToast`, with *Start over*
 - [ ] `core/metadata.py` — title, artist, album, album art via libVLC (no ffprobe)
 - [ ] Info tab: filename, resolution, codecs, bitrate, duration, container
 - [ ] `core/lyrics.py` — sidecar `.lrc` parsing, timed

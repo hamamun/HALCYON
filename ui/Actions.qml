@@ -65,6 +65,11 @@ QtObject {
     // Online search. One implementation (the dialog in Main.qml), reachable
     // from the gear popover today and from anywhere else that needs it later.
     function searchSubtitlesOnline() { return _call("searchSubtitlesOnline") }
+
+    // ------------------------------------------------------------- resume --
+    // The one home: the resume toast. Playback already resumed by the time it
+    // shows, so this is the undo.
+    function startOver()            { return _call("startOver") }
     function adjustSubtitleDelay(ms) { return _call("adjustSubtitleDelay", ms) }
 
     // ------------------------------------------------------------ playlist --

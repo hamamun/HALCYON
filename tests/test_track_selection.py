@@ -68,22 +68,10 @@ class _FakeEngine:
         self.selected_sub = int(track_id)
 
 
-def _controller(engine):
-    controller = AppController.__new__(AppController)
-    AppController.__bases__[0].__init__(controller)  # QObject.__init__
-    controller._engine = engine
-    controller._settings = None
-    controller._library = None
-    controller._metadata = None
-    controller._lyrics = None
-    controller._equalizer = None
-    controller._active_mode = "local"
-    controller._contexts = {}
-    controller._subtitle_delay = 0
-    controller._audio_tracks = []
-    controller._subtitle_tracks = []
-    controller._current_audio = -1
-    controller._current_subtitle = -1
+def _controller(engine, library=None):
+    from tests.support import build_controller, null_library
+
+    controller = build_controller(engine, library=library or null_library())
     controller._refresh_tracks()
     return controller
 

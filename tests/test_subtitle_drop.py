@@ -134,32 +134,9 @@ class TestSubtitleRouting:
     """``core.app`` must send a lone subtitle to add_slave, not to the queue."""
 
     def _controller(self, engine, playlist):
-        """A real AppController wired to fakes.
+        from tests.support import build_controller, null_library
 
-        ``QObject.__init__`` must run — skipping it via ``__new__`` leaves the
-        signals unusable ("Signal source has been deleted"). So the base class
-        is initialised and only the collaborators are stubbed.
-        """
-        from core.app import AppController
-
-        controller = AppController.__new__(AppController)
-        AppController.__bases__[0].__init__(controller)  # QObject.__init__
-        controller._engine = engine
-        controller._settings = None
-        controller._library = None
-        controller._metadata = None
-        controller._lyrics = None
-        controller._equalizer = None
-        controller._active_mode = "local"
-        controller._contexts = {"local": playlist}
-        controller._subtitle_delay = 0
-        controller._audio_tracks = []
-        controller._subtitle_tracks = []
-        # Which track is *selected* is part of the controller's track state, so
-        # a hand-built controller has to seed it like the real __init__ does.
-        controller._current_audio = -1
-        controller._current_subtitle = -1
-        return controller
+        return build_controller(engine, playlist=playlist, library=null_library())
 
     def test_lone_subtitle_is_attached_not_queued(self, qt_app, subtitle_file):
         engine = _FakeEngine()
