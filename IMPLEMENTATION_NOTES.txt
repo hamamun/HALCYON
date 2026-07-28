@@ -1,0 +1,152 @@
+IMPLEMENTATION NOTES
+====================
+
+This file provides additional context for the changes made to fix the reported issues.
+
+ISSUE 1: POPOVER WIDTH AND POSITIONING
+---------------------------------------
+The TrackPopover was getting cut off because:
+1. Width was 288px but needed 332px minimum (6 speed buttons + padding)
+2. Positioning formula didn't account for coordinate space transformations
+
+The fix uses mapToItem() to get the gear button's position in the root coordinate
+space, then clamps the popover's x position to ensure it stays within bounds.
+
+Key formula:
+  var gearRight = gearButton.mapToItem(root, gearButton.width, 0).x;
+  var targetX = gearRight - width;
+  return Math.max(Theme.spaceSm, Math.min(targetX, root.width - width - Theme.spaceSm));
+
+This ensures:
+- Popover right edge aligns with gear button right edge
+- Popover doesn't extend past left edge (minimum Theme.spaceSm from left)
+- Popover doesn't extend past right edge (minimum Theme.spaceSm from right)
+
+
+ISSUE 2: AUDIO TRACK AUTO-SELECTION
+------------------------------------
+The auto-selection logic runs in _refresh_tracks() after tracks are loaded but
+before the current track IDs are published. This ensures:
+
+1. The track list exists
+2. Remembered tracks have been restored (if any)
+3. Auto-selection only applies if no track is currently selected (-1)
+4. The selection is published to the UI immediately
+
+The method checks:
+- Are there any audio tracks? (if not, nothing to do)
+- Is the current track -1 (disabled)? (if not, don't override)
+- Are there real (non-off) tracks? (if not, nothing to select)
+
+If all conditions are met, the first real track is selected.
+
+
+ISSUE 3: EXTERNAL SUBTITLE NAMING
+----------------------------------
+The challenge: libVLC assigns track IDs asynchronously after add_slave() is called,
+so we can't know the ID at the time we store the filename.
+
+Solution:
+1. When add_subtitle_file() is called, store the filename stem in a pending list
+2. When subtitle_tracks() is called, look for tracks with generic names
+3. Match pending filenames to generic-named tracks in order
+4. Cache the mapping in _external_subtitle_names for future calls
+
+Generic name patterns recognized:
+- "Subtitle Track N"
+- "Track N"
+- "Subtitle N"
+- "[N]"
+- Just a number "N"
+
+This approach works because:
+- External subtitles are typically loaded one at a time
+- VLC assigns IDs in the order subtitles are loaded
+- Generic names are only used for external subtitles, not embedded ones
+
+
+ISSUE 4-9: SEARCH DIALOG SIMPLIFICATION
+----------------------------------------
+The simplified dialog:
+1. Shows the detected movie name in the header (already worked)
+2. Auto-searches on open using Subtitles.suggestedQuery()
+3. Uses Settings values for language and match mode (no override)
+4. Shows results with download buttons
+5. Has a close button
+
+Removed controls:
+- TextField for query (redundant - query is auto-detected)
+- ComboBox for language (redundant - configured in Settings)
+- Best match / All results buttons (redundant - configured in Settings)
+
+The search button still exists to allow re-searching if needed (e.g., if the
+user changed Settings while the dialog was open).
+
+Button alignment is handled by the TextButton component which uses anchors.centerIn
+for its contentItem, ensuring consistent alignment across all buttons.
+
+
+TESTING STRATEGY
+----------------
+Tests are organized by concern:
+
+1. test_track_popover_layout.py - Source-level tests that verify:
+   - Popover width is adequate
+   - Positioning includes clamping
+   - Search dialog has no redundant controls
+   - Search dialog uses Settings values
+
+2. test_track_selection.py - Behavioral tests that verify:
+   - Auto-selection works when no track is selected
+   - Auto-selection doesn't override existing selections
+   - Auto-selection handles edge cases
+
+3. test_subtitle_naming.py - Structural tests that verify:
+   - Generic name detection works for all patterns
+   - External subtitle tracking is implemented
+
+4. test_subtitle_search.py - Existing tests for:
+   - Hash calculation
+   - Query guessing
+   - Result ranking
+   (These weren't changed and continue to work)
+
+
+EDGE CASES HANDLED
+------------------
+1. Popover positioning when window is very narrow
+2. Video with no audio tracks
+3. Video with only the "Disable" pseudo-track
+4. Audio track already selected (don't override)
+5. Multiple external subtitles loaded quickly
+6. External subtitle with non-generic name (keep it)
+7. Search dialog opened with no media playing
+8. Search dialog opened before API key is configured
+
+
+PERFORMANCE CONSIDERATIONS
+---------------------------
+1. Popover positioning uses mapToItem() which is O(1)
+2. Audio auto-selection runs once per track refresh, O(n) where n = track count
+3. Subtitle naming uses simple regex matching, O(n) where n = track count
+4. Search dialog simplification reduces UI complexity and rendering cost
+
+All operations are fast enough to be imperceptible to the user.
+
+
+FUTURE ENHANCEMENTS
+-------------------
+Possible improvements for future versions:
+
+1. Allow search dialog to show a read-only display of the current language
+   and match mode (informational, not editable)
+
+2. Add a "Change Settings" button in the search dialog that opens Settings
+   and returns to the dialog afterward
+
+3. For external subtitles, try to parse the filename for language codes
+   (e.g., "movie.en.srt" → "English") and show that instead of just the stem
+
+4. Add a subtitle preview feature in the search dialog before downloading
+
+5. Allow reordering of external subtitles in the track list

@@ -8,15 +8,9 @@ import Halcyon.Ui
 // trigger, this holds the behaviour, and `Subtitles` (core/subtitles.py) holds
 // the network work. Nothing here talks to opensubtitles.com directly.
 //
-// Why a dialog and not more popover: a useful result row is release name +
-// language + downloads + an exact/partial badge, and you need a dozen of them
-// side by side to choose between "Andor.S02E01.1080p.WEB-DL-GRP" and
-// "Andor.S02E01.HDTV". That does not fit a flyout over the video.
-//
-// The language and match-mode controls here default to the Settings values and
-// override them **for this search only** — the saved preference is what you
-// want nine times in ten, and the tenth time you should not have to go change
-// a global setting and come back.
+// Layout: heading + movie name (auto-detected, used as the search query),
+// a full-width Search button, then results, then footer with quota and close.
+// Language and match mode come from Settings — no override controls here.
 Dialog {
     id: root
 
@@ -36,10 +30,10 @@ Dialog {
         // since this dialog was last constructed.
         language = Settings.get("subs.online.language", "en");
         matchMode = Settings.get("subs.online.matchMode", "best");
-        queryField.text = Subtitles.suggestedQuery();
         open();
-        if (Subtitles.configured && queryField.text !== "")
-            Subtitles.search(queryField.text, language, matchMode);
+        // Auto-search using the movie name detected from the filename
+        if (Subtitles.configured && Subtitles.suggestedQuery() !== "")
+            Subtitles.search("", language, matchMode);
     }
 
     background: Rectangle {
@@ -74,9 +68,6 @@ Dialog {
     contentItem: Item {
 
         // ------------------------------------------- not configured yet --
-        // A first-run state, not an error. It says what is missing, where the
-        // key comes from and where it goes — three facts that otherwise cost a
-        // web search each.
         Column {
             anchors.centerIn: parent
             width: parent.width - Theme.spaceXl * 2
@@ -120,122 +111,14 @@ Dialog {
             spacing: Theme.spaceMd
             visible: Subtitles.configured
 
-            // query row
-            Row {
+            // full-width search button
+            TextButton {
+                id: searchButton
                 width: parent.width
-                spacing: Theme.spaceSm
-
-                TextField {
-                    id: queryField
-                    width: parent.width - searchButton.width - Theme.spaceSm
-                    placeholderText: "Title, or leave as detected"
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeBody
-                    color: Theme.text
-                    placeholderTextColor: Theme.textFaint
-                    selectByMouse: true
-                    onAccepted: Subtitles.search(text, root.language, root.matchMode)
-
-                    background: Rectangle {
-                        radius: Theme.radiusSmall
-                        color: Theme.glassFill
-                        border.width: 1
-                        border.color: queryField.activeFocus ? Theme.accent : Theme.glassBorder
-                    }
-                }
-                TextButton {
-                    id: searchButton
-                    text: Subtitles.busy ? "Searching\u2026" : "Search"
-                    primary: true
-                    enabled: !Subtitles.busy
-                    onClicked: Subtitles.search(queryField.text, root.language, root.matchMode)
-                }
-            }
-
-            // language + match mode
-            Row {
-                width: parent.width
-                spacing: Theme.spaceSm
-
-                ComboBox {
-                    id: languageBox
-                    width: 220
-                    // The list comes from the service, so Settings and this
-                    // dialog cannot drift apart (§B.1).
-                    model: Subtitles.languages
-                    textRole: "name"
-                    valueRole: "code"
-                    currentIndex: indexOfValue(root.language)
-                    onActivated: root.language = currentValue
-
-                    background: Rectangle {
-                        radius: Theme.radiusSmall
-                        color: Theme.glassFill
-                        border.width: 1
-                        border.color: Theme.glassBorder
-                    }
-                    contentItem: Text {
-                        leftPadding: Theme.spaceMd
-                        text: languageBox.displayText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.text
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                // Two states, one control. "Best" is the default because for a
-                // file on disk the hash match is nearly always right; "All"
-                // exists for the cases where it is not — an odd release, a
-                // re-encode, a language with thin coverage.
-                Row {
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.spaceXs
-
-                    Repeater {
-                        model: [
-                            { id: "best", label: "Best match" },
-                            { id: "all",  label: "All results" }
-                        ]
-                        delegate: Rectangle {
-                            required property var modelData
-                            readonly property bool isCurrent: root.matchMode === modelData.id
-
-                            width: 96
-                            height: 30
-                            radius: Theme.radiusSmall
-                            color: isCurrent ? Theme.accentDim
-                                 : modeMouse.containsMouse ? Theme.glassFillHover
-                                 : Theme.glassFill
-                            border.width: 1
-                            border.color: isCurrent ? Theme.accent : Theme.glassBorder
-
-                            Behavior on color {
-                                ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
-                            }
-
-                            Text {
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                font.family: Theme.fontFamily
-                                font.pixelSize: Theme.fontSizeSmall
-                                color: parent.isCurrent ? Theme.accent : Theme.textMuted
-                            }
-
-                            MouseArea {
-                                id: modeMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.matchMode = modelData.id;
-                                    if (queryField.text !== "" || Subtitles.mediaName !== "")
-                                        Subtitles.search(queryField.text, root.language, root.matchMode);
-                                }
-                            }
-                        }
-                    }
-                }
+                text: Subtitles.busy ? "Searching\u2026" : "Search"
+                primary: true
+                enabled: !Subtitles.busy
+                onClicked: Subtitles.search("", root.language, root.matchMode)
             }
 
             // status line
@@ -268,8 +151,6 @@ Dialog {
                     required property var modelData
                     width: ListView.view.width - Theme.spaceSm
                     height: 46
-                    // Double-click is the shortcut; the explicit button below
-                    // is the discoverable path. Same action either way.
                     onDoubleClicked: Subtitles.download(modelData.fileId)
 
                     Row {
@@ -277,7 +158,7 @@ Dialog {
                         anchors.rightMargin: Theme.spaceSm
                         spacing: Theme.spaceSm
 
-                        // match badge — the whole point of "best vs all"
+                        // match badge
                         Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             width: 58
@@ -359,9 +240,6 @@ Dialog {
         }
     }
 
-    // A finished download is already attached to the player by the time this
-    // fires (main.py wires downloadFinished -> the same add_slave path a
-    // dropped .srt takes), so the dialog's job is done: get out of the way.
     Connections {
         target: (typeof Subtitles !== "undefined" && Subtitles) ? Subtitles : null
         enabled: target !== null

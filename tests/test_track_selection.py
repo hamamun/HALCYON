@@ -199,3 +199,42 @@ class TestCycle:
         controller.cycleAudioTrack()  # must not raise
 
         assert controller.currentAudioId == -1
+
+
+# --------------------------------------------------- auto-select default ---
+class TestAutoSelectDefaultAudio:
+    """When a video loads with multiple audio tracks and none is selected,
+    the first real audio track should be automatically selected."""
+
+    def test_first_audio_track_is_selected_when_none_is_active(self, qt_app):
+        """If libVLC reports -1 (disabled) but real tracks exist, select the first."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English"), (2, "Japanese")])
+        engine.selected_audio = -1  # VLC reports disabled
+        controller = _controller(engine)
+
+        assert controller.currentAudioId == 1, (
+            "when no audio track is selected, the first real track should be "
+            "auto-selected so the user hears audio immediately"
+        )
+        assert engine.selected_audio == 1
+
+    def test_no_auto_selection_when_a_track_is_already_active(self, qt_app):
+        """If a real track is already selected, don't override it."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English"), (2, "Japanese")])
+        engine.selected_audio = 2  # User already has Japanese selected
+        controller = _controller(engine)
+
+        assert controller.currentAudioId == 2, (
+            "auto-selection must not override an already-selected track"
+        )
+        assert engine.selected_audio == 2
+
+    def test_no_auto_selection_when_no_real_tracks_exist(self, qt_app):
+        """If there are no real audio tracks, don't try to select anything."""
+        engine = _FakeEngine(audio=[(-1, "Disable")])
+        engine.selected_audio = -1
+        controller = _controller(engine)
+
+        assert controller.currentAudioId == -1, (
+            "with no real tracks, the selection should remain disabled"
+        )

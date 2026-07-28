@@ -472,8 +472,37 @@ class AppController(QObject):
             self._audio_tracks = []
             self._subtitle_tracks = []
         self._restore_remembered_tracks()
+        self._auto_select_default_audio()
         self._refresh_current_tracks(emit=False)
         self.tracksChanged.emit()
+
+    def _auto_select_default_audio(self) -> None:
+        """Auto-select the first audio track if none is currently selected.
+
+        When a video with multiple audio tracks loads, libVLC sometimes defaults
+        to track -1 (disabled), leaving the user with no audio. This ensures
+        that if no audio track is selected and real tracks exist, the first one
+        is automatically selected.
+        """
+        if not self._audio_tracks:
+            return
+        
+        # Check if a real audio track is currently selected
+        try:
+            current = int(self._engine.current_audio_track())
+        except Exception:
+            current = -1
+        
+        # If disabled (-1) and we have real tracks, select the first one
+        if current == -1:
+            real_tracks = [t for t in self._audio_tracks if not t.get("off")]
+            if real_tracks:
+                first_track_id = int(real_tracks[0]["id"])
+                try:
+                    self._engine.set_audio_track(first_track_id)
+                    log.info("auto-selected first audio track: %s", real_tracks[0].get("label"))
+                except Exception:
+                    log.debug("could not auto-select audio track", exc_info=True)
 
     def _restore_remembered_tracks(self) -> None:
         """Re-select the track this file was last watched with.

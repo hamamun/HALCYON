@@ -194,6 +194,39 @@ def test_the_popover_offers_both_subtitle_sources():
     assert "Search online" in source, "the download path needs an entry point"
 
 
+# ----------------------------------------------------------- popover width ---
+def test_the_popover_is_wide_enough_for_speed_buttons():
+    """The speed row has 6 buttons at 48px + 5 gaps at 4px = 308px.
+
+    The popover must be wider than that plus padding (12px each side = 24px),
+    so at least 332px. Otherwise the Flow wraps the 6th button to a second line
+    or the content is clipped at the right edge.
+    """
+    source = _popover()
+
+    import re
+    match = re.search(r"implicitWidth:\s*(\d+)", source)
+    assert match, "popover must declare an implicitWidth"
+    width = int(match.group(1))
+    assert width >= 332, (
+        f"popover is {width}px wide; 6 speed buttons need 308px + 24px padding = 332px minimum"
+    )
+
+
+def test_the_popover_position_is_clamped_within_bounds():
+    """The popover must not extend past the right edge of the window.
+
+    The positioning formula in LocalTransport.qml must clamp the x coordinate
+    so the popover stays within the transport bar's bounds.
+    """
+    source = _read("modes", "local", "LocalTransport.qml")
+
+    assert "Math.max" in source or "Math.min" in source, (
+        "the popover x position must be clamped to prevent it from extending "
+        "past the right edge of the window"
+    )
+
+
 def test_the_search_button_triggers_the_shared_action():
     """§4.1 — the popover triggers, Main.qml implements."""
     source = _popover()
@@ -219,6 +252,91 @@ def test_searching_is_disabled_with_nothing_playing():
     assert "Player.currentMedia" in button, (
         "an online search is a search *for the current file*; greying the "
         "button out says so, an empty result list does not"
+    )
+
+
+# ------------------------------------------------ simplified search dialog ---
+def test_the_search_dialog_has_no_text_input():
+    """The movie name is auto-detected and used directly for search.
+
+    No text input field is needed — the detected name from the media file
+    is used automatically. The user just clicks the Search button.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "TextField {" not in source, (
+        "the search dialog should not have a text input field; the movie name "
+        "is auto-detected and used directly for search"
+    )
+
+
+def test_the_search_dialog_has_full_width_search_button():
+    """A full-width Search button triggers the search.
+
+    The button spans the full width of the dialog for easy clicking.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "width: parent.width" in source, (
+        "the search button should be full-width for easy interaction"
+    )
+    assert "text: Subtitles.busy" in source, (
+        "the search button should show 'Searching…' when busy"
+    )
+
+
+def test_the_search_dialog_has_no_language_override():
+    """Language is configured in Settings, not overridden per-search.
+
+    The dialog should use the settings value directly without a language
+    selector that duplicates the Settings control.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "ComboBox {" not in source, (
+        "the search dialog should not have a language selector; language is "
+        "configured in Settings and used automatically"
+    )
+
+
+def test_the_search_dialog_has_no_match_mode_override():
+    """Match mode (best/all) is configured in Settings, not overridden per-search.
+
+    The dialog should use the settings value directly without match mode
+    buttons that duplicate the Settings control.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "Best match" not in source, (
+        "the search dialog should not have match mode buttons; match mode is "
+        "configured in Settings and used automatically"
+    )
+    assert "All results" not in source
+
+
+def test_the_search_dialog_uses_settings_values():
+    """The dialog must read language and match mode from Settings."""
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert 'Settings.get("subs.online.language"' in source
+    assert 'Settings.get("subs.online.matchMode"' in source
+
+
+def test_the_search_dialog_auto_searches_on_open():
+    """The dialog should automatically search when opened.
+
+    The search bar is pre-filled with the detected movie name, and the dialog
+    automatically triggers a search using that query. The user can edit the
+    query and search again if needed.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "function openFor()" in source
+    assert "Subtitles.search" in source
+    # The auto-search should happen in openFor, not require user interaction
+    openFor_section = source.split("function openFor()")[1].split("}")[0]
+    assert "Subtitles.search" in openFor_section, (
+        "openFor() must trigger a search automatically"
     )
 
 
@@ -257,12 +375,14 @@ def test_settings_does_not_search():
 
 
 def test_the_language_list_comes_from_the_service():
-    """One list, so Settings and the search dialog cannot drift apart."""
+    """One list, so Settings is the single source of truth for language.
+
+    The search dialog uses the settings values directly (no override controls),
+    so only Settings needs the language list.
+    """
     settings = _read("ui", "panels", "SettingsDialog.qml")
-    dialog = _read("ui", "panels", "SubtitleSearchDialog.qml")
 
     assert "Subtitles.languages" in settings
-    assert "Subtitles.languages" in dialog
 
 
 def test_settings_scrolls_now_that_it_is_taller():
