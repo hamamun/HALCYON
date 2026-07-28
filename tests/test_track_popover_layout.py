@@ -466,3 +466,134 @@ def test_every_glyph_is_a_private_use_codepoint():
     assert codepoints
     for cp in codepoints:
         assert 0xE000 <= int(cp, 16) <= 0xF8FF, f"U+{cp} is outside the icon font's PUA"
+
+
+# ==================================================================== #
+# The second pass: five reports that survived the first round of fixes.
+# ==================================================================== #
+
+# ------------------------------------- a button inside a row must be clickable ---
+def test_a_list_row_declares_its_hit_area_before_its_content():
+    """§B.1 — one row, and controls inside it must work on the first click.
+
+    Siblings stack in declaration order, so a MouseArea declared *after* the
+    content Item sits on top of everything the row holds. That is what ate the
+    first press on the search dialog's per-result "Download" button: the row
+    took the click, the button never saw it, and only the row's own
+    `doubleClicked` — wired to the same download — appeared to work. Hence
+    "download button not downloading by single clicking".
+    """
+    source = _read("ui", "components", "ListRow.qml")
+    code = _code(source)
+
+    assert "MouseArea {" in code
+    assert code.index("MouseArea {") < code.index("id: contentArea"), (
+        "the row's hit area must be declared before the content it sits under, "
+        "or it steals clicks meant for buttons inside the row"
+    )
+
+
+def test_the_download_button_is_a_single_click():
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+    button = source.split('text: "Download"', 1)[1]
+
+    assert "onClicked:" in button, "one click, one download"
+
+
+# ------------------------------------------------------- centred button text ---
+def test_text_button_centres_its_label():
+    """"search text inside search button is left align", and the same for Close.
+
+    A Control positions and sizes its own contentItem, so `anchors.centerIn`
+    on the contentItem itself is silently ignored — the Row kept its implicit
+    width and sat at x = 0. Invisible while the button hugged its label, and
+    plainly wrong the moment anything set an explicit width, which the search
+    dialog's full-width Search button and the footer's Close button both do.
+    """
+    source = _read("ui", "components", "TextButton.qml")
+    content = source.split("contentItem:", 1)[1]
+
+    assert "contentItem: Item {" in source, (
+        "the contentItem must be something the control can stretch, with the "
+        "label centred inside it"
+    )
+    assert "anchors.centerIn: parent" in content, "the label Row is centred"
+
+
+def test_text_button_still_hugs_its_label_when_unsized():
+    """The fix must not turn every button into a full-width one."""
+    source = _read("ui", "components", "TextButton.qml")
+
+    assert "implicitWidth: implicitContentWidth + leftPadding + rightPadding" in source
+    assert "implicitWidth: content.implicitWidth" in source, (
+        "the contentItem reports the label's size, so an unsized button is "
+        "exactly as wide as it was before"
+    )
+
+
+def test_the_padding_is_the_shared_spacing_token():
+    source = _read("ui", "components", "TextButton.qml")
+
+    assert "leftPadding: Theme.spaceLg" in source
+    assert "rightPadding: Theme.spaceLg" in source
+
+
+# ----------------------------------------------- the match-mode picker works ---
+def test_the_match_mode_picker_is_a_shared_control():
+    """§B.1 — it was inline, and inline is where the bug lived."""
+    source = _read("ui", "panels", "SettingsDialog.qml")
+
+    assert "SettingChoice {" in source
+    assert 'settingKey: "subs.online.matchMode"' in source
+
+
+def test_the_match_mode_picker_binds_a_property_not_a_slot_call():
+    """The whole of report 5.
+
+    Every segment decided whether it was current with
+    `Settings.get("subs.online.matchMode", "best") === modelData.id`.
+    `Settings.get` is a Slot, not a Q_PROPERTY, and QML records dependencies on
+    properties — so that binding ran once at construction and never again.
+    Clicking a segment wrote the setting and changed nothing on screen, in
+    either direction: "not allow to enable all results ... then not allow best
+    result".
+    """
+    source = _code(_read("ui", "panels", "SettingChoice.qml"))
+
+    assert "readonly property bool isCurrent: root.value ===" in source, (
+        "the highlight must read a real property so it re-evaluates on change"
+    )
+    assert "Settings.get" not in source.split("function _read()", 1)[1].split("}", 1)[1], (
+        "Settings.get belongs in _read() only; a call in a binding is inert"
+    )
+
+
+def test_the_choice_control_tracks_external_changes():
+    source = _read("ui", "panels", "SettingChoice.qml")
+
+    assert "Connections {" in source
+    assert "function onChanged(key, newValue)" in source, (
+        "the control must also follow a write made anywhere else"
+    )
+
+
+def test_the_choice_control_writes_through_settings_once():
+    source = _code(_read("ui", "panels", "SettingChoice.qml"))
+
+    assert source.count("Settings.set(") == 1, (
+        "one writer, or a segment can drift from what is persisted"
+    )
+
+
+def test_the_description_follows_the_selected_mode():
+    """The paragraph under the picker had the same dead binding."""
+    source = _read("ui", "panels", "SettingsDialog.qml")
+    choice = source.split("SettingChoice {", 1)[1]
+
+    assert 'description: value === "best"' in choice, (
+        "the explanation must track the live value, not a one-time read"
+    )
+
+
+def test_the_choice_control_is_registered_as_a_qml_type():
+    assert "SettingChoice" in _read("Halcyon", "Panels", "qmldir")

@@ -61,29 +61,236 @@ class TestGenericNameDetection:
 
 
 class TestExternalSubtitleTracking:
-    """The engine must store filenames when subtitles are loaded."""
+    """The engine must store a real name when a subtitle is attached.
 
-    def test_pending_list_is_initialized(self):
-        """The engine starts with an empty pending list."""
-        # This is a structural test — we can't easily instantiate VlcEngine
-        # without libVLC, so we just verify the attribute exists in the source.
-        from pathlib import Path
-        source = (Path(__file__).parent.parent / "engine" / "vlc_engine.py").read_text()
-        assert "_pending_external_subtitles" in source
-        assert "_external_subtitle_names" in source
+    These used to grep the source for one exact line, which passed happily
+    while the *behaviour* was broken and then failed the moment the line was
+    improved. ``subtitle_tracks`` is pure enough to call directly on an
+    instance built with ``__new__`` — no libVLC, no window — so it is called.
+    """
 
-    def test_add_subtitle_file_stores_the_stem(self):
-        """When a subtitle is added, its stem (filename without extension) is queued."""
-        # Again, structural test since we can't run VlcEngine without libVLC.
-        from pathlib import Path
-        source = (Path(__file__).parent.parent / "engine" / "vlc_engine.py").read_text()
-        assert "self._pending_external_subtitles.append(resolved.stem)" in source
+    def _engine(self, spu):
+        """A VlcEngine with only the track-naming state, and a fake player."""
+        from engine.vlc_engine import VlcEngine
 
-    def test_subtitle_tracks_replaces_generic_names(self):
-        """The subtitle_tracks method must use stored names for generic tracks."""
+        engine = VlcEngine.__new__(VlcEngine)
+        engine._external_subtitle_names = {}
+        engine._pending_external_subtitles = []
+        engine._known_spu_ids = set()
+
+        class _Player:
+            def __init__(self, tracks):
+                self.tracks = tracks
+
+            def video_get_spu_description(self):
+                return list(self.tracks)
+
+        engine._player = _Player(spu)
+        return engine
+
+    def test_state_is_initialised(self):
+        engine = self._engine([])
+
+        assert engine._pending_external_subtitles == []
+        assert engine._external_subtitle_names == {}
+
+    def test_a_new_track_takes_the_pending_name(self):
+        """The core of the bug: a fresh track must not stay "Track 3"."""
+        engine = self._engine([(-1, "Disable"), (1, "English")])
+        engine.subtitle_tracks()                       # establish what existed
+
+        engine._player.tracks.append((3, "Track 3"))
+        engine._pending_external_subtitles.append("Spanish")
+
+        assert engine.subtitle_tracks() == [
+            (-1, "Disable"),
+            (1, "English"),
+            (3, "Spanish"),
+        ]
+
+    def test_the_name_sticks_across_refreshes(self):
+        engine = self._engine([(-1, "Disable")])
+        engine.subtitle_tracks()
+        engine._player.tracks.append((2, "Track 2"))
+        engine._pending_external_subtitles.append("English SDH")
+        engine.subtitle_tracks()
+
+        assert engine.subtitle_tracks()[-1] == (2, "English SDH")
+
+    def test_an_embedded_track_keeps_its_own_name(self):
+        """A pending name must not be stapled to a track it did not create."""
+        engine = self._engine([(-1, "Disable"), (1, "Japanese"), (2, "Track 2")])
+
+        got = dict(engine.subtitle_tracks())
+
+        assert got[1] == "Japanese"
+        assert got[2] == "Track 2", "no slave was attached, so nothing to rename"
+
+    def test_a_name_waits_for_a_track_that_has_not_appeared_yet(self):
+        """ESAdded is asynchronous; the refresh can beat the track."""
+        engine = self._engine([(-1, "Disable"), (1, "English")])
+        engine.subtitle_tracks()
+        engine._pending_external_subtitles.append("French")
+
+        engine.subtitle_tracks()                       # track not published yet
+        assert engine._pending_external_subtitles == ["French"], "the name is kept"
+
+        engine._player.tracks.append((7, "Track 7"))
+        assert engine.subtitle_tracks()[-1] == (7, "French")
+
+    def test_a_slave_arriving_with_late_embedded_tracks_is_named(self):
+        """Auto-load can beat libVLC's own subtitle discovery.
+
+        Three tracks appear at once — two embedded, one the sidecar. libVLC
+        appends slaves last, so the *last* fresh id is the sidecar. Claiming
+        from the front named an embedded track instead and left the sidecar
+        showing its number, which is the reported bug in another guise.
+        """
+        engine = self._engine([(-1, "Disable")])
+        engine.subtitle_tracks()
+        engine._player.tracks.extend([(1, "English"), (2, "Japanese"), (3, "Track 3")])
+        engine._pending_external_subtitles.append("Spanish")
+
+        got = dict(engine.subtitle_tracks())
+
+        assert got[1] == "English"
+        assert got[2] == "Japanese"
+        assert got[3] == "Spanish"
+
+    def test_an_unnamed_track_never_renders_blank(self):
+        engine = self._engine([(-1, "Disable"), (4, "   ")])
+
+        assert dict(engine.subtitle_tracks())[4] == "Track 4"
+
+
+class TestSubtitleLabel:
+    """What an attached subtitle file is *called* in the track list.
+
+    The stem alone was the other half of the report: a downloaded subtitle is
+    saved as ``<media stem>.<lang>.srt``, so the row read
+    ``Andor.S02E01.1080p.WEB-DL.x265-GROUP.en`` — which elides, in a 340px
+    popover, to something that identifies nothing.
+    """
+
+    def _label(self, name, media_stem):
         from pathlib import Path
-        source = (Path(__file__).parent.parent / "engine" / "vlc_engine.py").read_text()
-        # Check that the method exists and has the replacement logic
-        assert "def subtitle_tracks(self)" in source
-        assert "_is_generic_subtitle_name" in source
-        assert "_external_subtitle_names" in source
+
+        from engine.vlc_engine import _subtitle_label
+
+        return _subtitle_label(Path(name), media_stem)
+
+    def test_a_language_suffix_becomes_the_language(self):
+        assert self._label("Andor.S02E01.en.srt", "Andor.S02E01") == "English"
+
+    def test_a_three_letter_code_works_too(self):
+        assert self._label("Movie.jpn.srt", "Movie") == "Japanese"
+
+    def test_a_regional_tag_is_read_whole(self):
+        """`pt-BR` must not split on the hyphen into "pt" and a stray "BR"."""
+        assert self._label("Movie.pt-BR.srt", "Movie") == "Portuguese (BR)"
+
+    def test_a_qualifier_is_kept_alongside_the_language(self):
+        assert self._label("Movie.en.sdh.srt", "Movie") == "English SDH"
+        assert self._label("Movie.eng.forced.srt", "Movie") == "English forced"
+
+    def test_hi_is_hindi_alone_and_hearing_impaired_after_a_language(self):
+        assert self._label("Movie.hi.srt", "Movie") == "Hindi"
+        assert self._label("Movie.en.hi.srt", "Movie") == "English SDH"
+
+    def test_a_users_own_name_is_shown_verbatim(self):
+        assert self._label("my-custom-subs.srt", "Movie") == "my-custom-subs"
+
+    def test_a_bare_sidecar_falls_back_to_the_filename(self):
+        """`Movie.srt` beside `Movie.mkv` adds nothing — but must not be blank."""
+        assert self._label("Movie.srt", "Movie") == "Movie"
+
+    def test_an_unrelated_file_keeps_its_whole_name(self):
+        assert self._label("Something.Else.srt", "Movie") == "Something.Else"
+
+
+class TestQualifiedSidecarAutoLoad:
+    """A downloaded subtitle must come back the next time the film is opened.
+
+    ``core/subtitles._save`` writes ``<media stem>.<lang><ext>`` so two
+    languages can sit side by side, and the Settings row promises the file
+    lands "beside the media file so they auto-load next time". Auto-load only
+    ever tried ``Path.with_suffix`` — ``Movie.srt`` — so ``Movie.en.srt`` was
+    on disk, correct, and never looked for. The subtitle worked for the session
+    it was downloaded in and then vanished.
+    """
+
+    def _controller(self, tmp_path, media_name="Movie.mkv"):
+        from unittest.mock import MagicMock
+
+        from tests.support import build_controller, null_library
+
+        engine = MagicMock()
+        engine.audio_tracks.return_value = []
+        engine.subtitle_tracks.return_value = []
+        controller = build_controller(engine, library=null_library())
+        media = tmp_path / media_name
+        media.write_bytes(b"video")
+        return controller, engine, media
+
+    def test_a_plain_sidecar_is_still_preferred(self, tmp_path):
+        controller, engine, media = self._controller(tmp_path)
+        (tmp_path / "Movie.srt").write_text("1\n")
+        (tmp_path / "Movie.en.srt").write_text("1\n")
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_called_once_with(str(tmp_path / "Movie.srt"))
+
+    def test_a_language_qualified_sidecar_is_found(self, tmp_path):
+        """The reported gap, directly."""
+        controller, engine, media = self._controller(tmp_path)
+        (tmp_path / "Movie.en.srt").write_text("1\n")
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_called_once_with(str(tmp_path / "Movie.en.srt"))
+
+    def test_only_one_subtitle_is_attached(self, tmp_path):
+        """Several languages of the same film must not all load at once."""
+        controller, engine, media = self._controller(tmp_path)
+        for tag in ("en", "fr", "de"):
+            (tmp_path / f"Movie.{tag}.srt").write_text("1\n")
+
+        controller._auto_load_subtitle(str(media))
+
+        assert engine.add_subtitle_file.call_count == 1
+
+    def test_another_films_subtitle_is_not_picked_up(self, tmp_path):
+        controller, engine, media = self._controller(tmp_path)
+        (tmp_path / "Other.en.srt").write_text("1\n")
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_not_called()
+
+    def test_a_sibling_video_is_never_attached_as_a_subtitle(self, tmp_path):
+        """The glob is by stem, so it sees every extension — filter properly."""
+        controller, engine, media = self._controller(tmp_path)
+        (tmp_path / "Movie.en.mkv").write_bytes(b"video")
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_not_called()
+
+    def test_nothing_on_disk_is_a_quiet_no_op(self, tmp_path):
+        controller, engine, media = self._controller(tmp_path)
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_not_called()
+
+    def test_a_stem_with_glob_characters_is_escaped(self, tmp_path):
+        """`Movie [2021].mkv` must not be read as a character class."""
+        controller, engine, media = self._controller(tmp_path, "Movie [2021].mkv")
+        (tmp_path / "Movie [2021].en.srt").write_text("1\n")
+
+        controller._auto_load_subtitle(str(media))
+
+        engine.add_subtitle_file.assert_called_once_with(
+            str(tmp_path / "Movie [2021].en.srt")
+        )

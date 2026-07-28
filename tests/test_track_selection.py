@@ -238,3 +238,136 @@ class TestAutoSelectDefaultAudio:
         assert controller.currentAudioId == -1, (
             "with no real tracks, the selection should remain disabled"
         )
+
+
+# ------------------------------------------------- turning audio *off* ---
+class TestAudioOffStaysOff:
+    """Choosing "Off" in the audio section must stick.
+
+    The reported failure: "subtitle section from multimedia audio channel off
+    not allowing to set" — clicking the pinned Off row in the gear popover's
+    Audio section did nothing, or lit up for an instant and snapped back to a
+    real track.
+
+    What actually happened
+    ----------------------
+    ``_auto_select_default_audio`` — the rescue for files libVLC opens with no
+    audio selected — ran on *every* ``_refresh_tracks``. Turning audio off is a
+    selection of id -1, and libVLC raises ``tracksChanged`` freely (ESAdded,
+    ESDeleted, an attached .srt, a re-opened demuxer). Each of those refreshes
+    saw "current == -1 and real tracks exist" and switched the audio straight
+    back on. The rescue was overwriting the user, once per event, so Off could
+    never be made to stay.
+
+    It is now one shot per media, and never fires after an explicit choice.
+    """
+
+    def test_selecting_off_is_not_undone_by_a_track_refresh(self, qt_app):
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English"), (2, "Japanese")])
+        engine.selected_audio = 1
+        controller = _controller(engine)
+
+        controller.setAudioTrack(TRACK_OFF_ID)
+        controller._refresh_tracks()          # as libVLC's ESAdded would
+
+        assert engine.selected_audio == TRACK_OFF_ID, (
+            "the auto-select rescue must never overrule an explicit choice"
+        )
+        assert controller.currentAudioId == TRACK_OFF_ID
+
+    def test_off_survives_many_refreshes(self, qt_app):
+        """One refresh passing is luck; the events arrive in bursts."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English")])
+        controller = _controller(engine)
+        controller.setAudioTrack(TRACK_OFF_ID)
+
+        for _ in range(10):
+            controller._refresh_tracks()
+
+        assert controller.currentAudioId == TRACK_OFF_ID
+
+    def test_cycling_onto_off_also_sticks(self, qt_app):
+        """`A` is as explicit as clicking the row, and can land on Off."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English")])
+        engine.selected_audio = 1
+        controller = _controller(engine)
+
+        controller.cycleAudioTrack()          # wraps onto Off
+        controller._refresh_tracks()
+
+        assert controller.currentAudioId == TRACK_OFF_ID
+
+    def test_the_rescue_still_fires_once_for_a_fresh_file(self, qt_app):
+        """The guard must not disable the behaviour it is guarding."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English")])
+        engine.selected_audio = -1
+        controller = _controller(engine)
+
+        assert controller.currentAudioId == 1, "silence on open is still rescued"
+
+    def test_the_rescue_does_not_fire_twice(self, qt_app):
+        """Having rescued once, a later -1 is the user's business."""
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English")])
+        engine.selected_audio = -1
+        controller = _controller(engine)
+        assert engine.selected_audio == 1
+
+        engine.selected_audio = -1            # user turns it off elsewhere
+        controller._refresh_tracks()
+
+        assert engine.selected_audio == -1
+
+    def test_a_new_file_gets_its_own_rescue(self, qt_app):
+        """The latches are per media, not for the life of the process."""
+        from unittest.mock import MagicMock
+
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English")])
+        controller = _controller(engine)
+        # _on_media_changed reads the sidecar setting; the builder leaves the
+        # store as None because most tests never reach it.
+        controller._settings = MagicMock()
+        controller._settings.get.return_value = False
+        controller.setAudioTrack(TRACK_OFF_ID)
+
+        engine.selected_audio = -1
+        controller._on_media_changed("file:///next.mkv")
+
+        assert controller.currentAudioId == 1, (
+            "turning audio off for one film must not leave the next one silent"
+        )
+
+    def test_choosing_a_real_track_is_also_respected(self, qt_app):
+        engine = _FakeEngine(audio=[(-1, "Disable"), (1, "English"), (2, "Japanese")])
+        controller = _controller(engine)
+
+        controller.setAudioTrack(2)
+        controller._refresh_tracks()
+
+        assert engine.selected_audio == 2
+
+
+# ------------------------------------------- subtitles are not disturbed ---
+class TestSubtitleSelectionIsUntouched:
+    """The audio rescue must not have grown a subtitle equivalent.
+
+    Subtitles default to off *on purpose*; auto-selecting one would put
+    unwanted text over every video.
+    """
+
+    def test_subtitles_are_never_auto_selected(self, qt_app):
+        engine = _FakeEngine(subs=[(-1, "Disable"), (4, "English")])
+        engine.selected_sub = -1
+        controller = _controller(engine)
+
+        assert controller.currentSubtitleId == TRACK_OFF_ID
+        assert engine.selected_sub == TRACK_OFF_ID
+
+    def test_turning_subtitles_off_sticks(self, qt_app):
+        engine = _FakeEngine(subs=[(-1, "Disable"), (4, "English")])
+        engine.selected_sub = 4
+        controller = _controller(engine)
+
+        controller.setSubtitleTrack(TRACK_OFF_ID)
+        controller._refresh_tracks()
+
+        assert controller.currentSubtitleId == TRACK_OFF_ID

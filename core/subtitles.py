@@ -503,12 +503,24 @@ class SubtitleService(QObject):
             params.addQueryItem("languages", language)
         if digest:
             params.addQueryItem("moviehash", digest)
-            # In 'best' the server may pre-filter to hash matches; in 'all' we
-            # explicitly ask it not to, which is the whole difference the user
-            # sees between the two modes.
-            params.addQueryItem(
-                "moviehash_match", "only" if mode == MATCH_BEST else "include"
-            )
+            # Always "include", in both modes. The hash is sent so the server
+            # can *flag* the exact release (that flag is what `rank_results`
+            # turns into the "exact" badge and the whole of the Best ordering);
+            # it is not sent to make the server throw everything else away.
+            #
+            # "only" used to be sent in Best mode, and it is why Best so often
+            # looked broken. OpenSubtitles' hash index covers a small slice of
+            # what is on the site, so for most real files "only" returns an
+            # empty payload — Best said "No subtitles found. Try All results",
+            # All then returned fifty rows, and the two modes read as "one of
+            # them is broken" rather than as narrow versus wide. Worse, the
+            # advice was self-defeating: the file genuinely *had* good title
+            # matches that Best was never shown.
+            #
+            # Filtering is now done in one place, client-side, by rank_results:
+            # hash matches first, then strict title/episode matches, and only
+            # then a short tail of best-effort candidates. Same promise, kept.
+            params.addQueryItem("moviehash_match", "include")
         if text:
             params.addQueryItem("query", text)
         if parsed.get("season"):

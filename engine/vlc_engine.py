@@ -256,6 +256,11 @@ class VlcEngine(QObject):
         # to show real filenames instead of VLC's generic "Track 1", "Track 2".
         self._external_subtitle_names: dict[int, str] = {}
         self._pending_external_subtitles: list[str] = []
+        #: SPU track ids that existed *before* the pending externals were
+        #: attached. Anything outside this set is, by construction, a track
+        #: add_slave just produced — which is a far stronger signal than
+        #: guessing from the label. See ``subtitle_tracks``.
+        self._known_spu_ids: set[int] = set()
 
         # libVLC's position events are irregular; a steady 200 ms poll keeps the
         # seek bar smooth without hammering the UI thread.
@@ -408,6 +413,7 @@ class VlcEngine(QObject):
         # pending names could incorrectly rename tracks in the new media.
         self._external_subtitle_names.clear()
         self._pending_external_subtitles.clear()
+        self._known_spu_ids.clear()
 
         # Retire whatever the previous media left on the video surface *before*
         # the new one starts. libVLC only fires its video cleanup callback when
@@ -659,64 +665,104 @@ class VlcEngine(QObject):
         return _describe_tracks(self._player.audio_get_track_description())
 
     def subtitle_tracks(self) -> list[tuple[int, str]]:
-        """Return subtitle tracks with proper names for external subtitles.
+        """Return subtitle tracks, with real names for external subtitles.
 
-        External subtitles loaded via add_subtitle_file often get generic names
-        like "Subtitle Track 1" from libVLC. This method replaces those generic
-        names with the actual filenames that were stored when the subtitles were
-        loaded.
+        libVLC names a track attached through ``add_slave`` after whatever the
+        demuxer felt like — usually ``Track 1`` / ``Subtitle Track 2``, and on
+        some builds simply ``Track 4`` with no relation to anything the user
+        typed. "Track 4" tells you nothing about which of three .srt files you
+        just loaded, so the stem of the file that produced the track is used
+        instead.
+
+        **A pending name is claimed by id, not by label.** The previous version
+        matched on the label looking generic, and that is why downloaded and
+        loaded subtitles kept showing up as "Track xx" anyway:
+
+        * the generic-name list was a guess at libVLC's wording, and any build
+          or locale that phrased it differently (``Track 4 - [Undetermined]``,
+          ``Subtitle track #1``, a bare language code) failed the regex, so the
+          real name was never applied;
+        * worse, the *first* generic-looking row won — including an **embedded**
+          track that happened to be unnamed — so the sidecar's name could be
+          stapled to a completely different track while the new one kept its
+          number.
+
+        ``_known_spu_ids`` records which SPU ids existed when the file was
+        opened, when each slave was attached, and after every refresh. A track
+        whose id is not in that set has appeared since — which, given
+        ``add_slave`` is the only thing that adds one mid-playback, is the
+        track a pending name belongs to. Ids are compared, not prose, so this
+        holds in every locale and on every libVLC build.
+
+        **Names are claimed from the tail of the fresh ids**, and that detail
+        is load-bearing. Auto-loading a sidecar happens on ``mediaChanged``,
+        which can beat libVLC's discovery of the file's *embedded* subtitle
+        streams — so a single refresh may surface two embedded tracks and the
+        slave all at once, all of them "fresh". libVLC appends slaves after the
+        embedded streams, so the last N fresh ids are the N tracks
+        ``add_slave`` produced. Claiming from the front would have named an
+        embedded track after the sidecar and left the sidecar as "Track 3",
+        which is the reported bug wearing a different hat.
+
+        Unclaimed pending names are kept: ESAdded is asynchronous, so the first
+        refresh after ``add_subtitle_file`` frequently runs before libVLC has
+        published the track at all.
         """
         raw = _describe_tracks(self._player.video_get_spu_description())
-        
-        # If we have pending external subtitles, match them to tracks with
-        # generic names. We do this by looking for tracks whose names match
-        # VLC's generic naming pattern and replacing them with our stored names.
-        if self._pending_external_subtitles:
-            result = []
-            pending = list(self._pending_external_subtitles)
-            
-            for track_id, name in raw:
-                # Check if this track already has a stored name
-                if track_id in self._external_subtitle_names:
-                    result.append((track_id, self._external_subtitle_names[track_id]))
-                # Check if this looks like a generic VLC name and we have pending names
-                elif pending and self._is_generic_subtitle_name(name):
-                    # Assign the next pending name to this track
-                    new_name = pending.pop(0)
-                    self._external_subtitle_names[track_id] = new_name
-                    result.append((track_id, new_name))
-                else:
-                    result.append((track_id, name))
-            
-            # Keep any unmatched pending names for the next refresh (VLC may
-            # not have discovered the track yet — ESAdded fires asynchronously).
-            self._pending_external_subtitles = pending
-            return result
-        
-        # No pending subtitles, just return the raw list with any stored names
-        result = []
+
+        result: list[tuple[int, str]] = []
+        # Ids that are new since the last time we looked, in libVLC's order.
+        # The off row (-1) is never a real track and can never be a slave.
+        fresh = [tid for tid, _ in raw if tid != -1 and tid not in self._known_spu_ids]
+        pending = self._pending_external_subtitles
+        # Pair the trailing fresh ids with the pending names, in order.
+        claimable = dict(zip(fresh[-len(pending):], list(pending))) if pending else {}
+        claimed_count = len(claimable)
+
         for track_id, name in raw:
-            if track_id in self._external_subtitle_names:
-                result.append((track_id, self._external_subtitle_names[track_id]))
-            else:
-                result.append((track_id, name))
+            stored = self._external_subtitle_names.get(track_id)
+            if stored is not None:
+                result.append((track_id, stored))
+                continue
+            if track_id in claimable:
+                claimed = claimable[track_id]
+                self._external_subtitle_names[track_id] = claimed
+                result.append((track_id, claimed))
+                continue
+            # An embedded track, or an external one we have run out of names
+            # for. Fall back to libVLC's label, tidied: a bare "Track 4" is
+            # noise, but it is still better than an empty row.
+            result.append((track_id, name.strip() or f"Track {track_id}"))
+
+        # Drop only the names that actually found a track; the rest wait for
+        # the refresh that follows libVLC's ESAdded.
+        if claimed_count:
+            del pending[:claimed_count]
+        # Remember everything we have now seen, so the *next* add_slave is
+        # measured against this state rather than against the file's original
+        # track list.
+        self._known_spu_ids.update(tid for tid, _ in raw if tid != -1)
         return result
-    
+
     @staticmethod
     def _is_generic_subtitle_name(name: str) -> bool:
-        """Check if a track name looks like VLC's generic naming.
+        """Whether a label is one of libVLC's placeholder track names.
 
-        VLC often names external subtitle tracks with generic names like
-        "Subtitle Track 1", "Track 1", "Subtitle 1", etc.
+        No longer used to *claim* a pending name — see ``subtitle_tracks``,
+        which matches on track id because prose-matching is what let "Track xx"
+        survive. Kept because it is still the honest answer to "is this label
+        worth showing to a human", and callers (and tests) ask that.
         """
         generic_patterns = [
-            r"^Subtitle Track \d+$",
-            r"^Track \d+$",
-            r"^Subtitle \d+$",
+            r"^subtitle\s*track\s*#?\s*\d+$",
+            r"^track\s*#?\s*\d+$",
+            r"^subtitle\s*#?\s*\d+$",
+            r"^spu\s*#?\s*\d+$",
             r"^\[\d+\]$",  # "[0]", "[1]", etc.
             r"^\d+$",  # Just a number
         ]
-        return any(re.match(pattern, name, re.IGNORECASE) for pattern in generic_patterns)
+        cleaned = str(name or "").strip()
+        return any(re.match(p, cleaned, re.IGNORECASE) for p in generic_patterns)
 
     def current_audio_track(self) -> int:
         """The track libVLC is *actually* playing, or ``-1`` for none.
@@ -767,6 +813,16 @@ class VlcEngine(QObject):
         if not self._current_mrl:
             log.info("no media loaded — cannot attach subtitle %s", path)
             return False
+        # Snapshot the SPU ids that exist *before* the slave is attached, so
+        # whatever appears afterwards is identifiable as new. Doing it here
+        # rather than relying on the last refresh closes the window where a
+        # track arrived between that refresh and this call.
+        try:
+            for tid, _ in _describe_tracks(self._player.video_get_spu_description()):
+                if tid != -1:
+                    self._known_spu_ids.add(tid)
+        except Exception:
+            log.debug("could not snapshot subtitle tracks before add_slave", exc_info=True)
         try:
             resolved = Path(paths.normalise_path(path)).expanduser()
         except Exception:
@@ -785,10 +841,25 @@ class VlcEngine(QObject):
         if rc != 0:
             log.warning("libVLC rejected subtitle %s (rc=%s)", resolved.name, rc)
             return False
-        # Store the filename for later use when describing tracks.
-        # The track ID is assigned asynchronously by VLC, so we queue the name
-        # and match it to the next new track in subtitle_tracks().
-        self._pending_external_subtitles.append(resolved.stem)
+        # Store the label for later use when describing tracks. The track id is
+        # assigned asynchronously by VLC, so we queue the name and claim it in
+        # subtitle_tracks() once the track appears.
+        #
+        # Guarded, and returning True regardless: the slave is *already
+        # attached* by this point. Failing the call because we could not work
+        # out a pretty label would report a working subtitle as broken — the
+        # worst possible trade. A stream URL, for instance, has no local stem
+        # to strip, and that must cost a nice name, not the subtitle.
+        try:
+            media_stem = Path(paths.normalise_path(self._current_mrl)).stem
+        except Exception:
+            media_stem = ""
+        try:
+            label = _subtitle_label(resolved, media_stem)
+        except Exception:
+            log.debug("could not label subtitle %s", resolved, exc_info=True)
+            label = resolved.stem or "Subtitle"
+        self._pending_external_subtitles.append(label)
         return True
 
     @Slot(int)
@@ -930,6 +1001,115 @@ class VlcEngine(QObject):
 def _looks_like_url(value: str) -> bool:
     url = QUrl(value)
     return url.isValid() and bool(url.scheme()) and len(url.scheme()) > 1
+
+
+#: Language codes/names a sidecar filename commonly ends in, mapped to what a
+#: person would rather read. Only used to *label* a track; nothing routes on it.
+_SUBTITLE_LANGUAGES: dict[str, str] = {
+    "en": "English", "eng": "English", "english": "English",
+    "es": "Spanish", "spa": "Spanish", "spanish": "Spanish",
+    "fr": "French", "fra": "French", "fre": "French", "french": "French",
+    "de": "German", "ger": "German", "deu": "German", "german": "German",
+    "it": "Italian", "ita": "Italian", "italian": "Italian",
+    "pt": "Portuguese", "por": "Portuguese", "portuguese": "Portuguese",
+    "pt-br": "Portuguese (BR)", "pob": "Portuguese (BR)",
+    "nl": "Dutch", "dut": "Dutch", "nld": "Dutch", "dutch": "Dutch",
+    "pl": "Polish", "pol": "Polish", "polish": "Polish",
+    "ru": "Russian", "rus": "Russian", "russian": "Russian",
+    "uk": "Ukrainian", "ukr": "Ukrainian",
+    "tr": "Turkish", "tur": "Turkish", "turkish": "Turkish",
+    "ar": "Arabic", "ara": "Arabic", "arabic": "Arabic",
+    "fa": "Persian", "per": "Persian", "fas": "Persian",
+    "he": "Hebrew", "heb": "Hebrew",
+    "hi": "Hindi", "hin": "Hindi", "hindi": "Hindi",
+    "bn": "Bengali", "ben": "Bengali", "bengali": "Bengali",
+    "ta": "Tamil", "tam": "Tamil", "ur": "Urdu", "urd": "Urdu",
+    "id": "Indonesian", "ind": "Indonesian", "ms": "Malay", "may": "Malay",
+    "th": "Thai", "tha": "Thai", "vi": "Vietnamese", "vie": "Vietnamese",
+    "zh": "Chinese", "chi": "Chinese", "zho": "Chinese",
+    "zh-cn": "Chinese (simplified)", "zh-tw": "Chinese (traditional)",
+    "ja": "Japanese", "jpn": "Japanese", "japanese": "Japanese",
+    "ko": "Korean", "kor": "Korean", "korean": "Korean",
+    "cs": "Czech", "cze": "Czech", "sk": "Slovak", "slo": "Slovak",
+    "hu": "Hungarian", "hun": "Hungarian", "ro": "Romanian", "rum": "Romanian",
+    "bg": "Bulgarian", "bul": "Bulgarian", "el": "Greek", "gre": "Greek",
+    "sv": "Swedish", "swe": "Swedish", "da": "Danish", "dan": "Danish",
+    "fi": "Finnish", "fin": "Finnish", "no": "Norwegian", "nor": "Norwegian",
+    "hr": "Croatian", "hrv": "Croatian", "sr": "Serbian", "srp": "Serbian",
+    "sl": "Slovenian", "slv": "Slovenian",
+}
+
+#: Suffixes that qualify a subtitle rather than name it.
+_SUBTITLE_QUALIFIERS: dict[str, str] = {
+    "sdh": "SDH",
+    "cc": "CC",
+    "hi": "SDH",          # only ever read *after* a language, see below
+    "forced": "forced",
+    "full": "full",
+}
+
+
+def _subtitle_label(subtitle: Path, media_stem: str) -> str:
+    """A human label for an external subtitle file.
+
+    The stem alone is what produced the second half of the "Track xx" report.
+    A downloaded subtitle is saved as ``<media stem>.<lang><ext>`` and a sidecar
+    is usually named after the release too, so the raw stem is a 60-character
+    repeat of the filename already shown in the title bar —
+    ``Andor.S02E01.1080p.WEB-DL.x265-GROUP.en``. In a 340px popover that elides
+    to ``Andor.S02E01.1080p.WEB…``, which distinguishes nothing when there are
+    two of them.
+
+    So: strip the media's own name off the front, and read what is left.
+    ``Movie.en`` becomes **English**, ``Movie.en.sdh`` becomes **English SDH**,
+    ``Movie.forced`` becomes **forced**. Anything unrecognised is kept verbatim
+    (it is the user's own naming, and they know what it means), and a subtitle
+    whose name carries no extra information at all falls back to the file's own
+    stem so the row is never blank.
+    """
+    stem = subtitle.stem
+    remainder = stem
+    # Only strip the media stem when the subtitle genuinely sits under it;
+    # an unrelated .srt keeps its whole name.
+    if media_stem and stem.lower().startswith(media_stem.lower()):
+        remainder = stem[len(media_stem):]
+    remainder = remainder.strip(" ._-")
+
+    if not remainder:
+        # `Movie.srt` next to `Movie.mkv` — nothing to add, so name it after
+        # the file rather than after the video it duplicates.
+        return subtitle.stem or "Subtitle"
+
+    # Whole-remainder match first, so a regional tag written with the hyphen
+    # that also separates fields — `Movie.pt-BR.srt` — is read as one code
+    # rather than split into "pt" and an unknown "BR".
+    if remainder.lower() in _SUBTITLE_LANGUAGES:
+        return _SUBTITLE_LANGUAGES[remainder.lower()]
+
+    parts = [p for p in re.split(r"[ ._-]+", remainder) if p]
+    language = ""
+    qualifiers: list[str] = []
+    unknown: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if not language and key in _SUBTITLE_LANGUAGES:
+            language = _SUBTITLE_LANGUAGES[key]
+        elif key in _SUBTITLE_QUALIFIERS and (key != "hi" or language):
+            # "hi" is Hindi at the front of the remainder and hearing-impaired
+            # after a language has already been read — `Movie.en.hi.srt`.
+            tag = _SUBTITLE_QUALIFIERS[key]
+            if tag not in qualifiers:
+                qualifiers.append(tag)
+        else:
+            unknown.append(part)
+
+    # Nothing was recognised: this is the user's own name for the file, so show
+    # it exactly as they wrote it rather than a de-punctuated rewrite of it.
+    if not language and not qualifiers:
+        return remainder
+
+    label = " ".join(filter(None, [language, *qualifiers, *unknown])).strip()
+    return label or subtitle.stem or "Subtitle"
 
 
 def _describe_tracks(raw) -> list[tuple[int, str]]:

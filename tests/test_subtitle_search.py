@@ -527,3 +527,96 @@ class TestSavePathSafety:
         saved = svc._save(b"subtitle", "../../../../etc/passwd.srt")
 
         assert saved.parent.name == "subtitles"
+
+
+# ------------------------------------------- best mode must return something ---
+class TestBestModeIsNarrowNotEmpty:
+    """"Best match" is a narrower list, never a blank one.
+
+    The reported failure: Best match found nothing and told the user to try
+    All results; All results then returned a full list. Two modes over the same
+    file, one of them apparently broken.
+
+    What actually happened
+    ----------------------
+    Best sent ``moviehash_match=only``, which asks OpenSubtitles to discard
+    everything its hash index does not vouch for. That index covers a small
+    slice of the site, so for most real files the server returned an empty
+    payload — and the good title matches the file genuinely had were filtered
+    out server-side, where no amount of client ranking could recover them.
+
+    The hash is still sent (it is what earns the "exact" badge), but as
+    ``include``. Narrowing is now done once, client-side, in ``rank_results``.
+    """
+
+    @staticmethod
+    def _code() -> str:
+        """core/subtitles.py with ``#`` comments stripped.
+
+        This asserts a string is *absent*, and the comment explaining why it is
+        absent naturally contains it — so without this the module's own
+        documentation fails its test.
+        """
+        import re as _re
+        from pathlib import Path as _Path
+
+        source = (
+            _Path(__file__).parent.parent / "core" / "subtitles.py"
+        ).read_text(encoding="utf-8")
+        return "\n".join(
+            _re.sub(r"(?<!['\"])#.*$", "", line) for line in source.splitlines()
+        )
+
+    def test_the_hash_never_filters_server_side(self):
+        code = self._code()
+
+        assert '"moviehash_match", "include"' in code
+        assert '"only"' not in code, (
+            "'only' makes Best return nothing for any file outside the hash "
+            "index, which is most of them"
+        )
+
+    def test_both_modes_ask_the_server_the_same_question(self):
+        """The difference between the modes is ranking, not two payloads."""
+        code = self._code()
+        search = code.split("def search(", 1)[1].split("def _on_search_finished", 1)[0]
+
+        assert search.count("moviehash_match") == 1, (
+            "one query shape; the modes diverge in rank_results, once"
+        )
+
+    def test_best_narrows_the_same_payload_all_would_show(self):
+        payload = [
+            _entry(1, release="Andor.S02E01.1080p.WEB-DL.x265-GROUP", hash_match=True),
+            _entry(2, release="Andor.S02E01.HDTV.x264-OTHER", downloads=9000),
+            _entry(3, release="Completely.Different.Show.S01E01", downloads=50000),
+        ]
+        query = {"query": "andor", "season": 2, "episode": 1}
+        file_name = "Andor.S02E01.1080p.WEB-DL.x265-GROUP.mkv"
+
+        best = rank_results(payload, mode=MATCH_BEST, query=query, file_name=file_name)
+        every = rank_results(payload, mode=MATCH_ALL, query=query, file_name=file_name)
+
+        assert len(best) < len(every), "narrower"
+        assert best, "but never empty when the server returned rows"
+        assert {e["fileId"] for e in best} <= {e["fileId"] for e in every}
+
+    def test_best_returns_rows_when_nothing_hash_matched(self):
+        """The common real case: no hash match, but good title matches exist."""
+        payload = [
+            _entry(2, release="Andor.S02E01.HDTV.x264-OTHER", downloads=9000),
+            _entry(4, release="Andor.S02E01.WEBRip", downloads=120),
+        ]
+
+        got = rank_results(
+            payload,
+            mode=MATCH_BEST,
+            query={"query": "andor", "season": 2, "episode": 1},
+            file_name="Andor.S02E01.1080p.WEB-DL.mkv",
+        )
+
+        assert got, (
+            "this is precisely what `moviehash_match=only` used to throw away "
+            "before the client ever saw it"
+        )
+        assert all(e["matchKind"] == "title" for e in got)
