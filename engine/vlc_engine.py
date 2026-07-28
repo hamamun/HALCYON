@@ -72,6 +72,29 @@ _VLC_STATE_MAP = {
 #: States in which the player is not holding the decoder open any more.
 _SETTLED_STATES = (0, 5, 6, 7)
 
+# Qt's ``int`` properties and Signal(int) use a signed 32-bit C++ int.  VLC
+# uses a signed 64-bit millisecond time, but some Matroska demuxers surface an
+# unknown timestamp as an unsigned -1 (or another corrupt, enormous value).
+# Never let such a value cross the Python/Qt boundary: shiboken raises an
+# OverflowError and QML retains its previous (often end-of-file) seek state.
+_QT_INT_MAX = 2_147_483_647
+
+
+def _qt_milliseconds(value) -> int | None:
+    """Return a Qt-safe non-negative millisecond value, or ``None``.
+
+    ``None`` is deliberately distinct from zero: zero is a valid playback
+    timestamp, whereas an unknown VLC timestamp must leave the last trustworthy
+    value untouched.
+    """
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if 0 <= milliseconds <= _QT_INT_MAX:
+        return milliseconds
+    return None
+
 
 def _enum_int(value, default: int = 0) -> int:
     """Read a libVLC enum as a plain ``int``.
@@ -323,10 +346,12 @@ class VlcEngine(QObject):
             self.stateChanged.emit(int(state))
 
         try:
-            duration = max(0, int(player.get_length()))
+            duration = _qt_milliseconds(player.get_length())
         except Exception:
-            duration = self._duration
-        if duration != self._duration:
+            duration = None
+        # -1 means that VLC has not discovered the length yet.  Do not turn an
+        # unsigned sentinel into a huge duration or emit it through Signal(int).
+        if duration is not None and duration != self._duration:
             self._duration = duration
             self.durationChanged.emit(duration)
 
@@ -335,19 +360,19 @@ class VlcEngine(QObject):
         # between the drag and the seek landing.
         if not self._scrubbing:
             try:
-                time_ms = max(0, int(player.get_time()))
+                time_ms = _qt_milliseconds(player.get_time())
             except Exception:
-                time_ms = self._time
-            if time_ms != self._time:
+                time_ms = None
+            if time_ms is not None and time_ms != self._time:
                 self._time = time_ms
                 self.timeChanged.emit(time_ms)
 
-            try:
-                position = float(player.get_position() or 0.0)
-            except Exception:
-                position = self._position
-            # A stopped/ended player reports -1; clamp so the bar never renders
-            # a negative fill.
+            # VLC's native position is derived from the same timestamps, but
+            # for malformed MKV timestamps it can be 1.0 while get_time()
+            # returns an unsigned error sentinel.  Derive it only from values
+            # that passed the Qt range check, keeping the clock and seek knob
+            # coherent and preventing a false end-of-file position.
+            position = self._time / self._duration if self._duration > 0 else 0.0
             position = max(0.0, min(1.0, position))
             if abs(position - self._position) > 1e-5:
                 self._position = position
@@ -363,6 +388,13 @@ class VlcEngine(QObject):
         mrl = path_or_url
         if not _looks_like_url(mrl):
             mrl = Path(mrl).expanduser().resolve().as_uri()
+
+        # A newly selected item has no trustworthy timeline until its demuxer
+        # reports one.  In particular, do not show the previous file's final
+        # position during MKV discovery (which made a new video look seeked to
+        # its end even while it was visibly playing from the beginning).
+        self._scrubbing = False
+        self._reset_timeline()
 
         if self._media is not None:
             try:
@@ -427,6 +459,18 @@ class VlcEngine(QObject):
         else:
             self.play()
 
+    def _reset_timeline(self) -> None:
+        """Clear published timeline values without relying on VLC callbacks."""
+        if self._time != 0:
+            self._time = 0
+            self.timeChanged.emit(0)
+        if self._position != 0.0:
+            self._position = 0.0
+            self.positionChanged.emit(0.0)
+        if self._duration != 0:
+            self._duration = 0
+            self.durationChanged.emit(0)
+
     @Slot()
     def stop(self) -> None:
         """Stop playback and zero the clocks.
@@ -450,15 +494,7 @@ class VlcEngine(QObject):
             self._media = None
         self._scrubbing = False
         self._current_mrl = ""
-        if self._time != 0:
-            self._time = 0
-            self.timeChanged.emit(0)
-        if self._position != 0.0:
-            self._position = 0.0
-            self.positionChanged.emit(0.0)
-        if self._duration != 0:
-            self._duration = 0
-            self.durationChanged.emit(0)
+        self._reset_timeline()
         self._publish_state_now()
 
     def _publish_state_now(self) -> None:
@@ -496,7 +532,11 @@ class VlcEngine(QObject):
         """
         if self._player is None:
             return
-        ms = max(0, int(ms))
+        ms = _qt_milliseconds(ms)
+        # The slot is public to QML as well as Python callers.  Keep its
+        # explicit emissions safe even when VLC has no usable duration yet.
+        if ms is None:
+            return
         if self._duration > 0:
             ms = min(ms, self._duration)
         try:
