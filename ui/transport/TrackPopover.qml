@@ -22,8 +22,10 @@ Popover {
     property int currentAudioId: -1
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
+    // Check if current media has video tracks - subtitles only make sense with video
+    readonly property bool hasVideo: typeof Player !== "undefined" && Player && Player.hasVideo
 
-    implicitWidth: 288
+    implicitWidth: 340
 
     ColumnLayout {
         anchors.fill: parent
@@ -175,6 +177,8 @@ Popover {
                 Layout.fillWidth: true
                 text: "From file\u2026"
                 glyph: Glyphs.addFile
+                // Subtitles only make sense with video content
+                enabled: root.hasVideo
                 onClicked: {
                     root.close();
                     Actions.loadSubtitleFile();
@@ -184,10 +188,11 @@ Popover {
                 Layout.fillWidth: true
                 text: "Search online\u2026"
                 glyph: Glyphs.download
-                // Disabled with nothing playing: an online search is a search
-                // *for the current file* (by hash, then by name). Greying it
-                // out says that; an empty result list would not.
-                enabled: typeof Player !== "undefined" && Player && Player.currentMedia !== ""
+                // Disabled with nothing playing or no video: an online search is a search
+                // *for the current file* (by hash, then by name), and subtitles are only
+                // useful with video content. Greying it out says that; an empty result
+                // list would not.
+                enabled: root.hasVideo && typeof Player !== "undefined" && Player && Player.currentMedia !== ""
                 onClicked: {
                     root.close();
                     Actions.searchSubtitlesOnline();

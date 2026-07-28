@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from enum import IntEnum
 from pathlib import Path
@@ -250,6 +251,12 @@ class VlcEngine(QObject):
         self._event_callbacks: list = []
         self._attach_events()
 
+        # External subtitle filenames: maps track IDs to actual filenames.
+        # Populated when add_subtitle_file is called, used when describing tracks
+        # to show real filenames instead of VLC's generic "Track 1", "Track 2".
+        self._external_subtitle_names: dict[int, str] = {}
+        self._pending_external_subtitles: list[str] = []
+
         # libVLC's position events are irregular; a steady 200 ms poll keeps the
         # seek bar smooth without hammering the UI thread.
         self._poll = QTimer(self)
@@ -395,6 +402,12 @@ class VlcEngine(QObject):
         # its end even while it was visibly playing from the beginning).
         self._scrubbing = False
         self._reset_timeline()
+
+        # Clear external subtitle state from the previous media. Track IDs are
+        # per-media, so old mappings would be meaningless — and worse, stale
+        # pending names could incorrectly rename tracks in the new media.
+        self._external_subtitle_names.clear()
+        self._pending_external_subtitles.clear()
 
         # Retire whatever the previous media left on the video surface *before*
         # the new one starts. libVLC only fires its video cleanup callback when
@@ -625,11 +638,85 @@ class VlcEngine(QObject):
             self.rateChanged.emit(rate)
 
     # ------------------------------------------------------------- tracks ---
+    def has_video(self) -> bool:
+        """Check if the current media has video tracks.
+        
+        Returns True if at least one video track exists (excluding the disable track).
+        Used to determine if subtitle features should be enabled.
+        """
+        try:
+            video_tracks = self._player.video_get_track_description()
+            if not video_tracks:
+                return False
+            # Filter out the disable track (id=-1) and check if any real tracks exist
+            real_tracks = [tid for tid, _ in video_tracks if tid != -1]
+            return len(real_tracks) > 0
+        except Exception:
+            log.debug("video_get_track_description failed", exc_info=True)
+            return False
+
     def audio_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.audio_get_track_description())
 
     def subtitle_tracks(self) -> list[tuple[int, str]]:
-        return _describe_tracks(self._player.video_get_spu_description())
+        """Return subtitle tracks with proper names for external subtitles.
+
+        External subtitles loaded via add_subtitle_file often get generic names
+        like "Subtitle Track 1" from libVLC. This method replaces those generic
+        names with the actual filenames that were stored when the subtitles were
+        loaded.
+        """
+        raw = _describe_tracks(self._player.video_get_spu_description())
+        
+        # If we have pending external subtitles, match them to tracks with
+        # generic names. We do this by looking for tracks whose names match
+        # VLC's generic naming pattern and replacing them with our stored names.
+        if self._pending_external_subtitles:
+            result = []
+            pending = list(self._pending_external_subtitles)
+            
+            for track_id, name in raw:
+                # Check if this track already has a stored name
+                if track_id in self._external_subtitle_names:
+                    result.append((track_id, self._external_subtitle_names[track_id]))
+                # Check if this looks like a generic VLC name and we have pending names
+                elif pending and self._is_generic_subtitle_name(name):
+                    # Assign the next pending name to this track
+                    new_name = pending.pop(0)
+                    self._external_subtitle_names[track_id] = new_name
+                    result.append((track_id, new_name))
+                else:
+                    result.append((track_id, name))
+            
+            # Keep any unmatched pending names for the next refresh (VLC may
+            # not have discovered the track yet — ESAdded fires asynchronously).
+            self._pending_external_subtitles = pending
+            return result
+        
+        # No pending subtitles, just return the raw list with any stored names
+        result = []
+        for track_id, name in raw:
+            if track_id in self._external_subtitle_names:
+                result.append((track_id, self._external_subtitle_names[track_id]))
+            else:
+                result.append((track_id, name))
+        return result
+    
+    @staticmethod
+    def _is_generic_subtitle_name(name: str) -> bool:
+        """Check if a track name looks like VLC's generic naming.
+
+        VLC often names external subtitle tracks with generic names like
+        "Subtitle Track 1", "Track 1", "Subtitle 1", etc.
+        """
+        generic_patterns = [
+            r"^Subtitle Track \d+$",
+            r"^Track \d+$",
+            r"^Subtitle \d+$",
+            r"^\[\d+\]$",  # "[0]", "[1]", etc.
+            r"^\d+$",  # Just a number
+        ]
+        return any(re.match(pattern, name, re.IGNORECASE) for pattern in generic_patterns)
 
     def current_audio_track(self) -> int:
         """The track libVLC is *actually* playing, or ``-1`` for none.
@@ -698,6 +785,10 @@ class VlcEngine(QObject):
         if rc != 0:
             log.warning("libVLC rejected subtitle %s (rc=%s)", resolved.name, rc)
             return False
+        # Store the filename for later use when describing tracks.
+        # The track ID is assigned asynchronously by VLC, so we queue the name
+        # and match it to the next new track in subtitle_tracks().
+        self._pending_external_subtitles.append(resolved.stem)
         return True
 
     @Slot(int)
@@ -819,6 +910,11 @@ class VlcEngine(QObject):
     @Property(str, notify=mediaChanged)
     def currentMedia(self) -> str:  # noqa: N802 - QML-facing
         return self._current_mrl
+
+    @Property(bool, notify=tracksChanged)
+    def hasVideo(self) -> bool:  # noqa: N802 - QML-facing
+        """True if the current media has at least one video track."""
+        return self.has_video()
 
     @property
     def raw_player(self):

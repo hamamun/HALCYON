@@ -173,7 +173,17 @@ Item {
 
     TrackPopover {
         id: trackPopover
-        x: gearButton ? gearButton.x + root.width - width - Theme.spaceLg : 0
+        // Position the popover so it aligns with the gear button but doesn't
+        // extend past the right edge of the window. The formula clamps the
+        // x position to ensure the popover stays within bounds.
+        x: {
+            if (!gearButton) return 0;
+            // Try to align right edge of popover with right edge of gear button
+            var gearRight = gearButton.mapToItem(root, gearButton.width, 0).x;
+            var targetX = gearRight - width;
+            // Clamp to ensure popover doesn't go off left or right edge
+            return Math.max(Theme.spaceSm, Math.min(targetX, root.width - width - Theme.spaceSm));
+        }
         y: -implicitHeight - Theme.spaceSm
         rate: root.player ? root.player.rate : 1.0
         audioTracks: root.audioTracks
