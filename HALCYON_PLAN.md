@@ -324,7 +324,8 @@ halcyon/
 │   ├── mode_api.py            # ★ ModeSpec — the contract (§A.2)
 │   ├── modes.py               # ★ registry; later phases append one line
 │   ├── settings.py
-│   ├── library.py             # recent + resume
+│   ├── library.py             # recent + resume + track memory
+│   ├── media_types.py         # what is video / audio / a subtitle (§A.3)
 │   ├── metadata.py
 │   └── lyrics.py
 ├── modes/
@@ -378,6 +379,8 @@ Runtime config lives **only** in `%APPDATA%\Halcyon`. Repo `config/` holds first
 | Clear playlist / clear selected | Local panel toolbar |
 | All playback controls | Transport bar |
 | Audio track / subtitle select | Transport bar → ⚙ popover |
+| Subtitle download | Transport bar → ⚙ popover → *Search online…* |
+| Subtitle API key / language / match mode | Settings → Online subtitles |
 | Equalizer | Right panel, EQ tab |
 | Repeat / shuffle | Transport bar |
 | Mode switch | Title bar |
@@ -448,7 +451,8 @@ Only one mode chip renders in Phase 1 — the switcher is registry-driven, so Ph
 - **Time display click toggles** elapsed/total ↔ remaining — *one* click target, two states, not two widgets
 - Gradient scrim for legibility over bright video
 - Icons only, tooltips on hover, 220 ms `OutCubic`, 40×40 hit targets, glass hover ring
-- **⚙ popover** groups speed, audio track, subtitle track, subtitle delay
+- **⚙ popover** groups speed, audio track, subtitle track, subtitle delay, and where subtitles come from (local file / online search)
+- Track sections scroll internally past **5 rows**; the *off* row stays pinned above the scroll
 
 ### OSD — Local only
 
@@ -475,11 +479,15 @@ Top-left for status lines, centre for large glyphs. Glass pill, 8px blur, 800 ms
 
 **Video adjust** — `libvlc_video_set_adjust_*`: contrast, brightness, hue, saturation, gamma. 8 presets. Right panel, below EQ.
 
-**Subtitles** — native ASS/SSA/SRT/SUB/PGS/VobSub, embedded + external. `add_slave()`, auto-load matching filenames. Delay ±, scale, encoding. Selected in ⚙, announced by OSD.
+**Subtitles** — native ASS/SSA/SRT/SUB/PGS/VobSub, embedded + external. `add_slave()`, auto-load matching filenames. Delay ±, scale, encoding. Selected in ⚙, announced by OSD. Past five embedded tracks the ⚙ list scrolls inside its own section, with the *off* row pinned above the scroll area so turning subtitles off never needs a scroll.
 
-**Audio tracks** — enumerate and switch live, remembered per file, announced by OSD.
+**Subtitle download** — opensubtitles.com REST API v1, from ⚙ → *Search online…*. Matched by the OpenSubtitles file checksum first, by parsed title/season/episode second. Two result modes, **Best match** (default — only what the checksum or an exact title/episode vouches for) and **All results** (everything, best first, each row badged *exact* / *match* / *partial*). Configured in Settings: API key, preferred language, default match mode, optional account for a larger quota. Downloads save beside the media so they auto-load next time, and attach through the same `add_slave()` route a dropped `.srt` takes. **No key ships with Halcyon** — a shared consumer key would be rate-limited across every install, so an unconfigured key is a first-run state the UI explains, not an error it hides.
 
-**Resume** — saved every 5 s and on close; prompt if >30 s in and >5% remaining. `recent.json`, capped 200.
+**Audio tracks** — enumerate and switch live, remembered per file (see *Track memory*), announced by OSD.
+
+**Resume** — saved every 5 s and on close; offered if >30 s in and >5% remaining. **Video only** — an album track 40 s in does not want a prompt. `recent.json`, capped 200, keyed by a canonical path so a file saved from libVLC's MRL is found again from the playlist's path (they differ by separator on Windows). The file opens *at* the resume point and a transient toast offers **Start over**, so the prompt is an undo rather than a question standing between the user and the thing they double-clicked.
+
+**Track memory** — the audio and subtitle track chosen for a file are remembered in the same `recent.json` entry and re-selected next time. Matched by **label**, not by libVLC's numeric ids: those are assigned per demuxer run, so id 2 could be Japanese today and the commentary tomorrow. A remembered track that this release does not have is a clean miss, and the stored preference survives it.
 
 **Lyrics** — sidecar `.lrc` (timed, auto-scroll) + embedded tags. Right panel.
 

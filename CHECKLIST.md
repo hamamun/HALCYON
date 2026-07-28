@@ -238,7 +238,7 @@
 - [ ] Subtitle switch — `Subtitle: English` / `Subtitles Off`
 - [ ] Fullscreen — enter / exit glyph
 - [ ] File open — filename + resolution + duration, 3 s
-- [ ] Resume — `Resuming from 24:31`
+- [x] Resume — `Resumed from 24:31`
 
 ### ◻ Verify
 - ◻ All 10 triggers fire with correct content and position
@@ -283,9 +283,14 @@
 ## Milestone 1.6 — Tracks & Subtitles · 2 d
 
 ### Build
-- [ ] Enumerate audio tracks; live switching · §P1.5
-- [ ] Remember audio track per file
-- [ ] Enumerate subtitle tracks; live switching, including "off"
+- [x] Enumerate audio tracks; live switching · §P1.5
+- [x] Remember audio **and subtitle** track per file — matched by label, not by libVLC's per-run ids
+- [x] Enumerate subtitle tracks; live switching, including "off"
+- [x] **Publish the *selected* track id** (`audio_get_track` / `video_get_spu`) — without it the ⚙ highlight sits on "Disable" while a track plays
+- [x] Identify the off row by libVLC's id (`-1`), never by the localised label
+- [x] Scroll inside the audio / subtitle section past 5 rows, off row pinned
+- [x] Search and download subtitles from opensubtitles.com (⚙ → *Search online…*)
+- [x] Settings: API key, preferred language, Best-match / All-results toggle, optional account
 - [ ] External subtitle load via `add_slave()` — `.srt` / `.ass` / `.sub`
 - [ ] Auto-load sidecar subtitle matching the filename
 - [ ] Subtitle delay ±, in 50 ms steps
@@ -293,7 +298,7 @@
 - [ ] Verify **embedded ASS/SSA styling is preserved** (blended by VLC pre-callback) · §0.4
 - [ ] Verify PGS / VobSub bitmap subtitles render
 - [ ] Wire all of it into `TrackPopover.qml`
-- [ ] `S` cycles subtitles · `A` cycles audio — both via `Actions`
+- [x] `S` cycles subtitles · `A` cycles audio — both via `Actions`, advancing from the live selection rather than re-picking track 0
 - [ ] Every change announced by OSD
 
 ### ◻ Verify
@@ -338,8 +343,8 @@
 ### Build
 - [ ] `core/library.py` — `recent.json`, capped at 200 entries
 - [ ] Position saved every 5 s and on close
-- [ ] Resume prompt when >30 s in **and** >5% remaining · §P1.5
-- [ ] Resume announced by OSD
+- [x] Resume prompt when >30 s in **and** >5% remaining · §P1.5 — **video only**
+- [x] Resume announced by OSD — `ResumeToast`, with *Start over*
 - [ ] `core/metadata.py` — title, artist, album, album art via libVLC (no ffprobe)
 - [ ] Info tab: filename, resolution, codecs, bitrate, duration, container
 - [ ] `core/lyrics.py` — sidecar `.lrc` parsing, timed

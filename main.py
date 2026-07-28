@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.metadata import Metadata
     from core.power import PowerGuard
     from core.settings import Settings
+    from core.subtitles import SubtitleService
     from engine.equalizer import Equalizer
     from engine.vlc_engine import VlcEngine
 
@@ -135,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
     controller = AppController(
         player, settings, library, metadata, lyrics, equalizer, parent=app
     )
+
+    # Online subtitles. The service only knows how to search and download; a
+    # finished download goes through the *same* add_slave route as a dropped
+    # .srt (§4.1), and it is told which file is playing from the one place that
+    # knows — the engine's mediaChanged.
+    subtitles = SubtitleService(settings, parent=app)
+    player.mediaChanged.connect(lambda mrl: subtitles.set_media(paths.normalise_path(mrl)))
+    subtitles.downloadFinished.connect(controller.loadSubtitle)
+
     mode_list = ModeList(app)
     _KEEP_ALIVE.extend(
         [
@@ -146,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             equalizer,
             power_guard,
             controller,
+            subtitles,
             mode_list,
         ]
     )
@@ -165,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx.setContextProperty("Metadata", metadata)
     ctx.setContextProperty("Lyrics", lyrics)
     ctx.setContextProperty("Equalizer", equalizer)
+    ctx.setContextProperty("Subtitles", subtitles)
 
     # --- per-mode contexts -------------------------------------------------
     # Each mode gets to publish one object. The shell never names a mode; it

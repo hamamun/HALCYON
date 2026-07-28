@@ -1,3 +1,4 @@
 module Halcyon.Overlay
 
 Osd 1.0 ../../ui/overlay/Osd.qml
+ResumeToast 1.0 ../../ui/overlay/ResumeToast.qml

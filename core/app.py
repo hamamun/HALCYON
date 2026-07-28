@@ -17,6 +17,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from core import media_types
 from core import modes as mode_registry
 from core import paths
 from core.mode_api import ModeSpec
@@ -104,6 +105,11 @@ class AppController(QObject):
         self._subtitle_delay = 0
         self._audio_tracks: list[dict] = []
         self._subtitle_tracks: list[dict] = []
+        self._current_audio = -1
+        self._current_subtitle = -1
+        self._resume_path = ""
+        self._audio_restored = False
+        self._subtitle_restored = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -363,15 +369,48 @@ class AppController(QObject):
 
     @Slot(str)
     def openPath(self, path: str) -> None:  # noqa: N802 - QML-facing
+        """Open a file, resuming where it was left off if that applies.
+
+        The file is opened **at** the resume point rather than from zero, so
+        there is no jarring restart-then-jump. The prompt that follows is
+        therefore an *undo* — "Start over" — not a question the user has to
+        answer before playback can begin. Ignoring it does the right thing,
+        which is the point: a modal you must dismiss before your film starts is
+        worse than no resume at all.
+
+        Resume is video-only and honours the Settings toggle; both of those
+        decisions live in ``Library.resume_position``, once.
+        """
         resume_ms = 0
         if self._settings.get("playback.resumeEnabled", True):
             resume_ms = self._library.resume_position(path)
+        self._resume_path = path
+        self._audio_restored = False
+        self._subtitle_restored = False
         self._engine.open(path, resume_ms)
         if resume_ms:
-            self.resumePrompted.emit(path, resume_ms)
+            self.resumePrompted.emit(path, int(resume_ms))
+
+    @Slot()
+    def startOver(self) -> None:  # noqa: N802 - QML-facing
+        """Discard the saved position and play from the beginning.
+
+        Clears the stored position too — otherwise the next open would offer to
+        resume to the point the user just explicitly rejected.
+        """
+        if self._resume_path:
+            self._library.clear_position(self._resume_path)
+        self._engine.seek(0)
 
     def _on_media_changed(self, mrl: str) -> None:
         path = _from_uri(mrl)
+        # The engine is the authority on what is playing. `openPath` sets these
+        # too, but media can also change without it (the queue advancing at
+        # end-of-file), and a stale `_resume_path` would file the next film's
+        # track choice against the previous one.
+        self._resume_path = path
+        self._audio_restored = False
+        self._subtitle_restored = False
         self._library.note_opened(path)
         self._metadata.load(path)
         self._lyrics.load(path)
@@ -416,17 +455,100 @@ class AppController(QObject):
 
     # ---------------------------------------------------------------- tracks ---
     def _refresh_tracks(self) -> None:
+        """Republish the track lists *and* which entry of each is live.
+
+        The lists carry an ``off`` flag rather than the UI matching on the
+        label. libVLC calls the no-track row "Disable", localises it, and gives
+        it id ``-1``; a QML string comparison against "Disable" is therefore
+        both fragile and untranslatable, and it was why the off row could not be
+        told apart from a real track.
+        """
         try:
-            self._audio_tracks = [
-                {"id": tid, "label": label} for tid, label in self._engine.audio_tracks()
-            ]
-            self._subtitle_tracks = [
-                {"id": tid, "label": label} for tid, label in self._engine.subtitle_tracks()
-            ]
+            self._audio_tracks = _track_dicts(self._engine.audio_tracks())
+            self._subtitle_tracks = _track_dicts(
+                self._engine.subtitle_tracks(), off_label="Off"
+            )
         except Exception:
             self._audio_tracks = []
             self._subtitle_tracks = []
+        self._restore_remembered_tracks()
+        self._refresh_current_tracks(emit=False)
         self.tracksChanged.emit()
+
+    def _restore_remembered_tracks(self) -> None:
+        """Re-select the track this file was last watched with.
+
+        Runs off the track refresh rather than off media-open because the track
+        list does not exist yet when the file opens — libVLC discovers the
+        elementary streams asynchronously, which is exactly why ESAdded exists.
+
+        **The latch is per kind, and that is load-bearing.** libVLC discovers
+        elementary streams incrementally, so a typical file raises ESAdded for
+        its audio track first and its subtitle tracks a moment later. A single
+        shared latch closed on the audio pass and the remembered *subtitle* was
+        then never restored — silently, and only for real files, which is why
+        a test that populated both lists at once did not catch it.
+
+        Each kind latches when its own list first appears, so each gets exactly
+        one attempt: late-arriving subtitles are still restored, and a later
+        ESAdded (an external .srt being attached, say) cannot yank an
+        in-session choice back to the remembered one.
+        """
+        if not self._resume_path:
+            return
+
+        if self._audio_tracks and not self._audio_restored:
+            self._audio_restored = True
+            wanted = self._library.remembered_audio_track(self._resume_path)
+            if wanted:
+                self._select_by_label(
+                    self._audio_tracks, wanted, self._engine.set_audio_track, "audio"
+                )
+
+        if self._subtitle_tracks and not self._subtitle_restored:
+            self._subtitle_restored = True
+            wanted = self._library.remembered_subtitle_track(self._resume_path)
+            if wanted:
+                self._select_by_label(
+                    self._subtitle_tracks,
+                    wanted,
+                    self._engine.set_subtitle_track,
+                    "subtitle",
+                )
+
+    @staticmethod
+    def _select_by_label(tracks: list[dict], label: str, setter, kind: str) -> None:
+        """Match on the label, because libVLC's ids are not stable.
+
+        A numeric id is assigned per demuxer run: id 2 might be Japanese today
+        and the director's commentary tomorrow, so restoring by id would
+        silently play the wrong thing. A label either matches or it does not,
+        and a miss just leaves libVLC's own default in place.
+        """
+        for track in tracks:
+            if str(track.get("label", "")) == label:
+                try:
+                    setter(int(track["id"]))
+                except Exception:
+                    log.debug("could not restore %s track %r", kind, label, exc_info=True)
+                else:
+                    log.info("restored %s track %r", kind, label)
+                return
+        log.info("remembered %s track %r is not in this file", kind, label)
+
+    def _refresh_current_tracks(self, emit: bool = True) -> None:
+        try:
+            audio = int(self._engine.current_audio_track())
+        except Exception:
+            audio = -1
+        try:
+            subtitle = int(self._engine.current_subtitle_track())
+        except Exception:
+            subtitle = -1
+        changed = (audio, subtitle) != (self._current_audio, self._current_subtitle)
+        self._current_audio, self._current_subtitle = audio, subtitle
+        if changed and emit:
+            self.tracksChanged.emit()
 
     @Property("QVariantList", notify=tracksChanged)
     def audioTracks(self) -> list:  # noqa: N802 - QML-facing
@@ -436,27 +558,76 @@ class AppController(QObject):
     def subtitleTracks(self) -> list:  # noqa: N802 - QML-facing
         return self._subtitle_tracks
 
+    @Property(int, notify=tracksChanged)
+    def currentAudioId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_audio
+
+    @Property(int, notify=tracksChanged)
+    def currentSubtitleId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_subtitle
+
     @Slot(int)
     def setAudioTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_audio_track(track_id)
+        self._refresh_current_tracks()
+        self._remember_choice(self._audio_tracks, track_id, "audio")
 
     @Slot(int)
     def setSubtitleTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_subtitle_track(track_id)
+        self._refresh_current_tracks()
+        self._remember_choice(self._subtitle_tracks, track_id, "subtitle")
+
+    def _remember_choice(self, tracks: list[dict], track_id: int, kind: str) -> None:
+        """File the user's pick against this media, by label.
+
+        Only an *explicit* selection is remembered — this is called from the
+        setters and the cycle hotkeys, never from ``_restore_remembered_tracks``,
+        so restoring a choice cannot be mistaken for making one.
+        """
+        if not self._resume_path:
+            return
+        label = next(
+            (str(t.get("label", "")) for t in tracks if int(t["id"]) == int(track_id)), ""
+        )
+        if kind == "audio":
+            self._library.remember_audio_track(self._resume_path, label)
+        else:
+            self._library.remember_subtitle_track(self._resume_path, label)
 
     @Slot()
     def cycleAudioTrack(self) -> None:  # noqa: N802 - QML-facing
-        self._cycle(self._audio_tracks, self._engine.set_audio_track)
+        self._cycle(self._audio_tracks, self._current_audio, self._engine.set_audio_track)
+        self._refresh_current_tracks()
+        # `A` is as explicit a choice as clicking the row, so it is remembered
+        # the same way — one behaviour, two triggers (§4.1).
+        self._remember_choice(self._audio_tracks, self._current_audio, "audio")
 
     @Slot()
     def cycleSubtitleTrack(self) -> None:  # noqa: N802 - QML-facing
-        self._cycle(self._subtitle_tracks, self._engine.set_subtitle_track)
+        self._cycle(
+            self._subtitle_tracks, self._current_subtitle, self._engine.set_subtitle_track
+        )
+        self._refresh_current_tracks()
+        self._remember_choice(self._subtitle_tracks, self._current_subtitle, "subtitle")
 
     @staticmethod
-    def _cycle(tracks: list[dict], setter) -> None:
+    def _cycle(tracks: list[dict], current_id: int, setter) -> None:
+        """Advance to the next track, wrapping.
+
+        It used to always select ``tracks[0]`` — so `A` and `S` selected the
+        same track forever and "cycle" was a misnomer. Cycling from wherever the
+        player actually is makes the hotkey and the popover agree, which is the
+        point of them sharing one implementation.
+        """
         if not tracks:
             return
-        setter(tracks[0]["id"])
+        ids = [int(t["id"]) for t in tracks]
+        try:
+            index = ids.index(int(current_id))
+        except ValueError:
+            index = -1
+        setter(ids[(index + 1) % len(ids)])
 
     @Slot(str)
     def loadSubtitle(self, url: str) -> None:  # noqa: N802 - QML-facing
@@ -492,12 +663,35 @@ class AppController(QObject):
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
 
 
-#: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily
-#: so core/ never depends on a mode package at import time (§A.1).
-def _is_subtitle(path: str) -> bool:
-    from modes.local.playlist import SUBTITLE_EXTENSIONS
+#: libVLC's id for "no track". Both audio and SPU use it.
+TRACK_OFF_ID = -1
 
-    return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
+
+def _track_dicts(pairs, off_label: str = "Off") -> list[dict]:
+    """``[(id, label)]`` -> ``[{id, label, off}]``.
+
+    The off row is identified by its **id**, never its text, and is always
+    hoisted to the front so the UI can pin it above a scrolling list without
+    searching for it.
+    """
+    tracks = [
+        {
+            "id": int(tid),
+            "label": (off_label if int(tid) == TRACK_OFF_ID else str(label)),
+            "off": int(tid) == TRACK_OFF_ID,
+        }
+        for tid, label in pairs
+    ]
+    tracks.sort(key=lambda t: 0 if t["off"] else 1)
+    return tracks
+
+
+#: One shared answer, in ``core.media_types``. This used to reach into
+#: ``modes.local.playlist`` — lazily, to soften it, but the chassis still
+#: depended on a mode and the isolation guard reported it (§A.3, rule 2). The
+#: dependency was backwards: ".srt is a subtitle" is a fact about media, not
+#: about Local's queue, and M3U and Web need the same answer.
+_is_subtitle = media_types.is_subtitle
 
 
 def _normalise(raw) -> str:

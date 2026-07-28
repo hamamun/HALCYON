@@ -631,13 +631,40 @@ class VlcEngine(QObject):
     def subtitle_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.video_get_spu_description())
 
+    def current_audio_track(self) -> int:
+        """The track libVLC is *actually* playing, or ``-1`` for none.
+
+        This is the missing half of track selection. Without it the popover had
+        no way to tell which row is live, so it fell back to its default
+        ``currentAudioId: -1`` — which is libVLC's id for **Disable** — and drew
+        the highlight on "Disable" while sound was plainly coming out. The
+        selected row and the audible track are the same fact; it has to be read
+        from the player, not assumed.
+        """
+        try:
+            return int(self._player.audio_get_track())
+        except Exception:
+            log.debug("audio_get_track failed", exc_info=True)
+            return -1
+
+    def current_subtitle_track(self) -> int:
+        try:
+            return int(self._player.video_get_spu())
+        except Exception:
+            log.debug("video_get_spu failed", exc_info=True)
+            return -1
+
     @Slot(int)
     def set_audio_track(self, track_id: int) -> None:
         self._player.audio_set_track(int(track_id))
+        # libVLC does not raise ESSelected for an application-driven switch, so
+        # nothing else would tell the UI the selection moved.
+        self.tracksChanged.emit()
 
     @Slot(int)
     def set_subtitle_track(self, track_id: int) -> None:
         self._player.video_set_spu(int(track_id))
+        self.tracksChanged.emit()
 
     @Slot(str, result=bool)
     def add_subtitle_file(self, path: str) -> bool:

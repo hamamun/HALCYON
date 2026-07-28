@@ -34,28 +34,27 @@ from PySide6.QtCore import (
 
 from core import paths as path_utils
 
+#: Media-type knowledge lives in ``core.media_types`` — it is a fact about
+#: media, not about Local's queue, and the chassis needs the same answers to
+#: route a dropped subtitle (§A.3). Re-exported here so this module reads
+#: exactly as it did and every existing import keeps working.
+from core.media_types import (
+    AUDIO_EXTENSIONS,
+    MEDIA_EXTENSIONS,
+    SUBTITLE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
+
+__all__ = [
+    "AUDIO_EXTENSIONS",
+    "MEDIA_EXTENSIONS",
+    "SUBTITLE_EXTENSIONS",
+    "VIDEO_EXTENSIONS",
+    "PlaylistModel",
+    "RepeatMode",
+]
+
 log = logging.getLogger(__name__)
-
-#: Extensions Add Folder will pick up (§P1.5). Deliberately generous — libVLC
-#: plays far more than this, but a recursive scan should not hoover up .txt.
-VIDEO_EXTENSIONS = {
-    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mts", ".flv",
-    ".webm", ".mpg", ".mpeg", ".m4v", ".3gp", ".ogv", ".vob", ".divx", ".rmvb",
-}
-AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".aac", ".opus", ".ogg", ".wav", ".m4a", ".wma", ".alac",
-    ".ape", ".aiff", ".dsf", ".mka", ".mpc",
-}
-MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
-
-#: Sidecar subtitle formats. These are **not** media and must never enter the
-#: queue: libVLC will happily "open" a .srt as a media item, produce a track
-#: with no video and no audio, tear the video pipeline down and leave the UI
-#: showing a track that can never play. Dropping one is a request to subtitle
-#: the *current* video — core.app routes them there instead (§P1.5).
-SUBTITLE_EXTENSIONS = {
-    ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup", ".smi", ".txt",
-}
 
 
 class RepeatMode(IntEnum):
@@ -79,15 +78,25 @@ class Track:
 class _ProbeSignals(QObject):
     """Carries probe results back to the GUI thread.
 
-    Parented to the model so its lifetime is Qt's business, and carrying a
-    ``cancelled`` flag so in-flight probes stop talking to it once the model is
-    going away.
+    **Deliberately unparented.** It used to be parented to the model, which
+    looked tidier and caused an intermittent hard crash: Qt destroys a child
+    with its parent, so a model going away while probe tasks were still in
+    flight left those tasks holding a wrapper around a freed C++ QObject. The
+    next ``done.emit`` from a pool thread then wrote through a dangling pointer
+    and segfaulted the process outright — not a catchable RuntimeError, and
+    only when the timing lined up, which is why it surfaced as a test suite
+    that failed roughly one run in four with no failing test.
+
+    Unparented, its lifetime is Python's: every in-flight ``_ProbeTask`` holds a
+    reference, so the object outlives the model exactly as long as something can
+    still emit through it. Qt drops the connection when the model dies, so those
+    late emissions land nowhere instead of crashing.
     """
 
     done = Signal(str, int)  # path, duration_ms
 
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self) -> None:
+        super().__init__()
         self.cancelled = False
 
 
@@ -175,7 +184,7 @@ class PlaylistModel(QAbstractListModel):
         self._shuffle = False
         self._shuffle_order: list[int] = []
         self._pool = QThreadPool.globalInstance()
-        self._probe_signals = _ProbeSignals(self)
+        self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
 
     # ------------------------------------------------------ model plumbing ---
@@ -514,8 +523,19 @@ class PlaylistModel(QAbstractListModel):
 
     # ---------------------------------------------------------- shutdown ---
     def shutdown(self) -> None:
-        """Stop accepting probe results. Called before the app tears down."""
+        """Stop accepting probe results. Called before the app tears down.
+
+        Setting the flag is not enough on its own: a task can already be past
+        its check and inside ``emit``. Draining the pool is what makes teardown
+        actually safe, so nothing is still running when the interpreter starts
+        tearing Qt down. Bounded, because a probe that has wedged on a network
+        share must not hang the exit.
+        """
         self._probe_signals.cancelled = True
+        try:
+            self._pool.waitForDone(2000)
+        except Exception:
+            log.debug("probe pool did not drain cleanly", exc_info=True)
 
     def to_list(self) -> list[dict]:
         return [
