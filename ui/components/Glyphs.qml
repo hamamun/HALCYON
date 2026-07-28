@@ -56,6 +56,13 @@ QtObject {
     readonly property string lyrics:     "\uE8D2"
     readonly property string equalizer:  "\uE9E9"
     readonly property string subtitles:  "\uED1E"
+    // The transport bar's popover button — speed, audio track, subtitle track.
+    // Deliberately NOT `settings`: that gear is the title bar's Settings
+    // dialog, and one glyph opening two unrelated things taught the user
+    // nothing about either. SubtitlesAudio names the popover's two main
+    // sections, and exists in Segoe MDL2 Assets as well as Segoe Fluent Icons,
+    // so it does not fall back to a blank box on Windows 10.
+    readonly property string tracks:     "\uED1F"
     readonly property string audioTrack: "\uE8D6"
     readonly property string speed:      "\uEC4A"
     readonly property string music:      "\uE8D6"

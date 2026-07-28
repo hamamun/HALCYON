@@ -144,7 +144,7 @@ Item {
                 }
                 IconButton {
                     id: gearButton
-                    glyph: Glyphs.settings
+                    glyph: Glyphs.tracks
                     tooltip: "Speed, audio and subtitles"
                     active: trackPopover.opened
                     onClicked: trackPopover.opened ? trackPopover.close() : trackPopover.open()

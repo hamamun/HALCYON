@@ -290,3 +290,59 @@ def test_the_new_panels_are_registered_as_qml_types():
 
     for name in ("SettingSelect", "SettingField", "SubtitleSearchDialog"):
         assert name in qmldir, f"{name} is unresolvable without a qmldir entry"
+
+
+# ------------------------------------------------------------------ icons ---
+def test_the_gear_is_not_reused_for_the_track_popover():
+    """One glyph must not open two unrelated things.
+
+    The transport bar's popover (speed / audio / subtitles) and the title bar's
+    Settings dialog both drew ``Glyphs.settings``. Same icon, same size, two
+    entirely different destinations — so the icon taught the user nothing about
+    either, and the popover looked like a second Settings button.
+    """
+    transport = _read("modes", "local", "LocalTransport.qml")
+
+    assert "Glyphs.settings" not in transport, (
+        "the gear belongs to Settings; the popover needs its own glyph"
+    )
+    assert "Glyphs.tracks" in transport
+
+
+def test_the_title_bar_keeps_the_gear():
+    """The change must not have swapped the wrong one."""
+    assert "Glyphs.settings" in _read("ui", "shell", "TitleBar.qml")
+
+
+def test_the_track_glyph_is_distinct_from_the_settings_glyph():
+    source = _read("ui", "components", "Glyphs.qml")
+    codepoints = dict(
+        re.findall(r'property string (\w+):\s*"\\u([0-9A-Fa-f]{4})"', source)
+    )
+
+    assert "tracks" in codepoints, "Glyphs.tracks must be defined centrally"
+    assert codepoints["tracks"].upper() != codepoints["settings"].upper()
+
+
+def test_the_track_glyph_survives_the_windows_10_fallback():
+    """Segoe Fluent Icons ships with Windows 11; Windows 10 falls back to Segoe
+    MDL2 Assets. A codepoint present only in the newer font renders as a blank
+    box there, so the popover button would simply vanish."""
+    source = _read("ui", "components", "Glyphs.qml")
+    codepoints = dict(
+        re.findall(r'property string (\w+):\s*"\\u([0-9A-Fa-f]{4})"', source)
+    )
+
+    # ED1F "SubtitlesAudio" is documented in both fonts' PUA ED00-EF00 block.
+    assert codepoints["tracks"].upper() == "ED1F"
+
+
+def test_every_glyph_is_a_private_use_codepoint():
+    """A stray real character would render in the text font, at the wrong
+    weight and size, next to icons that do not."""
+    source = _read("ui", "components", "Glyphs.qml")
+    codepoints = re.findall(r'property string \w+:\s*"\\u([0-9A-Fa-f]{4})"', source)
+
+    assert codepoints
+    for cp in codepoints:
+        assert 0xE000 <= int(cp, 16) <= 0xF8FF, f"U+{cp} is outside the icon font's PUA"
