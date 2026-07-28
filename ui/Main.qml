@@ -26,7 +26,12 @@ Shell {
     readonly property var modeSpec: Modes.spec(activeMode)
     property bool chromeVisible: true
 
-    title: "Halcyon"
+    // The OS-level title: taskbar button, Alt-Tab, window list. The frameless
+    // shell draws no caption of its own, so this is otherwise invisible to the
+    // user — but it is what Windows shows, and "Halcyon" for every window is
+    // useless the moment two copies are open.
+    title: titleBar.mediaTitle !== "" ? titleBar.mediaTitle + "  \u00B7  Halcyon"
+                                      : "Halcyon"
     visible: true
 
     Component.onCompleted: {
@@ -335,34 +340,82 @@ Shell {
 
     // ======================================================================
     // AUTO-HIDE — §P1.4
-    // Playing + pointer still 2.5 s -> chrome and cursor fade. Never while a
-    // popover is open, while scrubbing, or while paused.
+    // **Fullscreen only.** Playing + pointer still 2.5 s -> the transport bar
+    // and the mouse cursor fade; any pointer motion brings both straight back.
+    //
+    // In windowed mode the bar is permanent. Hiding it there is the wrong
+    // trade: the window already has its own chrome and borders, the video does
+    // not fill the screen, and there is nothing immersive to protect — it just
+    // makes the controls disappear from under the pointer while the user is
+    // still working in the window. `autoHideActive` is the single gate, so the
+    // rule lives in exactly one place rather than being re-tested at each of
+    // the sites that reads `chromeVisible`.
     // ======================================================================
+    readonly property bool autoHideActive: fullscreen
+
+    // Only ever false in fullscreen — see autoHideActive.
+    onAutoHideActiveChanged: wakeChrome()
+
     MouseArea {
         id: idleWatcher
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
         propagateComposedEvents: true
-        cursorShape: window.chromeVisible ? Qt.ArrowCursor : Qt.BlankCursor
         z: -1
 
         onPositionChanged: window.wakeChrome()
     }
 
+    // Cursor blanking, fullscreen only.
+    //
+    // A separate area on top rather than a `cursorShape` on idleWatcher,
+    // because the cursor is decided by the *topmost* item under the pointer:
+    // idleWatcher sits at z:-1, so VideoStage's click area (and every button)
+    // would win and keep drawing an arrow over the picture. This one sits above
+    // everything and takes `Qt.NoButton`, so it paints the cursor without
+    // swallowing a single click — presses still reach the stage and the bar
+    // underneath. It exists only while the chrome is hidden, so in windowed
+    // mode, while paused, or the moment the pointer moves it is simply not
+    // there.
+    MouseArea {
+        id: cursorBlanker
+        anchors.fill: parent
+        z: 10000
+        visible: window.autoHideActive && !window.chromeVisible
+        enabled: visible
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
+        propagateComposedEvents: true
+        cursorShape: Qt.BlankCursor
+
+        onPositionChanged: window.wakeChrome()
+        onExited: window.wakeChrome()
+    }
+
     function wakeChrome() {
         chromeVisible = true;
-        idleTimer.restart();
+        if (autoHideActive)
+            idleTimer.restart();
+        else
+            idleTimer.stop();
     }
 
     Timer {
         id: idleTimer
         interval: Settings.get("ui.autoHideDelayMs", 2500)
+        // Never started in windowed mode — wakeChrome() is the only thing that
+        // starts it, and it refuses to unless autoHideActive.
+        running: false
         onTriggered: {
+            if (!window.autoHideActive)
+                return;
             var bar = transportLoader.item;
             var busy = bar && ((bar.popoverOpen === true) || (bar.scrubbing === true));
             if (Player && Player.isPlaying && !busy)
                 window.chromeVisible = false;
+            else if (busy)
+                idleTimer.restart();   // re-arm; the popover will not stay open forever
         }
     }
 
