@@ -242,8 +242,9 @@ class VideoSurface(QQuickItem):
     #: Internal, decoder-thread -> GUI-thread hops. Emitting a Qt signal is
     #: thread-safe; the queued connections below marshal the delivery.
     frameArrived = Signal()
-    formatArrived = Signal()
+    formatArrived = Signal(object)
     videoStopped = Signal()
+    frameCommitted = Signal()
 
     class FillMode:
         Stretch = 0
@@ -291,6 +292,9 @@ class VideoSurface(QQuickItem):
         self.videoStopped.connect(
             self._on_video_stopped_gui, Qt.ConnectionType.QueuedConnection
         )
+        self.frameCommitted.connect(
+            self._on_frame_committed_gui, Qt.ConnectionType.QueuedConnection
+        )
 
     # ------------------------------------------------------------ binding ---
     def bind(self, vout: VideoOutput) -> None:
@@ -337,8 +341,9 @@ class VideoSurface(QQuickItem):
         self.frameArrived.emit()
 
     def _on_format_threadsafe(self, fmt: FrameFormat) -> None:
-        self._fmt = fmt
-        self.formatArrived.emit()
+        # Do not mutate item state from VLC's decoder thread. Carry the immutable
+        # format through the queued signal and install it on the GUI thread.
+        self.formatArrived.emit(fmt)
 
     @Slot()
     def _on_frame_gui(self) -> None:
@@ -349,12 +354,19 @@ class VideoSurface(QQuickItem):
     def _on_video_stopped_threadsafe(self) -> None:
         self.videoStopped.emit()
 
-    @Slot()
-    def _on_format_gui(self) -> None:
+    @Slot(object)
+    def _on_format_gui(self, fmt: FrameFormat) -> None:
+        self._fmt = fmt
         self._set_has_video(True)
         self._recompute_content_rect()
         self.frameFormatChanged.emit()
         self.update()
+
+    @Slot()
+    def _on_frame_committed_gui(self) -> None:
+        """Publish render completion without emitting QML signals in render."""
+        self._set_has_video(True)
+        self.frameRendered.emit()
 
     @Slot()
     def _on_video_stopped_gui(self) -> None:
@@ -459,17 +471,23 @@ class VideoSurface(QQuickItem):
                 return node
             self._last_serial = serial
             if self._fmt is None or self._fmt != fmt:
-                self._fmt = fmt
-                self._recompute_content_rect()
+                # A queued format notification should normally arrive first.
+                # If render wins the race, marshal the correction rather than
+                # touching GUI-owned item geometry/signals on this thread.
+                self.formatArrived.emit(fmt)
 
             if fmt.is_planar:
                 node = self._update_planar(window, address, fmt, node)
             else:
                 node = self._update_packed(window, address, fmt, node)
         finally:
-            vout.ring.release_read()
+            vout.ring.release_read(claim)
 
-        self._has_video = True
+        # Signal emission itself is thread-safe, but QML-facing delivery must
+        # happen on the item's GUI thread. The explicit queued connection above
+        # restores frameRendered without the render-thread violation removed by
+        # the previous patch.
+        self.frameCommitted.emit()
         return node
 
     def _plane_view(self, address: int, offset: int, pitch: int, lines: int,

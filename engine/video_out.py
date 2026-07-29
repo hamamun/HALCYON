@@ -157,15 +157,62 @@ class FrameFormat:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class FrameReadClaim:
+    """A stable read lease for one published frame.
+
+    ``_buffer`` is intentionally part of the claim even though consumers only
+    unpack ``serial, address, format``.  A format renegotiation can replace the
+    ring while Qt is copying the previous frame.  Keeping the concrete ctypes
+    allocation reachable from the claim prevents that old address becoming a
+    use-after-free in the render thread.
+    """
+
+    serial: int
+    address: int
+    format: FrameFormat
+    generation: int
+    _buffer: ctypes.Array
+
+    def __iter__(self):
+        # Preserve the original three-value API used by surfaces and callers.
+        yield self.serial
+        yield self.address
+        yield self.format
+
+    def __getitem__(self, index: int):
+        return (self.serial, self.address, self.format)[index]
+
+
+@dataclass(frozen=True, slots=True)
+class FrameWriteClaim:
+    """One buffer handed to a libVLC lock callback.
+
+    libVLC returns the lock callback's private token to ``display``.  Carrying
+    the slot and generation in that token is what lets us publish the buffer
+    that was actually decoded, rather than whichever slot happens to be the
+    ring's current write hint by the time display runs.
+    """
+
+    address: int
+    format: FrameFormat
+    index: int
+    generation: int
+    _buffer: ctypes.Array
+
+
 class FrameRing:
     """Triple-buffered frame store, written by VLC, read by Qt.
 
     Thread-safety contract:
 
-    * ``_lock`` guards **only** ``_write``, ``_ready``, ``_read`` and ``_serial``.
-    * Pixel memory is never touched while the lock is held.
-    * A slot handed out by :meth:`acquire_read` is not reused as a write target
-      until the reader calls :meth:`release_read`.
+    * every mutable field, including the active format and allocation, is read
+      under ``_lock``;
+    * a :class:`FrameReadClaim` owns a strong reference to the exact allocation
+      behind its address, so reallocation cannot invalidate an in-flight copy;
+    * write claims identify the actual slot returned by ``lock`` and are
+      published only if they still belong to the active ring generation;
+    * pixel memory is never copied while ``_lock`` is held.
     """
 
     def __init__(self) -> None:
@@ -176,7 +223,11 @@ class FrameRing:
         self._write = 0
         self._ready = -1          # newest complete slot, -1 = nothing yet
         self._read = -1           # slot pinned by reader(s), -1 = none
-        self._pins = 0            # how many readers hold _read right now
+        self._pins = 0            # readers holding the active generation
+        self._writing: set[int] = set()
+        self._write_slots: list[FrameWriteClaim] = []
+        self._legacy_write: FrameWriteClaim | None = None
+        self._generation = 0      # increments whenever allocations are replaced
         self._serial = 0          # increments per displayed frame
         self._read_serial = 0     # serial of the pinned slot
         self._frames_seen = 0
@@ -184,114 +235,171 @@ class FrameRing:
 
     # --------------------------------------------------------- allocation ---
     def allocate(self, fmt: FrameFormat) -> None:
-        """(Re)allocate the ring for ``fmt``. Called from the format callback,
-        i.e. before any decoding into these buffers has started, and again if the
-        stream changes resolution mid-play (Milestone 1.1)."""
+        """Atomically replace the ring with storage for ``fmt``.
+
+        Allocation happens before taking the bookkeeping lock.  More
+        importantly, readers and VLC write callbacks receive claim objects that
+        retain their old ctypes buffer.  A mid-stream format renegotiation can
+        therefore swap generations immediately without freeing memory another
+        thread is still reading or decoding into.
+        """
+        buffers = [(ctypes.c_ubyte * fmt.frame_size)() for _ in range(SLOTS)]
+        addresses = [ctypes.addressof(buf) for buf in buffers]
         with self._lock:
+            self._generation += 1
+            generation = self._generation
             self._fmt = fmt
-            self._buffers = [
-                (ctypes.c_ubyte * fmt.frame_size)() for _ in range(SLOTS)
-            ]
-            self._addresses = [
-                ctypes.addressof(buf) for buf in self._buffers
+            self._buffers = buffers
+            self._addresses = addresses
+            # Reused on every lock callback in this generation: no per-frame
+            # Python claim allocation on the decode hot path.
+            self._write_slots = [
+                FrameWriteClaim(address, fmt, index, generation, buffers[index])
+                for index, address in enumerate(addresses)
             ]
             self._write = 0
             self._ready = -1
             self._read = -1
             self._pins = 0
+            self._writing.clear()
+            self._legacy_write = None
             self._serial = 0
             self._read_serial = 0
         log.info("frame ring allocated: %s x%d slots", fmt.describe(), SLOTS)
 
     def mark_stopped(self) -> None:
-        """Retire the published frame without releasing the buffers.
+        """Retire the old picture while keeping in-flight memory valid.
 
-        Called when VLC tears the video pipeline down (end of a video track) or
-        when a new media is opened. The distinction from :meth:`free` matters:
-        a reader may be pinned on the render thread right now, so the memory
-        must stay mapped — but the *newest complete frame* must stop being
-        served, otherwise the next repaint happily re-uploads the last frame of
-        the file that just finished.
-
-        That is exactly what kept ``VideoSurface.hasVideo`` latched true after a
-        video ended: ``_on_video_stopped_gui`` cleared the flag and then called
-        ``update()``, whose ``updatePaintNode`` pinned the stale slot, drew it
-        and set the flag straight back to true. The audio-only Now Playing card
-        (album art + title/artist/album) therefore never appeared for the track
-        that followed a video — while a freshly started player, whose ring has
-        never held a frame, showed it correctly.
+        Merely clearing ``_ready`` is not sufficient: an old display callback
+        can arrive just after the clear and publish the dead media again.  Swap
+        to a fresh generation of the same format instead.  Old read/write claim
+        objects keep only the buffers they still need alive; their generation no
+        longer matches, so late callbacks are harmless.  The next video can
+        still produce a frame even when libVLC reuses the vout without another
+        format callback.
         """
         with self._lock:
+            fmt = self._fmt
+        if fmt is not None:
+            self.allocate(fmt)
+            return
+        with self._lock:
+            self._generation += 1
             self._ready = -1
+            self._read = -1
+            self._pins = 0
+            self._writing.clear()
+            self._write_slots = []
+            self._legacy_write = None
             self._serial = 0
             self._read_serial = 0
 
     def free(self) -> None:
+        """Detach active storage without invalidating outstanding claims."""
         with self._lock:
+            self._generation += 1
             self._buffers = []
             self._addresses = []
             self._fmt = None
             self._ready = -1
             self._read = -1
+            self._pins = 0
+            self._writing.clear()
+            self._write_slots = []
+            self._legacy_write = None
             self._serial = 0
             self._read_serial = 0
 
     @property
     def format(self) -> FrameFormat | None:
-        return self._fmt
+        with self._lock:
+            return self._fmt
 
     # ------------------------------------------------- writer (VLC thread) ---
-    def write_address(self) -> int:
-        """Base address of the slot VLC should decode into.
+    def acquire_write(self) -> FrameWriteClaim | None:
+        """Reserve a free slot for one libVLC ``lock`` callback.
 
-        Called from ``lock``. Must be allocation-free — it is on the decode hot
-        path at up to 60 Hz.
+        Address and format are captured under one lock.  The old implementation
+        fetched them separately, allowing reallocation between the two reads:
+        an old, smaller address could then be paired with new, larger plane
+        offsets and VLC would write past the allocation.
         """
         with self._lock:
-            if not self._addresses:
-                return 0
-            return self._addresses[self._write]
+            return self._acquire_write_locked()
+
+    def _acquire_write_locked(self) -> FrameWriteClaim | None:
+        if not self._addresses or self._fmt is None:
+            return None
+        for step in range(SLOTS):
+            candidate = (self._write + step) % SLOTS
+            if candidate in self._writing:
+                continue
+            if candidate == self._ready:
+                continue
+            if self._pins and candidate == self._read:
+                continue
+            self._writing.add(candidate)
+            self._write = (candidate + 1) % SLOTS
+            return self._write_slots[candidate]
+        return None
+
+    def publish_write(self, claim: FrameWriteClaim) -> bool:
+        """Publish the slot identified by ``claim`` if it is still current."""
+        with self._lock:
+            if claim.generation != self._generation:
+                return False
+            self._writing.discard(claim.index)
+            if not (0 <= claim.index < len(self._addresses)):
+                return False
+            if self._addresses[claim.index] != claim.address:
+                return False
+            self._publish_index_locked(claim.index)
+            return True
+
+    def discard_write(self, claim: FrameWriteClaim) -> None:
+        """Release a reservation that libVLC abandoned without displaying."""
+        with self._lock:
+            if claim.generation == self._generation:
+                self._writing.discard(claim.index)
+
+    # Compatibility helpers used by the pure ring tests and diagnostics.  The
+    # real callback path uses acquire_write()/publish_write() so picture identity
+    # is never lost between lock and display.
+    def write_address(self) -> int:
+        with self._lock:
+            claim = self._acquire_write_locked()
+            self._legacy_write = claim
+            return claim.address if claim is not None else 0
 
     def publish(self) -> None:
-        """Mark the written slot complete and pick the next write target.
-
-        Called from ``display``. This is the entire handoff: no copy, no signal
-        emission from the decoder thread, just index arithmetic.
-        """
         with self._lock:
-            if not self._addresses:
+            claim = self._legacy_write
+            self._legacy_write = None
+            # Preserve the original diagnostic shorthand: publish() by itself
+            # means VLC completed the current write slot.
+            if claim is None:
+                claim = self._acquire_write_locked()
+            if claim is None or claim.generation != self._generation:
                 return
-            if self._ready >= 0 and self._ready != self._read:
-                # The previous ready frame was never consumed — Qt is rendering
-                # slower than we decode. Expected and harmless; count it so the
-                # spike's HUD can show it.
-                self._frames_dropped += 1
-            self._ready = self._write
-            self._serial += 1
-            self._frames_seen += 1
-            # Next write target: rotate forward to the first slot that is
-            # neither the newest-complete frame nor pinned by a reader.
-            # Rotating (rather than always scanning from 0) matters: it keeps
-            # the writer as far as possible from whatever a reader just pinned,
-            # and it exercises all SLOTS evenly instead of ping-ponging between
-            # the two lowest indices.
-            for step in range(1, SLOTS + 1):
-                candidate = (self._ready + step) % SLOTS
-                if candidate != self._ready and candidate != self._read:
-                    self._write = candidate
-                    break
+            self._writing.discard(claim.index)
+            self._publish_index_locked(claim.index)
+
+    def _publish_index_locked(self, index: int) -> None:
+        if self._ready >= 0 and self._ready != self._read:
+            # The previous ready frame was never consumed — Qt is rendering
+            # slower than decode. Expected and harmless.
+            self._frames_dropped += 1
+        self._ready = index
+        self._serial += 1
+        self._frames_seen += 1
 
     # ------------------------------------------------- reader (Qt thread) ---
-    def acquire_read(self) -> tuple[int, int, FrameFormat] | None:
-        """Pin the newest complete frame and return ``(serial, address, format)``.
+    def acquire_read(self) -> FrameReadClaim | None:
+        """Pin and return the newest complete frame.
 
-        ``None`` means nothing has been displayed yet. The pin holds until a
-        matching :meth:`release_read`, which is what stops the writer decoding
-        over pixels that are mid-upload.
-
-        Re-entrant across readers: a second surface (Phase 2 PiP, §P2.5) pinning
-        while the first still holds gets the *same* slot, so one frame is never
-        split between two consumers.
+        The returned claim owns the concrete ctypes slot.  It remains valid even
+        if a format callback replaces ``self._buffers`` before the caller has
+        finished copying pixels.
         """
         with self._lock:
             if self._ready < 0 or not self._addresses or self._fmt is None:
@@ -300,10 +408,20 @@ class FrameRing:
                 self._read = self._ready
                 self._read_serial = self._serial
             self._pins += 1
-            return self._read_serial, self._addresses[self._read], self._fmt
+            return FrameReadClaim(
+                self._read_serial,
+                self._addresses[self._read],
+                self._fmt,
+                self._generation,
+                self._buffers[self._read],
+            )
 
-    def release_read(self) -> None:
+    def release_read(self, claim: FrameReadClaim | None = None) -> None:
         with self._lock:
+            # A reallocation resets the current generation's pin bookkeeping.
+            # Releasing an old claim must not decrement a new reader's pin.
+            if claim is not None and claim.generation != self._generation:
+                return
             self._pins = max(0, self._pins - 1)
             if self._pins == 0:
                 self._read = -1
@@ -328,9 +446,9 @@ class VideoOutput:
         vout.attach(player)                 # before play()
         vout.frame_ready = surface.on_frame # called from the VLC thread — be quick
 
-    ``frame_ready`` fires on the **decoder thread**. Do nothing there but request
-    a repaint (``QQuickItem.update()`` is thread-safe for this purpose via a
-    queued connection). Never touch Qt objects directly.
+    ``frame_ready`` fires on the **decoder thread**. A surface must only emit its
+    queued bridge signal there; ``QQuickItem.update()`` itself is GUI-thread-only.
+    Never touch Qt item state directly from this callback.
     """
 
     def __init__(self, chroma: str = Chroma.I420) -> None:
@@ -373,6 +491,12 @@ class VideoOutput:
         self._scratch = None
         self._scratch_plane = 0
 
+        # One private token per VLC lock callback.  libVLC passes the token back
+        # to display; retaining the claim here keeps that exact allocation alive
+        # through format renegotiation and lets display publish the right slot.
+        self._claim_lock = threading.Lock()
+        self._write_claims: dict[int, FrameWriteClaim] = {}
+
     # ------------------------------------------------------------- attach ---
     def attach(self, player) -> None:
         """Install the callbacks on ``player``. Call before the first ``play()``."""
@@ -400,13 +524,14 @@ class VideoOutput:
 
         @vlc.CallbackDecorators.VideoUnlockCb
         def _unlock(opaque, picture, planes):
-            # Deliberately empty. Any work here runs on the decode thread and
-            # delays the next frame.
+            # Deliberately empty. The write claim remains alive until display;
+            # unlock only says decoding completed, not that VLC is finished
+            # referring to the picture token.
             return None
 
         @vlc.CallbackDecorators.VideoDisplayCb
         def _display(opaque, picture):
-            self._on_display()
+            self._on_display(picture)
 
         self._cb_format = _format
         self._cb_cleanup = _cleanup
@@ -429,18 +554,30 @@ class VideoOutput:
         log.info("video callbacks attached (chroma=%s)", self.chroma)
 
     def detach(self) -> None:
-        """Drop the callbacks. Only safe once the player has fully stopped."""
+        """Stop serving frames, but retain C trampolines until player release.
+
+        A stopped player state does not prove that every vout callback stack has
+        returned.  Clearing a ``ctypes`` callback here used to create exactly the
+        dangling C function pointer the module warns about.  The owning engine
+        calls :meth:`release_callbacks` only *after* ``MediaPlayer.release()``.
+        """
         self._player = None
         self._attached = False
-        # Keep the trampolines alive until VLC can no longer reach them; the
-        # player release path is what guarantees that, so we clear afterwards.
+        self.ring.free()
+
+    def release_callbacks(self) -> None:
+        """Forget callback trampolines after the native player is gone."""
+        with self._claim_lock:
+            claims = list(self._write_claims.values())
+            self._write_claims.clear()
+        for claim in claims:
+            self.ring.discard_write(claim)
         self._cb_format = None
         self._cb_format_cast = None
         self._cb_cleanup = None
         self._cb_lock = None
         self._cb_unlock = None
         self._cb_display = None
-        self.ring.free()
 
     # ------------------------------------------------ reader bookkeeping ---
     def add_reader(self) -> None:
@@ -541,6 +678,14 @@ class VideoOutput:
         """VLC is done with this video format — the track ended or had no
         video. Runs on a VLC thread, so the handler must only marshal."""
         log.debug("video format cleanup")
+        # Cleanup is VLC's guarantee that this vout generation is no longer in
+        # use. Any picture that was locked but never displayed can now be
+        # released; doing this earlier would free memory a decoder still owns.
+        with self._claim_lock:
+            claims = list(self._write_claims.values())
+            self._write_claims.clear()
+        for claim in claims:
+            self.ring.discard_write(claim)
         self.notify_video_stopped()
 
     def notify_video_stopped(self) -> None:
@@ -562,27 +707,45 @@ class VideoOutput:
                 log.exception("video_stopped handler failed")
 
     def _on_lock(self, planes) -> int:
-        """Hand VLC the next write slot. Hot path — keep it boring.
+        """Reserve a frame and return its private picture token to libVLC.
 
-        Returning without filling ``planes`` is not an option: libVLC does not
-        check them, it passes them straight to ``picture_NewFromResource`` and
-        the decoder writes to whatever address is there. A NULL plane is an
-        immediate access violation on the decoder thread, which is why the
-        scratch buffer below exists rather than an early ``return 0``.
+        The planes point at the reserved allocation; the return value is *not*
+        a pixel pointer.  It identifies the :class:`FrameWriteClaim` and comes
+        back in the display callback.  Conflating those two roles was why the
+        old code published a mutable global write index rather than the frame
+        VLC had actually completed.
         """
         try:
-            base = self.ring.write_address()
-            fmt = self.ring.format
-            if not base or fmt is None:
+            claim = self.ring.acquire_write()
+            if claim is None:
                 return self._fill_scratch(planes)
+            base = claim.address
+            fmt = claim.format
             planes[0] = ctypes.c_void_p(base)
             if fmt.is_planar:
                 planes[1] = ctypes.c_void_p(base + fmt.y_size)
                 planes[2] = ctypes.c_void_p(base + fmt.y_size + fmt.uv_size)
-            return base
+            return self._register_write_claim(claim)
         except Exception:
             log.exception("lock callback failed")
             return self._fill_scratch(planes)
+
+    def _register_write_claim(self, claim: FrameWriteClaim) -> int:
+        # The allocation address is a valid opaque token and is unique while the
+        # claim keeps that allocation alive. Reusing it avoids an extra Python
+        # token allocation on every decoded frame.
+        token = claim.address
+        with self._claim_lock:
+            self._write_claims[token] = claim
+        return token
+
+    @staticmethod
+    def _picture_token(picture) -> int:
+        value = getattr(picture, "value", picture)
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError, OverflowError):
+            return 0
 
     def _ensure_scratch(self, plane_bytes: int) -> None:
         """Grow the scratch pad so one plane of ``plane_bytes`` always fits.
@@ -613,12 +776,26 @@ class VideoOutput:
             planes[0] = ctypes.c_void_p(base)
             planes[1] = ctypes.c_void_p(base + stride)
             planes[2] = ctypes.c_void_p(base + 2 * stride)
+            # The scratch frame is deliberately never published. Its base is a
+            # valid opaque token and the buffer is retained on self.
             return base
         except Exception:
             return 0
 
-    def _on_display(self) -> None:
-        self.ring.publish()
+    def _on_display(self, picture=None) -> None:
+        # ``None`` keeps the direct, pure-Python diagnostic path compatible;
+        # native callbacks always return the private token created in _on_lock.
+        if picture is None:
+            self.ring.publish()
+            published = True
+        else:
+            token = self._picture_token(picture)
+            with self._claim_lock:
+                found = token in self._write_claims
+                claim = self._write_claims.pop(token, None)
+            published = bool(found and claim is not None and self.ring.publish_write(claim))
+        if not published:
+            return
         cb = self.frame_ready
         if cb is not None:
             try:

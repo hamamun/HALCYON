@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -129,21 +130,49 @@ class _ProbeTask(QRunnable):
         if self._signals.cancelled:
             return
         duration = 0
-        instance = media = None
+        instance = media = event_manager = parse_callback = None
+        parsed = threading.Event()
+        parse_event = None
         try:
             import vlc
 
-            instance = vlc.Instance(["--quiet", "--no-video", "--intf=dummy"])
+            instance = vlc.Instance(
+                ["--quiet", "--no-video", "--intf=dummy", "--avcodec-hw=none"]
+            )
             if instance is not None:
                 media = instance.media_new_path(self._path)
                 if media is not None:
-                    media.parse_with_options(vlc.MediaParseFlag.local, 2000)
+                    # parse_with_options() is asynchronous. Releasing Media and
+                    # Instance immediately after starting it races libVLC's
+                    # parser thread during every add-to-playlist operation. Keep
+                    # the callback and native objects alive until completion (or
+                    # explicitly stop a timed-out parse) before releasing them.
+                    event_manager = media.event_manager()
+                    parse_event = vlc.EventType.MediaParsedChanged
+
+                    def _parsed(_event):
+                        parsed.set()
+
+                    parse_callback = _parsed  # hard callback reference
+                    event_manager.event_attach(parse_event, parse_callback)
+                    result = media.parse_with_options(vlc.MediaParseFlag.local, 2000)
+                    if result != -1:
+                        parsed.wait(2.2)
+                    if not parsed.is_set():
+                        stop_parse = getattr(media, "parse_stop", None)
+                        if callable(stop_parse):
+                            stop_parse()
                     duration = max(0, int(media.get_duration()))
         except Exception:
             log.debug("probe failed for %s", self._path, exc_info=True)
         finally:
-            # Release in reverse order of creation, and never let a failed
-            # release strand the other handle.
+            if event_manager is not None and parse_event is not None and parse_callback:
+                try:
+                    event_manager.event_detach(parse_event, parse_callback)
+                except Exception:
+                    pass
+            # Release in reverse order only after the async parser has completed
+            # or been stopped, and never let one failed release strand the other.
             for obj in (media, instance):
                 if obj is not None:
                     try:

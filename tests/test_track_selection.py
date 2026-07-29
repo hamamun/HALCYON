@@ -385,6 +385,11 @@ class TestReentrantTrackRefresh:
                 super().__init__(audio=[(-1, "Disable"), (1, "English"), (2, "Hindi")])
                 self.selected_audio = -1
                 self.controller = None
+                self.audio_refreshes = 0
+
+            def audio_tracks(self):
+                self.audio_refreshes += 1
+                return super().audio_tracks()
 
             def set_audio_track(self, track_id):
                 self.selected_audio = int(track_id)
@@ -401,3 +406,8 @@ class TestReentrantTrackRefresh:
 
         assert controller.currentAudioId == 1
         assert engine.selected_audio == 1
+
+        # The recursion guard must defer—not discard—the nested notification.
+        qt_app.processEvents()
+        assert engine.audio_refreshes == 2
+        assert controller._track_refresh_pending is False
