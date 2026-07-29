@@ -16,7 +16,7 @@ import glob
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import media_types
 from core import modes as mode_registry
@@ -115,6 +115,9 @@ class AppController(QObject):
         #: ``_auto_select_default_audio``). Both reset when the media changes.
         self._audio_auto_selected = False
         self._audio_user_choice = False
+        self._refreshing_tracks = False
+        self._track_refresh_pending = False
+        self._track_refresh_scheduled = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -519,6 +522,10 @@ class AppController(QObject):
         told apart from a real track.
         """
         if getattr(self, "_refreshing_tracks", False):
+            # Do not recurse on the same C++/Python signal stack, but do not
+            # throw the notification away either. The previous guard returned
+            # silently, which made safety depend on losing a real track update.
+            self._track_refresh_pending = True
             return
         self._refreshing_tracks = True
         try:
@@ -536,6 +543,22 @@ class AppController(QObject):
             self.tracksChanged.emit()
         finally:
             self._refreshing_tracks = False
+            if getattr(self, "_track_refresh_pending", False):
+                self._schedule_track_refresh()
+
+    def _schedule_track_refresh(self) -> None:
+        """Coalesce a re-entrant refresh onto the next GUI event-loop turn."""
+        if getattr(self, "_track_refresh_scheduled", False):
+            return
+        self._track_refresh_scheduled = True
+        QTimer.singleShot(0, self._run_scheduled_track_refresh)
+
+    def _run_scheduled_track_refresh(self) -> None:
+        self._track_refresh_scheduled = False
+        if not getattr(self, "_track_refresh_pending", False):
+            return
+        self._track_refresh_pending = False
+        self._refresh_tracks()
 
     def _auto_select_default_audio(self) -> None:
         """Rescue a file libVLC opened with **no** audio track selected.

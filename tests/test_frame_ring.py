@@ -148,6 +148,44 @@ class TestRingBasics:
         assert ring.acquire_read() is None
         assert ring.format.width == 1920
 
+    def test_reallocate_does_not_free_an_in_flight_read(self):
+        """Format setup can race Qt copying a frame on the render thread."""
+        ring = FrameRing()
+        old_fmt = make_format(64, 48)
+        ring.allocate(old_fmt)
+        old_address = ring.write_address()
+        ctypes.memset(old_address, 0x5A, old_fmt.frame_size)
+        ring.publish()
+        claim = ring.acquire_read()
+        assert claim is not None
+
+        ring.allocate(make_format(1920, 1080))
+
+        # The claim owns the old ctypes allocation, so this address is still
+        # mapped and contains the frame even though the active ring changed.
+        assert ctypes.string_at(claim.address, 32) == b"\x5a" * 32
+        ring.release_read(claim)
+
+    def test_releasing_old_generation_cannot_unpin_a_new_reader(self):
+        ring = FrameRing()
+        ring.allocate(make_format())
+        ring.publish()
+        old = ring.acquire_read()
+        assert old is not None
+
+        ring.allocate(make_format())
+        ring.publish()
+        new = ring.acquire_read()
+        assert new is not None
+        ring.release_read(old)
+
+        # The current generation remains pinned after the stale release.
+        for _ in range(8):
+            address = ring.write_address()
+            assert address != new.address
+            ring.publish()
+        ring.release_read(new)
+
     def test_slot_addresses_are_distinct(self):
         ring = FrameRing()
         fmt = make_format()

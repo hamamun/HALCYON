@@ -251,3 +251,52 @@ def test_engine_open_retires_the_previous_video(monkeypatch, tmp_path):
     assert calls.index("retire") < calls.index("play"), (
         "retire before play, or the new track can start against a stale picture"
     )
+
+
+def test_engine_keeps_video_trampolines_until_player_release():
+    """Native callbacks may still be returning after state becomes Stopped."""
+    from PySide6.QtCore import QObject
+
+    from engine.vlc_engine import VlcEngine
+
+    calls = []
+
+    class Poll:
+        def stop(self):
+            calls.append("poll-stop")
+
+    class Player:
+        def stop(self):
+            calls.append("player-stop")
+
+        def get_state(self):
+            return 5  # Stopped
+
+        def release(self):
+            calls.append("player-release")
+
+    class Vout:
+        def detach(self):
+            calls.append("vout-detach")
+
+        def release_callbacks(self):
+            calls.append("callbacks-release")
+
+    class Instance:
+        def release(self):
+            calls.append("instance-release")
+
+    engine = VlcEngine.__new__(VlcEngine)
+    QObject.__init__(engine)
+    engine._releasing = False
+    engine._poll = Poll()
+    engine._player = Player()
+    engine._media = None
+    engine._instance = Instance()
+    engine._event_manager = None
+    engine.video_output = Vout()
+
+    engine.shutdown()
+
+    assert calls.index("vout-detach") < calls.index("player-release")
+    assert calls.index("player-release") < calls.index("callbacks-release")

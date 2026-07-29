@@ -78,10 +78,14 @@ def call_format(player, width, height, native_chroma=b"I0AL"):
     return slots, bytes(chroma.raw[:4]), pitches, lines
 
 
-def call_lock(player):
+def call_lock_with_token(player):
     planes = (ctypes.c_void_p * 8)()
-    player.lock(None, ctypes.cast(planes, ctypes.POINTER(ctypes.c_void_p)))
-    return planes
+    token = player.lock(None, ctypes.cast(planes, ctypes.POINTER(ctypes.c_void_p)))
+    return token, planes
+
+
+def call_lock(player):
+    return call_lock_with_token(player)[1]
 
 
 def attached(chroma=Chroma.I420):
@@ -249,6 +253,34 @@ class TestLockContract:
         # what matters is that we did not crash and did not lie about a buffer.
         assert planes[0] in (None, 0) or planes[0] > 0
 
+    def test_picture_token_identifies_the_buffer_displayed_out_of_order(self):
+        """display must publish its lock token, not a mutable global index."""
+        vout, player = attached()
+        call_format(player, 64, 48)
+        first_token, first_planes = call_lock_with_token(player)
+        second_token, second_planes = call_lock_with_token(player)
+        assert first_token and second_token and first_token != second_token
+        assert first_planes[0] != second_planes[0]
+
+        # VLC is allowed to complete/display pictures in clock order rather than
+        # lock order. The second token must publish the second allocation.
+        player.display(None, second_token)
+        claim = vout.ring.acquire_read()
+        assert claim is not None
+        assert claim.address == second_planes[0]
+        vout.ring.release_read(claim)
+
+    def test_late_display_from_an_old_format_is_not_published(self):
+        vout, player = attached()
+        call_format(player, 64, 48)
+        stale_token, _ = call_lock_with_token(player)
+
+        call_format(player, 1920, 1080)
+        player.display(None, stale_token)
+
+        assert vout.ring.serial == 0
+        assert vout.ring.acquire_read() is None
+
     def test_lock_after_ring_free_uses_the_scratch_pad(self):
         # Teardown race: VLC can call lock() between our free() and its own
         # stop completing.
@@ -302,7 +334,8 @@ class TestCallbackRobustness:
             raise RuntimeError("handler blew up")
 
         vout.frame_ready = explode
-        player.display(None, None)  # must not raise
+        token, _ = call_lock_with_token(player)
+        player.display(None, token)  # must not raise
         assert vout.ring.serial == 1
 
     def test_resolution_change_mid_stream_stays_in_bounds(self):
@@ -332,9 +365,21 @@ class TestCallbackLifetime:
                      "_cb_format", "_cb_format_cast", "_cb_cleanup"):
             assert getattr(vout, name) is not None, f"{name} was not retained"
 
-    def test_detach_releases_them(self):
+    def test_detach_retains_them_until_native_player_release(self):
+        """A settled player can still have a vout callback returning.
+
+        detach() runs before MediaPlayer.release(), so dropping ctypes
+        trampolines there creates dangling C function pointers. The engine calls
+        release_callbacks() only after the native release has completed.
+        """
         vout, _ = attached()
+        names = (
+            "_cb_lock", "_cb_unlock", "_cb_display",
+            "_cb_format", "_cb_format_cast", "_cb_cleanup",
+        )
+
         vout.detach()
-        for name in ("_cb_lock", "_cb_unlock", "_cb_display",
-                     "_cb_format", "_cb_format_cast", "_cb_cleanup"):
-            assert getattr(vout, name) is None
+        assert all(getattr(vout, name) is not None for name in names)
+
+        vout.release_callbacks()  # represents completed MediaPlayer.release()
+        assert all(getattr(vout, name) is None for name in names)

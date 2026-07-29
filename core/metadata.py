@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import paths
+from engine.vlc_tracks import media_tracks
 
 log = logging.getLogger(__name__)
 
@@ -109,40 +110,43 @@ class Metadata(QObject):
                 duration = int(media.get_duration())
                 details.append({"label": "Duration", "value": _fmt_duration(duration)})
 
-                for track in media.tracks_get() or []:
-                    if track.type == vlc.TrackType.video:
-                        video = track.video.contents
-                        details.append(
-                            {
-                                "label": "Resolution",
-                                "value": f"{video.width}\u00D7{video.height}",
-                            }
-                        )
-                        fps = (
-                            video.frame_rate_num / video.frame_rate_den
-                            if video.frame_rate_den
-                            else 0
-                        )
-                        if fps:
-                            details.append({"label": "Frame rate", "value": f"{fps:.3g} fps"})
-                        details.append(
-                            {"label": "Video codec", "value": _fourcc(track.codec)}
-                        )
-                    elif track.type == vlc.TrackType.audio:
-                        audio = track.audio.contents
-                        details.append(
-                            {"label": "Audio codec", "value": _fourcc(track.codec)}
-                        )
-                        details.append(
-                            {
-                                "label": "Channels",
-                                "value": f"{audio.channels} ch @ {audio.rate} Hz",
-                            }
-                        )
-                        if track.bitrate:
+                with media_tracks(vlc, media) as tracks:
+                    for track in tracks:
+                        if track.type == vlc.TrackType.video:
+                            video = track.video.contents
                             details.append(
-                                {"label": "Bitrate", "value": _fmt_bitrate(track.bitrate)}
+                                {
+                                    "label": "Resolution",
+                                    "value": f"{video.width}\u00D7{video.height}",
+                                }
                             )
+                            fps = (
+                                video.frame_rate_num / video.frame_rate_den
+                                if video.frame_rate_den
+                                else 0
+                            )
+                            if fps:
+                                details.append(
+                                    {"label": "Frame rate", "value": f"{fps:.3g} fps"}
+                                )
+                            details.append(
+                                {"label": "Video codec", "value": _fourcc(track.codec)}
+                            )
+                        elif track.type == vlc.TrackType.audio:
+                            audio = track.audio.contents
+                            details.append(
+                                {"label": "Audio codec", "value": _fourcc(track.codec)}
+                            )
+                            details.append(
+                                {
+                                    "label": "Channels",
+                                    "value": f"{audio.channels} ch @ {audio.rate} Hz",
+                                }
+                            )
+                            if track.bitrate:
+                                details.append(
+                                    {"label": "Bitrate", "value": _fmt_bitrate(track.bitrate)}
+                                )
         except Exception:
             log.debug("metadata parse failed for %s", path, exc_info=True)
 

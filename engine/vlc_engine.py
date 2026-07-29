@@ -35,6 +35,7 @@ from PySide6.QtCore import (
 
 from core import paths
 from engine.video_out import Chroma, VideoOutput
+from engine.vlc_tracks import media_tracks
 
 log = logging.getLogger(__name__)
 
@@ -315,34 +316,42 @@ class VlcEngine(QObject):
     # Every one of these runs on a *VLC* thread. Emit and get out — Qt queues the
     # delivery to the GUI thread for us.
     def _on_end_reached(self, _event) -> None:
+        if getattr(self, "_releasing", False):
+            return
         try:
             self.endReached.emit()
-        except Exception:
-            pass
+        except RuntimeError:
+            log.debug("end event arrived after Qt receiver teardown", exc_info=True)
 
     def _on_error(self, _event) -> None:
+        if getattr(self, "_releasing", False):
+            return
         try:
             self.errorOccurred.emit(f"Could not play {self._current_mrl or 'media'}")
-        except Exception:
-            pass
+        except RuntimeError:
+            log.debug("error event arrived after Qt receiver teardown", exc_info=True)
 
     def _on_state_event(self, _event) -> None:
         pass  # the poll timer publishes state on the GUI thread
 
     def _on_buffering(self, event) -> None:
+        if getattr(self, "_releasing", False):
+            return
         try:
             self.buffering.emit(float(event.u.new_cache))
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            log.debug("could not publish buffering event", exc_info=True)
 
     def _on_length(self, _event) -> None:
         pass  # picked up by the poll
 
     def _on_tracks(self, _event) -> None:
+        if getattr(self, "_releasing", False):
+            return
         try:
             self.tracksChanged.emit()
-        except Exception:
-            pass
+        except RuntimeError:
+            log.debug("track event arrived after Qt receiver teardown", exc_info=True)
 
     # ---------------------------------------------------------------- poll ---
     def _poll_state(self) -> None:
@@ -726,34 +735,24 @@ class VlcEngine(QObject):
         media = self._media
         if media is None:
             return {}
-        try:
-            tracks = media.tracks_get()
-        except Exception:
-            log.debug("media.tracks_get failed", exc_info=True)
-            return {}
-        if not tracks:
-            return {}
-
         out: dict[int, str] = {}
         try:
-            for track in tracks:
-                code = getattr(track, "language", None)
-                if isinstance(code, bytes):
-                    code = code.decode("utf-8", "replace")
-                if not code:
-                    continue
-                name = _LANGUAGE_NAMES.get(str(code).strip().lower())
-                if name:
-                    out[int(track.id)] = name
+            # python-vlc's Media.tracks_get() leaks its native allocation (the
+            # generated release line is commented out). The context manager
+            # uses the raw API and keeps nested pointers valid until release.
+            with media_tracks(self._vlc, media) as tracks:
+                for track in tracks:
+                    code = getattr(track, "language", None)
+                    if isinstance(code, bytes):
+                        code = code.decode("utf-8", "replace")
+                    if not code:
+                        continue
+                    name = _LANGUAGE_NAMES.get(str(code).strip().lower())
+                    if name:
+                        out[int(track.id)] = name
         except Exception:
             log.debug("could not read track languages", exc_info=True)
             return {}
-        finally:
-            # tracks_get() allocates; python-vlc exposes the matching free.
-            try:
-                self._vlc.libvlc_media_tracks_release(tracks, len(tracks))
-            except Exception:
-                log.debug("could not release media track list", exc_info=True)
         return out
 
     def subtitle_tracks(self) -> list[tuple[int, str]]:
@@ -1018,12 +1017,17 @@ class VlcEngine(QObject):
                     time.sleep(0.02)
                     waited += 20
 
-                # No VLC event can be in flight now. Remove event and video
-                # callback registrations before releasing either object.
+                # Stop new work, but keep every ctypes video trampoline alive
+                # until MediaPlayer.release() has destroyed the native vout.
+                # A settled state is not proof that a callback stack has already
+                # returned; clearing it before release leaves a dangling C
+                # function pointer and causes an untraceable access violation.
                 self._detach_events()
                 self.video_output.detach()
-                self._player.release()
+                player = self._player
+                player.release()
                 self._player = None
+                self.video_output.release_callbacks()
             if self._media is not None:
                 self._media.release()
                 self._media = None

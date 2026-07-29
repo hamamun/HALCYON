@@ -22,11 +22,13 @@ that made it possible rather than trying to race it.
 from __future__ import annotations
 
 import gc
+import sys
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QThreadPool
 
-from modes.local.playlist import PlaylistModel, _ProbeSignals
+from modes.local.playlist import PlaylistModel, _ProbeSignals, _ProbeTask
 
 
 @pytest.fixture(scope="module")
@@ -90,3 +92,70 @@ def test_a_probe_signals_object_can_be_built_standalone(qt_app):
     signals = _ProbeSignals()
 
     assert signals.parent() is None
+
+
+def test_probe_waits_for_async_parse_before_releasing_native_objects(
+    qt_app, monkeypatch, tmp_path
+):
+    """parse_with_options returns immediately; release must not race its worker."""
+    order = []
+
+    class EventManager:
+        def event_attach(self, event_type, callback):
+            order.append("attach")
+            self.callback = callback
+
+        def event_detach(self, event_type, callback):
+            assert callback is self.callback
+            order.append("detach")
+
+    class Media:
+        def __init__(self):
+            self.manager = EventManager()
+
+        def event_manager(self):
+            return self.manager
+
+        def parse_with_options(self, *_args):
+            order.append("parse")
+            self.manager.callback(object())
+            order.append("parsed")
+            return 0
+
+        def get_duration(self):
+            order.append("duration")
+            return 12_345
+
+        def release(self):
+            order.append("media-release")
+
+    class Instance:
+        def __init__(self, _args):
+            self.media = Media()
+
+        def media_new_path(self, _path):
+            return self.media
+
+        def release(self):
+            order.append("instance-release")
+
+    fake_vlc = SimpleNamespace(
+        Instance=Instance,
+        MediaParseFlag=SimpleNamespace(local=1),
+        EventType=SimpleNamespace(MediaParsedChanged=2),
+    )
+    monkeypatch.setitem(sys.modules, "vlc", fake_vlc)
+
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"media")
+    seen = []
+    signals = _ProbeSignals()
+    signals.done.connect(lambda _path, duration: seen.append(duration))
+
+    _ProbeTask(str(path), signals)._probe()
+    qt_app.processEvents()
+
+    assert seen == [12_345]
+    assert order.index("parsed") < order.index("detach")
+    assert order.index("detach") < order.index("media-release")
+    assert order.index("media-release") < order.index("instance-release")
