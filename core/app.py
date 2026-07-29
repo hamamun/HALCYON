@@ -518,18 +518,24 @@ class AppController(QObject):
         both fragile and untranslatable, and it was why the off row could not be
         told apart from a real track.
         """
+        if getattr(self, "_refreshing_tracks", False):
+            return
+        self._refreshing_tracks = True
         try:
-            self._audio_tracks = _track_dicts(self._engine.audio_tracks())
-            self._subtitle_tracks = _track_dicts(
-                self._engine.subtitle_tracks(), off_label="Off"
-            )
-        except Exception:
-            self._audio_tracks = []
-            self._subtitle_tracks = []
-        self._restore_remembered_tracks()
-        self._auto_select_default_audio()
-        self._refresh_current_tracks(emit=False)
-        self.tracksChanged.emit()
+            try:
+                self._audio_tracks = _track_dicts(self._engine.audio_tracks())
+                self._subtitle_tracks = _track_dicts(
+                    self._engine.subtitle_tracks(), off_label="Off"
+                )
+            except Exception:
+                self._audio_tracks = []
+                self._subtitle_tracks = []
+            self._restore_remembered_tracks()
+            self._auto_select_default_audio()
+            self._refresh_current_tracks(emit=False)
+            self.tracksChanged.emit()
+        finally:
+            self._refreshing_tracks = False
 
     def _auto_select_default_audio(self) -> None:
         """Rescue a file libVLC opened with **no** audio track selected.
@@ -573,12 +579,14 @@ class AppController(QObject):
             real_tracks = [t for t in self._audio_tracks if not t.get("off")]
             if real_tracks:
                 first_track_id = int(real_tracks[0]["id"])
+                # Set flag BEFORE calling engine so synchronous tracksChanged
+                # emissions on the same thread cannot cause recursive calls.
+                self._audio_auto_selected = True
                 try:
                     self._engine.set_audio_track(first_track_id)
                 except Exception:
                     log.debug("could not auto-select audio track", exc_info=True)
                 else:
-                    self._audio_auto_selected = True
                     log.info(
                         "auto-selected first audio track: %s", real_tracks[0].get("label")
                     )

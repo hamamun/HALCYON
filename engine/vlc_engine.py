@@ -315,10 +315,16 @@ class VlcEngine(QObject):
     # Every one of these runs on a *VLC* thread. Emit and get out — Qt queues the
     # delivery to the GUI thread for us.
     def _on_end_reached(self, _event) -> None:
-        self.endReached.emit()
+        try:
+            self.endReached.emit()
+        except Exception:
+            pass
 
     def _on_error(self, _event) -> None:
-        self.errorOccurred.emit(f"Could not play {self._current_mrl or 'media'}")
+        try:
+            self.errorOccurred.emit(f"Could not play {self._current_mrl or 'media'}")
+        except Exception:
+            pass
 
     def _on_state_event(self, _event) -> None:
         pass  # the poll timer publishes state on the GUI thread
@@ -333,7 +339,10 @@ class VlcEngine(QObject):
         pass  # picked up by the poll
 
     def _on_tracks(self, _event) -> None:
-        self.tracksChanged.emit()
+        try:
+            self.tracksChanged.emit()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- poll ---
     def _poll_state(self) -> None:

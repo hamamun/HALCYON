@@ -343,6 +343,7 @@ class VideoSurface(QQuickItem):
     @Slot()
     def _on_frame_gui(self) -> None:
         """GUI thread. Safe to schedule a repaint from here."""
+        self._set_has_video(True)
         self.update()
 
     def _on_video_stopped_threadsafe(self) -> None:
@@ -350,6 +351,7 @@ class VideoSurface(QQuickItem):
 
     @Slot()
     def _on_format_gui(self) -> None:
+        self._set_has_video(True)
         self._recompute_content_rect()
         self.frameFormatChanged.emit()
         self.update()
@@ -467,8 +469,7 @@ class VideoSurface(QQuickItem):
         finally:
             vout.ring.release_read()
 
-        self._set_has_video(True)
-        self.frameRendered.emit()
+        self._has_video = True
         return node
 
     def _plane_view(self, address: int, offset: int, pitch: int, lines: int,
