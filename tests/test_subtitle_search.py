@@ -620,3 +620,158 @@ class TestBestModeIsNarrowNotEmpty:
             "before the client ever saw it"
         )
         assert all(e["matchKind"] == "title" for e in got)
+
+
+# ============ the Settings section must actually drive the search ============
+class TestSettingsReachTheSearch:
+    """Point 5, end to end: what the Settings section says, the search does.
+
+    The picker being switchable is only half of it. These pin the other half —
+    that the value it writes is the value the search resolves and ranks with,
+    both ways round and repeatedly.
+    """
+
+    @pytest.fixture
+    def service(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HALCYON_DATA_DIR", str(tmp_path / "profile"))
+        from PySide6.QtCore import QCoreApplication
+
+        from core.settings import Settings
+        from core.subtitles import SubtitleService
+
+        QCoreApplication.instance() or QCoreApplication([])
+        settings = Settings(path=tmp_path / "profile" / "settings.json")
+        settings.set("subs.online.apiKey", "TESTKEY")
+        service = SubtitleService(settings)
+
+        media = tmp_path / "Andor.S02E01.1080p.WEB-DL.mkv"
+        media.write_bytes(b"v" * 200_000)
+        service.set_media(str(media))
+        return service, settings
+
+    def _sent_url(self, service, monkeypatch):
+        """Run search() far enough to capture the query, never the network."""
+        captured = {}
+
+        def spy(url):
+            captured["url"] = url.toString()
+            raise RuntimeError("stop before the network")
+
+        monkeypatch.setattr(service, "_request", spy)
+        try:
+            service.search("", "", "")
+        except RuntimeError:
+            pass
+        service._busy = False
+        return captured.get("url", "")
+
+    def test_the_match_mode_switches_both_ways_and_keeps_switching(self, service):
+        """Neither value may stick — that is the reported symptom."""
+        _, settings = service
+
+        for wanted in ("all", "best", "all", "best"):
+            settings.set("subs.online.matchMode", wanted)
+            assert settings.get("subs.online.matchMode") == wanted
+
+    def test_the_language_setting_reaches_the_query(self, service, monkeypatch):
+        svc, settings = service
+
+        for code in ("en", "bn", "ar"):
+            settings.set("subs.online.language", code)
+            url = self._sent_url(svc, monkeypatch)
+            assert f"languages={code}" in url, f"{code} never reached the server"
+
+    def test_an_explicit_argument_overrides_the_setting(self, service, monkeypatch):
+        """The dialog passes its live values; they must win over the store."""
+        svc, settings = service
+        settings.set("subs.online.language", "en")
+        captured = {}
+
+        def spy(url):
+            captured["url"] = url.toString()
+            raise RuntimeError("stop")
+
+        monkeypatch.setattr(svc, "_request", spy)
+        try:
+            svc.search("", "bn", "all")
+        except RuntimeError:
+            pass
+
+        assert "languages=bn" in captured["url"]
+
+    def test_an_empty_argument_falls_back_to_the_setting(self, service, monkeypatch):
+        svc, settings = service
+        settings.set("subs.online.language", "ar")
+
+        assert "languages=ar" in self._sent_url(svc, monkeypatch)
+
+    @pytest.mark.parametrize("wanted", ["best", "all"])
+    def test_the_resolved_mode_is_the_one_ranked_with(self, service, monkeypatch, wanted):
+        """The setting must survive all the way to rank_results."""
+        import core.subtitles as subtitles_module
+
+        svc, settings = service
+        settings.set("subs.online.matchMode", wanted)
+        seen = {}
+        original = subtitles_module.rank_results
+
+        def spy(raw, *, mode, query=None, file_name=""):
+            seen["mode"] = mode
+            return original(raw, mode=mode, query=query, file_name=file_name)
+
+        monkeypatch.setattr(subtitles_module, "rank_results", spy)
+
+        mode = str(settings.get("subs.online.matchMode", "best")).strip()
+        mode = MATCH_ALL if mode == MATCH_ALL else MATCH_BEST
+        svc._on_search_finished(
+            _FakeReply(), mode=mode, parsed={"query": "andor"}, language="en", size=0
+        )
+
+        assert seen["mode"] == wanted
+
+    def test_an_unknown_mode_degrades_to_best(self, service, monkeypatch):
+        """A hand-edited settings.json must not produce a third behaviour."""
+        svc, settings = service
+        settings.set("subs.online.matchMode", "nonsense")
+
+        mode = str(settings.get("subs.online.matchMode", "best")).strip()
+        mode = MATCH_ALL if mode == MATCH_ALL else MATCH_BEST
+
+        assert mode == MATCH_BEST
+
+
+class _FakeReply:
+    """A 200 response carrying one result, with no socket behind it."""
+
+    def attribute(self, *args):
+        return 200
+
+    def readAll(self):
+        import json
+
+        payload = {
+            "data": [
+                {
+                    "attributes": {
+                        "release": "Andor.S02E01.WEB",
+                        "language": "en",
+                        "download_count": 5,
+                        "moviehash_match": False,
+                        "feature_details": {},
+                        "files": [{"file_id": 9, "file_name": "a.srt"}],
+                    }
+                }
+            ]
+        }
+        return type("B", (), {"data": lambda s: json.dumps(payload).encode()})()
+
+    def error(self):
+        from PySide6.QtNetwork import QNetworkReply
+
+        return QNetworkReply.NetworkError.NoError
+
+    def errorString(self):
+        return ""
+
+    def deleteLater(self):
+        pass

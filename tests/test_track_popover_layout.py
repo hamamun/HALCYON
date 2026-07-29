@@ -597,3 +597,52 @@ def test_the_description_follows_the_selected_mode():
 
 def test_the_choice_control_is_registered_as_a_qml_type():
     assert "SettingChoice" in _read("Halcyon", "Panels", "qmldir")
+
+
+# ============ point 5, end to end: Settings must reach the search ============
+def test_the_dialog_follows_settings_while_it_is_open():
+    """A dialog left open must not search with a stale match mode.
+
+    `openFor()` re-reads Settings, which covers "change the setting, *then*
+    open the dialog". It does not cover "leave the dialog open and change the
+    setting" — the properties initialise from `Settings.get`, a Slot, so there
+    is no binding to re-evaluate and the Search button went on using whatever
+    mode was current when the dialog last opened. Same trap as the picker
+    itself; this is the other half of it.
+    """
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "Connections {" in source
+    assert 'key === "subs.online.matchMode"' in source, (
+        "the dialog must track a match-mode change made while it is open"
+    )
+    assert 'key === "subs.online.language"' in source, (
+        "and a language change, for the same reason"
+    )
+
+
+def test_the_dialog_re_reads_settings_when_it_opens():
+    """The other half: change the setting, then open the dialog."""
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+    open_for = source.split("function openFor()", 1)[1].split("\n    }", 1)[0]
+
+    assert 'Settings.get("subs.online.matchMode"' in open_for
+    assert 'Settings.get("subs.online.language"' in open_for
+
+
+def test_the_search_button_passes_the_dialogs_live_values():
+    source = _read("ui", "panels", "SubtitleSearchDialog.qml")
+
+    assert "Subtitles.search(\"\", root.language, root.matchMode)" in source, (
+        "the button must send what the dialog currently holds, and the dialog "
+        "must be kept current — see the two tests above"
+    )
+
+
+def test_the_dialog_never_writes_the_settings_back():
+    """It obeys them; it is not a second place to configure them (§4.1)."""
+    source = _code(_read("ui", "panels", "SubtitleSearchDialog.qml"))
+
+    assert "Settings.set(" not in source, (
+        "match mode and language are owned by the Settings dialog, once"
+    )
