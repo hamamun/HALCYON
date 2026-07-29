@@ -446,3 +446,161 @@ class TestGenericTrackNameDetection:
             "Forced", "Track of the Cat", "Soundtrack 2",
         ):
             assert not _is_generic_track_name(name), name
+
+
+class TestDownloadedSubtitleEndToEnd:
+    """Download → save → attach → what the row actually reads.
+
+    Point 2 and point 4 meet here: the click has to work on the first press,
+    the file has to land somewhere that auto-loads next time, and the row has
+    to say something a person can act on.
+    """
+
+    def test_a_bare_dedup_counter_is_not_a_label(self):
+        """`_save` appends ".2" when it refuses to clobber an existing file.
+
+        A download whose language tag the server omitted therefore lands as
+        `Movie.2.srt`, and the row read "2" — the meaningless-number symptom
+        arriving by a different route than the original "Track 2".
+        """
+        from pathlib import Path
+
+        from engine.vlc_engine import _subtitle_label
+
+        assert _subtitle_label(Path("Movie.2.srt"), "Movie") == "Movie.2"
+        assert _subtitle_label(Path("Movie.3.srt"), "Movie") == "Movie.3"
+
+    def test_a_counter_after_a_language_keeps_the_language(self):
+        from pathlib import Path
+
+        from engine.vlc_engine import _subtitle_label
+
+        assert _subtitle_label(Path("Movie.en.2.srt"), "Movie") == "English 2"
+
+    def test_a_downloaded_language_that_duplicates_an_embedded_one(self):
+        """The realistic case, and the one that still read badly.
+
+        A film ships an embedded English track; the user downloads English
+        anyway (the embedded one is out of sync, say). Both resolve to
+        "English", which is exactly as useless as two rows called "Track n".
+        """
+        from engine.vlc_engine import VlcEngine
+
+        engine = VlcEngine.__new__(VlcEngine)
+        engine._external_subtitle_names = {}
+        engine._pending_external_subtitles = []
+        engine._known_spu_ids = set()
+
+        class _Player:
+            def __init__(self):
+                self.tracks = [(-1, "Disable"), (1, "English")]
+
+            def video_get_spu_description(self):
+                return list(self.tracks)
+
+        engine._player = _Player()
+        engine.subtitle_tracks()                      # establish what existed
+
+        engine._player.tracks.append((2, "Track 2"))
+        engine._pending_external_subtitles.append("English")
+
+        labels = [label for _, label in engine.subtitle_tracks()]
+
+        assert labels == ["Disable", "English 1", "English 2"]
+        assert len(set(labels)) == len(labels), "every row must be tellable apart"
+
+    def test_two_different_languages_are_left_alone(self):
+        """Only duplicates get an ordinal; distinct names must not gain one."""
+        from engine.vlc_engine import VlcEngine
+
+        engine = VlcEngine.__new__(VlcEngine)
+        engine._external_subtitle_names = {}
+        engine._pending_external_subtitles = []
+        engine._known_spu_ids = set()
+
+        class _Player:
+            def __init__(self):
+                self.tracks = [(-1, "Disable"), (1, "English")]
+
+            def video_get_spu_description(self):
+                return list(self.tracks)
+
+        engine._player = _Player()
+        engine.subtitle_tracks()
+        engine._player.tracks.append((2, "Track 2"))
+        engine._pending_external_subtitles.append("Bengali")
+
+        assert [label for _, label in engine.subtitle_tracks()] == [
+            "Disable",
+            "English",
+            "Bengali",
+        ]
+
+
+class TestDownloadedSubtitleFilename:
+    """Where a downloaded subtitle lands, and why it is not the server's name.
+
+    OpenSubtitles returns names like
+    ``Andor.S02E01.WEBRip.x264-ION10.English-WWW.MY-SUBS.CO.srt`` — a different
+    release, plus a site advert. Saved verbatim, the stem would not match the
+    video, so neither Halcyon nor VLC nor any other player would auto-load it
+    next time. The extension and the language are taken from the server; the
+    stem is taken from the media.
+    """
+
+    @pytest.fixture
+    def service(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HALCYON_DATA_DIR", str(tmp_path / "profile"))
+        from PySide6.QtCore import QCoreApplication
+
+        from core.settings import Settings
+        from core.subtitles import SubtitleService
+
+        QCoreApplication.instance() or QCoreApplication([])
+        settings = Settings(path=tmp_path / "profile" / "settings.json")
+        return SubtitleService(settings)
+
+    @pytest.fixture
+    def media(self, tmp_path):
+        target = tmp_path / "media" / "Andor.S02E01.1080p.WEB-DL.x265-GROUP.mkv"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"video")
+        return target
+
+    def test_the_saved_stem_matches_the_video(self, service, media):
+        service.set_media(str(media))
+        service._pending_download = {"fileId": 1, "language": "en"}
+
+        saved = service._save(
+            b"x", "Andor.S02E01.WEBRip.x264-ION10.English-WWW.MY-SUBS.CO.srt"
+        )
+
+        assert saved.stem.startswith(media.stem), (
+            "the stem must match the video or nothing will auto-load it"
+        )
+        assert saved.name == f"{media.stem}.en.srt"
+        assert saved.parent == media.parent
+
+    def test_the_server_extension_is_honoured(self, service, media):
+        """The *format* is the server's to decide; the stem is not."""
+        service.set_media(str(media))
+        service._pending_download = {"fileId": 1, "language": "en"}
+
+        saved = service._save(b"x", "whatever.ass")
+
+        assert saved.suffix == ".ass"
+
+    def test_the_saved_file_is_what_auto_load_finds(self, service, media):
+        """The round trip: what _save writes, _auto_load_subtitle must find."""
+        from unittest.mock import MagicMock
+
+        from tests.support import build_controller, null_library
+
+        service.set_media(str(media))
+        service._pending_download = {"fileId": 1, "language": "en"}
+        saved = service._save(b"x", "server-name.srt")
+
+        controller = build_controller(MagicMock(), library=null_library())
+        controller._auto_load_subtitle(str(media))
+
+        controller._engine.add_subtitle_file.assert_called_once_with(str(saved))

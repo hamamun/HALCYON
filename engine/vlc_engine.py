@@ -825,7 +825,12 @@ class VlcEngine(QObject):
         # measured against this state rather than against the file's original
         # track list.
         self._known_spu_ids.update(tid for tid, _ in raw if tid != -1)
-        return result
+        # Downloading English for a film that already carries an embedded
+        # English track leaves two rows reading "English" — as impossible to
+        # tell apart as the "Track 1"/"Track 2" this replaced. Same treatment
+        # as the audio list: only duplicates are touched, and they keep a
+        # stable ordinal so rows do not shuffle between refreshes.
+        return _disambiguate(result)
 
     @staticmethod
     def _is_generic_subtitle_name(name: str) -> bool:
@@ -1210,6 +1215,14 @@ def _subtitle_label(subtitle: Path, media_stem: str) -> str:
     if not remainder:
         # `Movie.srt` next to `Movie.mkv` — nothing to add, so name it after
         # the file rather than after the video it duplicates.
+        return subtitle.stem or "Subtitle"
+
+    # A bare de-duplication counter is not a name. `_save` appends ".2", ".3"
+    # when it refuses to clobber an existing subtitle, so a download whose
+    # language tag the server omitted lands as `Movie.2.srt` — and the row then
+    # read "2", which is the meaningless-number symptom this function exists to
+    # remove, arriving by a different route. Name it after the file instead.
+    if remainder.isdigit():
         return subtitle.stem or "Subtitle"
 
     # Whole-remainder match first, so a regional tag written with the hyphen
