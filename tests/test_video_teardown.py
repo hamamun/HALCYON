@@ -233,6 +233,9 @@ def test_engine_open_retires_the_previous_video(monkeypatch, tmp_path):
     engine._duration = 0
     engine._current_mrl = ""
     engine._scrubbing = False
+    engine._external_subtitle_names = {}
+    engine._pending_external_subtitles = []
+    engine._known_spu_ids = set()
 
     class FakeVout:
         def notify_video_stopped(self):

@@ -371,3 +371,33 @@ class TestSubtitleSelectionIsUntouched:
         controller._refresh_tracks()
 
         assert controller.currentSubtitleId == TRACK_OFF_ID
+
+
+# ----------------------------------- re-entrant track refresh safety ---
+class TestReentrantTrackRefresh:
+    def test_auto_select_default_audio_does_not_recurse_infinitely(self, qt_app):
+        """When set_audio_track emits tracksChanged synchronously, _refresh_tracks
+        must not recurse infinitely and crash the application."""
+        from tests.support import build_controller, null_library
+
+        class _ReentrantEngine(_FakeEngine):
+            def __init__(self):
+                super().__init__(audio=[(-1, "Disable"), (1, "English"), (2, "Hindi")])
+                self.selected_audio = -1
+                self.controller = None
+
+            def set_audio_track(self, track_id):
+                self.selected_audio = int(track_id)
+                if self.controller is not None:
+                    # Simulate synchronous signal emission calling _refresh_tracks
+                    self.controller._refresh_tracks()
+
+        engine = _ReentrantEngine()
+        controller = build_controller(engine, library=null_library())
+        engine.controller = controller
+
+        # Trigger track refresh which triggers auto_select_default_audio
+        controller._refresh_tracks()
+
+        assert controller.currentAudioId == 1
+        assert engine.selected_audio == 1
