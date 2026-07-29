@@ -21,6 +21,11 @@ Item {
     // `videoSurface.hasVideo` prints "Cannot read property of null" on every
     // exit. The guard costs nothing and keeps the shutdown log honest.
     readonly property bool hasVideo: videoSurface ? videoSurface.hasVideo : false
+    // A video has no decoded frame for a short, normal opening interval.
+    // Do not show album art during that interval: artwork is an audio-only
+    // fallback, not a video loading screen.
+    readonly property bool mediaIsVideo: typeof Player !== "undefined" && Player
+                                          ? Player.isVideo : false
     readonly property rect contentRect: videoSurface ? videoSurface.contentRect
                                                      : Qt.rect(0, 0, 0, 0)
 
@@ -103,7 +108,7 @@ Item {
     // never draw over video.
     NowPlayingCard {
         anchors.fill: parent
-        visible: !root.hasVideo
+        visible: !root.hasVideo && !root.mediaIsVideo
         animate: visible
     }
 
