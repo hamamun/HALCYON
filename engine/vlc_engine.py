@@ -1208,7 +1208,12 @@ class VlcEngine(QObject):
         video scene competing with the old texture during a media switch.
         """
         from core.media_types import is_video
-        return is_video(_from_uri(self._current_mrl))
+
+        # VLC stores local media as a file URI (for example,
+        # ``file:///E:/My%20Videos/movie.mkv``).  Classify the decoded local
+        # path, rather than relying on core.app's private helper: the engine
+        # must remain usable independently of the application coordinator.
+        return is_video(paths.normalise_path(self._current_mrl))
 
     @Property(bool, notify=tracksChanged)
     def hasVideo(self) -> bool:  # noqa: N802 - QML-facing

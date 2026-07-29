@@ -13,6 +13,15 @@ def test_has_video_property_exists():
     assert "def hasVideo(self)" in source, "hasVideo QML property must exist"
 
 
+def test_is_video_normalises_vlc_file_uris_without_core_app_helper():
+    """The engine is imported before/without core.app in several entry paths."""
+    source = (Path(__file__).parent.parent / "engine" / "vlc_engine.py").read_text()
+
+    is_video_property = source.split("def isVideo(self)", 1)[1].split("def hasVideo(self)", 1)[0]
+    assert "paths.normalise_path(self._current_mrl)" in is_video_property
+    assert "_from_uri" not in is_video_property
+
+
 def test_has_video_checks_video_tracks():
     """Verify has_video checks for video tracks correctly."""
     source = (Path(__file__).parent.parent / "engine" / "vlc_engine.py").read_text()
