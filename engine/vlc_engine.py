@@ -662,7 +662,90 @@ class VlcEngine(QObject):
             return False
 
     def audio_tracks(self) -> list[tuple[int, str]]:
-        return _describe_tracks(self._player.audio_get_track_description())
+        """Audio tracks, named by **language** wherever the file says one.
+
+        ``audio_get_track_description()`` returns whatever string the muxer
+        put in the track's *title* field, and most releases leave that empty —
+        so libVLC synthesises ``Track 1``, ``Track 2``, ``Audio Track 3``. On a
+        dual-audio file that is the whole problem: two rows, both meaningless,
+        and no way to tell the English dub from the Hindi one without playing
+        each in turn.
+
+        The language is not missing, it is just in a different place. Every
+        elementary stream carries an ISO language code, exposed on the *media*
+        (``media.tracks_get()``) rather than on the player's description list.
+        This joins the two by track id and prefers the language whenever the
+        description is a placeholder:
+
+            (1, "Track 1")  + language "eng"        ->  (1, "English")
+            (2, "Track 2")  + language "hin"        ->  (2, "Hindi")
+            (3, "Commentary") + language "eng"      ->  (3, "Commentary")
+
+        A real title always wins — someone who labelled a track "Director's
+        Commentary" said something the language code cannot. Two tracks that
+        resolve to the *same* language keep a disambiguating suffix, because
+        "English" twice is no better than "Track 1" twice.
+
+        Everything here is best-effort: any failure falls back to libVLC's own
+        description, which is exactly the previous behaviour.
+        """
+        raw = _describe_tracks(self._player.audio_get_track_description())
+        languages = self._track_languages()
+        if not languages:
+            return raw
+
+        named: list[tuple[int, str]] = []
+        for track_id, label in raw:
+            if track_id == -1:
+                named.append((track_id, label))
+                continue
+            language = languages.get(track_id, "")
+            if language and _is_generic_track_name(label):
+                named.append((track_id, language))
+            else:
+                named.append((track_id, label))
+
+        return _disambiguate(named)
+
+    def _track_languages(self) -> dict[int, str]:
+        """``{track id: "English"}`` for every stream the media declares.
+
+        Read from the media rather than the player because that is the only
+        place libVLC exposes the ISO language code. Returns ``{}`` on any
+        problem — a missing language costs a nicer label, never a track.
+        """
+        media = self._media
+        if media is None:
+            return {}
+        try:
+            tracks = media.tracks_get()
+        except Exception:
+            log.debug("media.tracks_get failed", exc_info=True)
+            return {}
+        if not tracks:
+            return {}
+
+        out: dict[int, str] = {}
+        try:
+            for track in tracks:
+                code = getattr(track, "language", None)
+                if isinstance(code, bytes):
+                    code = code.decode("utf-8", "replace")
+                if not code:
+                    continue
+                name = _LANGUAGE_NAMES.get(str(code).strip().lower())
+                if name:
+                    out[int(track.id)] = name
+        except Exception:
+            log.debug("could not read track languages", exc_info=True)
+            return {}
+        finally:
+            # tracks_get() allocates; python-vlc exposes the matching free.
+            try:
+                self._vlc.libvlc_media_tracks_release(tracks, len(tracks))
+            except Exception:
+                log.debug("could not release media track list", exc_info=True)
+        return out
 
     def subtitle_tracks(self) -> list[tuple[int, str]]:
         """Return subtitle tracks, with real names for external subtitles.
@@ -1003,9 +1086,11 @@ def _looks_like_url(value: str) -> bool:
     return url.isValid() and bool(url.scheme()) and len(url.scheme()) > 1
 
 
-#: Language codes/names a sidecar filename commonly ends in, mapped to what a
-#: person would rather read. Only used to *label* a track; nothing routes on it.
-_SUBTITLE_LANGUAGES: dict[str, str] = {
+#: ISO 639-1/2 codes (and the odd spelled-out name) mapped to what a person
+#: would rather read. Used for two things, both purely cosmetic: naming an
+#: *audio* track whose title field the muxer left empty, and reading the
+#: language tag off a subtitle filename. Nothing routes or decides on these.
+_LANGUAGE_NAMES: dict[str, str] = {
     "en": "English", "eng": "English", "english": "English",
     "es": "Spanish", "spa": "Spanish", "spanish": "Spanish",
     "fr": "French", "fra": "French", "fre": "French", "french": "French",
@@ -1049,6 +1134,53 @@ _SUBTITLE_QUALIFIERS: dict[str, str] = {
 }
 
 
+#: libVLC's synthesised names for a stream whose title field is empty. These are
+#: the labels worth replacing with a language; anything else is a real title
+#: somebody chose, and is left alone.
+_GENERIC_TRACK_RE = re.compile(
+    r"""^(
+        (audio|subtitle|spu|video)?\s*track\s*\#?\s*\d+
+      | (audio|subtitle|spu)\s*\#?\s*\d+
+      | \[\s*\d+\s*\]
+      | \d+
+      | track
+      | -
+    )$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_generic_track_name(name: str) -> bool:
+    """Whether a track label is a placeholder rather than a chosen title."""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return True
+    return bool(_GENERIC_TRACK_RE.match(cleaned))
+
+
+def _disambiguate(tracks: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Make repeated labels distinguishable again.
+
+    A file with two English audio streams (a stereo mix and a 5.1 mix, say)
+    resolves both to "English", which is exactly as useless as the "Track 1" /
+    "Track 2" this replaced. Only duplicates are touched, and they keep a
+    stable ordinal so the rows do not shuffle between refreshes.
+    """
+    seen: dict[str, int] = {}
+    for _, label in tracks:
+        seen[label] = seen.get(label, 0) + 1
+
+    used: dict[str, int] = {}
+    out: list[tuple[int, str]] = []
+    for track_id, label in tracks:
+        if seen.get(label, 0) > 1 and track_id != -1:
+            used[label] = used.get(label, 0) + 1
+            out.append((track_id, f"{label} {used[label]}"))
+        else:
+            out.append((track_id, label))
+    return out
+
+
 def _subtitle_label(subtitle: Path, media_stem: str) -> str:
     """A human label for an external subtitle file.
 
@@ -1083,8 +1215,8 @@ def _subtitle_label(subtitle: Path, media_stem: str) -> str:
     # Whole-remainder match first, so a regional tag written with the hyphen
     # that also separates fields — `Movie.pt-BR.srt` — is read as one code
     # rather than split into "pt" and an unknown "BR".
-    if remainder.lower() in _SUBTITLE_LANGUAGES:
-        return _SUBTITLE_LANGUAGES[remainder.lower()]
+    if remainder.lower() in _LANGUAGE_NAMES:
+        return _LANGUAGE_NAMES[remainder.lower()]
 
     parts = [p for p in re.split(r"[ ._-]+", remainder) if p]
     language = ""
@@ -1092,8 +1224,8 @@ def _subtitle_label(subtitle: Path, media_stem: str) -> str:
     unknown: list[str] = []
     for part in parts:
         key = part.lower()
-        if not language and key in _SUBTITLE_LANGUAGES:
-            language = _SUBTITLE_LANGUAGES[key]
+        if not language and key in _LANGUAGE_NAMES:
+            language = _LANGUAGE_NAMES[key]
         elif key in _SUBTITLE_QUALIFIERS and (key != "hi" or language):
             # "hi" is Hindi at the front of the remainder and hearing-impaired
             # after a language has already been read — `Movie.en.hi.srt`.

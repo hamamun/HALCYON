@@ -294,3 +294,155 @@ class TestQualifiedSidecarAutoLoad:
         engine.add_subtitle_file.assert_called_once_with(
             str(tmp_path / "Movie [2021].en.srt")
         )
+
+
+class TestAudioTrackNaming:
+    """Audio tracks must read "English"/"Hindi", not "Track 1"/"Track 2".
+
+    The earlier naming work fixed *subtitles* only; audio was never touched, so
+    a dual-audio file still showed two meaningless rows and the only way to
+    tell the dubs apart was to play each in turn.
+
+    ``audio_get_track_description()`` returns the muxer's *title* field, which
+    most releases leave empty — libVLC then synthesises "Track 1". The language
+    is not missing, it is on the media's elementary-stream list
+    (``media.tracks_get()``), so the two are joined by track id.
+    """
+
+    def _engine(self, description, languages):
+        from engine.vlc_engine import VlcEngine
+
+        class _Track:
+            def __init__(self, tid, language):
+                self.id = tid
+                self.language = language
+
+        class _Media:
+            def __init__(self, tracks):
+                self._tracks = tracks
+
+            def tracks_get(self):
+                return self._tracks
+
+        class _Player:
+            def __init__(self, description):
+                self._description = description
+
+            def audio_get_track_description(self):
+                return list(self._description)
+
+        class _Vlc:
+            def libvlc_media_tracks_release(self, *args):
+                pass
+
+        engine = VlcEngine.__new__(VlcEngine)
+        engine._player = _Player(description)
+        engine._media = (
+            _Media([_Track(tid, code) for tid, code in languages])
+            if languages is not None
+            else None
+        )
+        engine._vlc = _Vlc()
+        return engine
+
+    def test_placeholder_names_become_languages(self):
+        """The reported case, directly."""
+        engine = self._engine(
+            [(-1, "Disable"), (1, "Track 1"), (2, "Track 2")],
+            [(1, "eng"), (2, "hin")],
+        )
+
+        assert engine.audio_tracks() == [
+            (-1, "Disable"),
+            (1, "English"),
+            (2, "Hindi"),
+        ]
+
+    def test_three_letter_and_two_letter_codes_both_work(self):
+        engine = self._engine(
+            [(-1, "Disable"), (1, "Track 1"), (2, "Track 2"), (3, "Track 3")],
+            [(1, "eng"), (2, "ar"), (3, "jpn")],
+        )
+
+        assert [label for _, label in engine.audio_tracks()][1:] == [
+            "English",
+            "Arabic",
+            "Japanese",
+        ]
+
+    def test_a_real_title_beats_the_language_code(self):
+        """Someone who typed "Director's Commentary" said more than "eng"."""
+        engine = self._engine(
+            [(-1, "Disable"), (1, "Track 1"), (2, "Director's Commentary")],
+            [(1, "eng"), (2, "eng")],
+        )
+
+        assert engine.audio_tracks()[2] == (2, "Director's Commentary")
+
+    def test_two_tracks_of_one_language_stay_distinguishable(self):
+        """"English" twice is no better than "Track 1" twice."""
+        engine = self._engine(
+            [(-1, "Disable"), (1, "Track 1"), (2, "Track 2")],
+            [(1, "eng"), (2, "eng")],
+        )
+
+        labels = [label for _, label in engine.audio_tracks()]
+        assert labels == ["Disable", "English 1", "English 2"]
+        assert len(set(labels)) == len(labels), "every row must be unique"
+
+    def test_the_off_row_is_never_renamed(self):
+        engine = self._engine(
+            [(-1, "Disable"), (1, "Track 1")], [(-1, "eng"), (1, "eng")]
+        )
+
+        assert engine.audio_tracks()[0] == (-1, "Disable")
+
+    def test_no_language_information_leaves_the_list_alone(self):
+        """Old behaviour must survive where there is nothing to improve on."""
+        engine = self._engine([(-1, "Disable"), (1, "Track 1")], [])
+
+        assert engine.audio_tracks() == [(-1, "Disable"), (1, "Track 1")]
+
+    def test_an_unknown_language_code_is_not_invented(self):
+        engine = self._engine([(-1, "Disable"), (1, "Track 1")], [(1, "qqq")])
+
+        assert engine.audio_tracks() == [(-1, "Disable"), (1, "Track 1")]
+
+    def test_nothing_open_is_safe(self):
+        engine = self._engine([(-1, "Disable"), (1, "Track 1")], None)
+
+        assert engine.audio_tracks() == [(-1, "Disable"), (1, "Track 1")]
+
+    def test_a_failing_media_never_costs_the_track_list(self):
+        """A nicer label is never worth losing the ability to pick a track."""
+        engine = self._engine([(-1, "Disable"), (1, "Track 1")], [])
+
+        class _Boom:
+            def tracks_get(self):
+                raise RuntimeError("libVLC said no")
+
+        engine._media = _Boom()
+
+        assert engine.audio_tracks() == [(-1, "Disable"), (1, "Track 1")]
+
+
+class TestGenericTrackNameDetection:
+    """Which labels are placeholders worth replacing."""
+
+    def test_the_shapes_libvlc_synthesises_are_generic(self):
+        from engine.vlc_engine import _is_generic_track_name
+
+        for name in (
+            "Track 1", "Track 12", "track 3", "Audio Track 2",
+            "Subtitle Track 1", "Audio #2", "[0]", "7", "  Track 4  ", "", "-",
+        ):
+            assert _is_generic_track_name(name), name
+
+    def test_a_chosen_title_is_not_generic(self):
+        from engine.vlc_engine import _is_generic_track_name
+
+        for name in (
+            "English", "Hindi 5.1", "Director's Commentary",
+            "Forced", "Track of the Cat", "Soundtrack 2",
+        ):
+            assert not _is_generic_track_name(name), name
