@@ -383,3 +383,106 @@ class TestCallbackLifetime:
 
         vout.release_callbacks()  # represents completed MediaPlayer.release()
         assert all(getattr(vout, name) is None for name in names)
+
+
+class TestPicturesLibVlcNeverDisplays:
+    """The regression that made playback die as soon as media loaded.
+
+    libVLC does **not** pair every ``lock`` with a ``display``. In
+    ``src/video_output/video_output.c``, ``ThreadDisplayRenderPicture`` calls
+    ``vout_display_Prepare`` (our ``lock``) and only then decides whether the
+    picture is still worth showing; a picture that is late, or that loses the
+    ``drop_next_frame`` race in ``ThreadDisplayPicture``, is released without
+    ``vout_display_Display`` ever running. That is ordinary behaviour on any
+    machine that misses a frame deadline.
+
+    The write-claim rewrite treated an unpublished lock as a slot that stays
+    reserved forever. Three of those — three dropped frames — exhausted a
+    three-slot ring, ``acquire_write`` returned ``None`` for the rest of the
+    session, and every later lock fell through to the scratch pad, which is
+    never published. The picture froze instantly and the process then died on
+    the freed scratch buffer.
+    """
+
+    def test_ring_survives_pictures_that_are_never_displayed(self):
+        vout, player = attached()
+        call_format(player, 1920, 1080)
+
+        # Every lock here is a picture libVLC prepares and then drops.
+        for _ in range(SLOTS * 4):
+            token, planes = call_lock_with_token(player)
+            assert planes[0], "lock handed VLC a NULL plane"
+            assert token, "lock must always return a usable picture token"
+
+        # A ring that can no longer hand out a real slot is a frozen picture.
+        assert vout.ring.acquire_write() is not None, (
+            "the frame ring wedged after libVLC dropped a few pictures — "
+            "every subsequent lock would fall through to the scratch pad and "
+            "no frame would ever be published again"
+        )
+
+    def test_frames_still_reach_the_ring_when_some_are_dropped(self):
+        vout, player = attached()
+        call_format(player, 1280, 720)
+
+        published = 0
+        for i in range(60):
+            token, _ = call_lock_with_token(player)
+            if i % 4 == 3:
+                continue  # vout dropped this picture: no display callback
+            player.display(None, token)
+            published += 1
+
+        seen, _ = vout.ring.stats()
+        assert seen == published, (
+            f"only {seen} of {published} displayed frames reached the ring"
+        )
+
+    def test_write_claims_stay_bounded_when_pictures_are_dropped(self):
+        """An undisplayed lock must not pin its frame buffer forever."""
+        vout, player = attached()
+        call_format(player, 1920, 1080)
+
+        for _ in range(200):
+            call_lock_with_token(player)  # never displayed
+
+        assert len(vout._write_claims) <= SLOTS, (
+            f"{len(vout._write_claims)} write claims retained; each pins a "
+            "full frame buffer, so this grows without bound over a film"
+        )
+
+
+class TestScratchPadLifetime:
+    """The scratch pad must outlive the decode that was handed it.
+
+    ``lock`` returns the pad's address and *then* libVLC's ``picture_CopyPixels``
+    writes into it. Growing the pad for a larger format used to rebind
+    ``self._scratch``, dropping the last reference so CPython freed the buffer
+    while that copy was still running — a write into freed heap, which corrupts
+    the allocator instead of faulting cleanly.
+    """
+
+    def test_growing_the_pad_does_not_free_the_one_in_use(self):
+        import gc
+        import weakref
+
+        vout, player = attached()
+        call_format(player, 640, 480)
+        vout.ring.free()  # force the next lock onto the scratch pad
+
+        planes = call_lock(player)
+        in_use = [planes[i] for i in range(3)]
+        assert all(in_use), "scratch lock handed VLC a NULL plane"
+
+        pad = vout._scratch
+        ref = weakref.ref(pad)
+        del pad
+
+        # libVLC rebuilds the vout at a larger size while that decode runs.
+        call_format(player, 3840, 2160)
+        gc.collect()
+
+        assert ref() is not None, (
+            "the scratch buffer libVLC is still decoding into was freed by a "
+            "format change — this is a use-after-free on the decoder thread"
+        )
