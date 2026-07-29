@@ -331,8 +331,9 @@ def _build_mode_context(spec, player, controller, settings):
     if spec.id == "local":
         from modes.local.playlist import PlaylistModel
 
-        playlist = PlaylistModel()
+        playlist = PlaylistModel(duration_probe=player.probe_duration)
         playlist.playRequested.connect(lambda path, _row: controller.openPath(path))
+        player.durationChanged.connect(playlist.set_current_duration)
 
         # Restore what the user left set, and — the half that was missing —
         # write it back when it changes. Reading a setting nothing ever saves

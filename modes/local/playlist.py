@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import random
-import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -102,86 +101,34 @@ class _ProbeSignals(QObject):
 
 
 class _ProbeTask(QRunnable):
-    """Ask libVLC how long a file is, off the UI thread."""
+    """Ask the engine's existing libVLC instance for a duration off-thread.
 
-    def __init__(self, path: str, signals: _ProbeSignals) -> None:
+    Creating and releasing a complete ``vlc.Instance`` per playlist row was
+    both expensive and unsafe at media load: the first row auto-started while a
+    second native instance loaded the same file and its plugin graph in parallel.
+    The task now contains no libVLC lifetime logic at all; the engine owns it.
+    """
+
+    def __init__(self, path: str, signals: _ProbeSignals, probe) -> None:
         super().__init__()
         self._path = path
         self._signals = signals
+        self._probe = probe
         self.setAutoDelete(True)
 
     def run(self) -> None:
-        """Probe one file. **Must never raise.**
-
-        This is a ``QRunnable`` override, so an escaping exception surfaces as
-        Qt's "Error calling Python override of QRunnable::run()" on a pool
-        thread with no useful traceback. The whole body is therefore wrapped:
-        during interpreter shutdown even ``import vlc`` or ``log.debug`` can
-        fail, and a probe result is never worth taking the process down for.
-        """
-        try:
-            self._probe()
-        except BaseException:  # noqa: BLE001 - a pool thread must not propagate
-            pass
-
-    def _probe(self) -> None:
-        # Bail before doing any work if the queue was cleared or the app is
-        # quitting — a folder of 500 files leaves a lot of these queued.
+        """Probe one file. **Must never raise from a QRunnable override.**"""
         if self._signals.cancelled:
             return
-        duration = 0
-        instance = media = event_manager = parse_callback = None
-        parsed = threading.Event()
-        parse_event = None
         try:
-            import vlc
+            duration = max(0, int(self._probe(self._path, self._signals)))
+        except BaseException:  # noqa: BLE001 - never unwind through Qt's pool
+            duration = 0
+            try:
+                log.debug("probe failed for %s", self._path, exc_info=True)
+            except BaseException:
+                pass
 
-            instance = vlc.Instance(
-                ["--quiet", "--no-video", "--intf=dummy", "--avcodec-hw=none"]
-            )
-            if instance is not None:
-                media = instance.media_new_path(self._path)
-                if media is not None:
-                    # parse_with_options() is asynchronous. Releasing Media and
-                    # Instance immediately after starting it races libVLC's
-                    # parser thread during every add-to-playlist operation. Keep
-                    # the callback and native objects alive until completion (or
-                    # explicitly stop a timed-out parse) before releasing them.
-                    event_manager = media.event_manager()
-                    parse_event = vlc.EventType.MediaParsedChanged
-
-                    def _parsed(_event):
-                        parsed.set()
-
-                    parse_callback = _parsed  # hard callback reference
-                    event_manager.event_attach(parse_event, parse_callback)
-                    result = media.parse_with_options(vlc.MediaParseFlag.local, 2000)
-                    if result != -1:
-                        parsed.wait(2.2)
-                    if not parsed.is_set():
-                        stop_parse = getattr(media, "parse_stop", None)
-                        if callable(stop_parse):
-                            stop_parse()
-                    duration = max(0, int(media.get_duration()))
-        except Exception:
-            log.debug("probe failed for %s", self._path, exc_info=True)
-        finally:
-            if event_manager is not None and parse_event is not None and parse_callback:
-                try:
-                    event_manager.event_detach(parse_event, parse_callback)
-                except Exception:
-                    pass
-            # Release in reverse order only after the async parser has completed
-            # or been stopped, and never let one failed release strand the other.
-            for obj in (media, instance):
-                if obj is not None:
-                    try:
-                        obj.release()
-                    except Exception:
-                        pass
-
-        # Re-check: the model may have been torn down during the parse above,
-        # and emitting into a deleted QObject raises out of a pool thread.
         if self._signals.cancelled:
             return
         try:
@@ -205,14 +152,18 @@ class PlaylistModel(QAbstractListModel):
     shuffleChanged = Signal()
     playRequested = Signal(str, int)  # path, index
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, duration_probe=None) -> None:
         super().__init__(parent)
         self._tracks: list[Track] = []
         self._current = -1
         self._repeat = RepeatMode.Off
         self._shuffle = False
         self._shuffle_order: list[int] = []
-        self._pool = QThreadPool.globalInstance()
+        self._duration_probe = duration_probe
+        # A private, serial pool prevents a large folder from starting dozens
+        # of native parser jobs at once and lets shutdown cancel only our work.
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
         self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
 
@@ -293,8 +244,15 @@ class PlaylistModel(QAbstractListModel):
         self.endInsertRows()
         self.countChanged.emit()
         self._rebuild_shuffle()
-        for track in incoming:
-            self._pool.start(_ProbeTask(track.path, self._probe_signals))
+        if callable(self._duration_probe):
+            # When this is the first add, AppController immediately plays row
+            # zero. Do not parse that same file in a worker at the exact moment
+            # the player opens it; durationChanged fills it from live playback.
+            first_probe = 1 if start == 0 else 0
+            for track in incoming[first_probe:]:
+                self._pool.start(
+                    _ProbeTask(track.path, self._probe_signals, self._duration_probe)
+                )
         return len(incoming)
 
     def _scan_folder(self, folder: Path) -> list[Track]:
@@ -316,6 +274,20 @@ class PlaylistModel(QAbstractListModel):
                 idx = self.index(row, 0)
                 self.dataChanged.emit(idx, idx, [self.DurationRole])
                 break
+
+    @Slot(int)
+    def set_current_duration(self, duration_ms: int) -> None:
+        """Use the live player's duration for the row it is already playing."""
+        if not (0 <= self._current < len(self._tracks)):
+            return
+        duration = max(0, int(duration_ms))
+        track = self._tracks[self._current]
+        if duration == track.duration_ms and track.probed:
+            return
+        track.duration_ms = duration
+        track.probed = duration > 0
+        idx = self.index(self._current, 0)
+        self.dataChanged.emit(idx, idx, [self.DurationRole])
 
     # ------------------------------------------------------------ removing ---
     @Slot(list, result=bool)
@@ -562,7 +534,8 @@ class PlaylistModel(QAbstractListModel):
         """
         self._probe_signals.cancelled = True
         try:
-            self._pool.waitForDone(2000)
+            self._pool.clear()  # queued rows have not touched libVLC yet
+            self._pool.waitForDone(4000)
         except Exception:
             log.debug("probe pool did not drain cleanly", exc_info=True)
 
