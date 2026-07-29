@@ -123,83 +123,30 @@ Dialog {
             // description spells out what each actually returns, because
             // "best" and "all" mean nothing until you have been surprised by
             // an empty result list once.
-            Column {
+            //
+            // Both the highlight and the paragraph below now hang off
+            // SettingChoice's live `value` property. They used to call
+            // `Settings.get(...)` inline — a slot, not a property, so QML
+            // bound to nothing and never re-evaluated. The picker wrote the
+            // setting correctly and then refused to *look* switched, in either
+            // direction. See ui/panels/SettingChoice.qml.
+            SettingChoice {
+                id: matchModeChoice
                 width: parent.width
-                spacing: Theme.spaceXs
-
-                Row {
-                    width: parent.width
-                    spacing: Theme.spaceSm
-
-                    Text {
-                        width: 140
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Search results"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeBody
-                        color: Theme.text
-                    }
-
-                    Row {
-                        spacing: Theme.spaceXs
-
-                        Repeater {
-                            model: [
-                                { id: "best", label: "Best match" },
-                                { id: "all",  label: "All results" }
-                            ]
-                            delegate: Rectangle {
-                                required property var modelData
-                                readonly property bool isCurrent:
-                                    Settings.get("subs.online.matchMode", "best") === modelData.id
-
-                                width: 104
-                                height: 30
-                                radius: Theme.radiusSmall
-                                color: isCurrent ? Theme.accentDim
-                                     : matchMouse.containsMouse ? Theme.glassFillHover
-                                     : Theme.glassFill
-                                border.width: 1
-                                border.color: isCurrent ? Theme.accent : Theme.glassBorder
-
-                                Behavior on color {
-                                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
-                                }
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData.label
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: parent.isCurrent ? Theme.accent : Theme.textMuted
-                                }
-
-                                MouseArea {
-                                    id: matchMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: Settings.set("subs.online.matchMode", modelData.id)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text {
-                    width: parent.width
-                    text: Settings.get("subs.online.matchMode", "best") === "best"
-                          ? "Best match \u2014 only subtitles the file\u2019s own checksum (or an "
-                            + "exact title and episode) vouches for. Usually one or two rows, "
-                            + "and usually the right one."
-                          : "All results \u2014 everything the search turned up, partial and "
-                            + "approximate matches included, most likely first. Use it when "
-                            + "Best match finds nothing."
-                    wrapMode: Text.WordWrap
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.textFaint
-                }
+                label: "Search results"
+                settingKey: "subs.online.matchMode"
+                defaultValue: "best"
+                options: [
+                    { id: "best", label: "Best match" },
+                    { id: "all",  label: "All results" }
+                ]
+                description: value === "best"
+                      ? "Best match \u2014 only subtitles the file\u2019s own checksum (or an "
+                        + "exact title and episode) vouches for. Usually one or two rows, "
+                        + "and usually the right one."
+                      : "All results \u2014 everything the search turned up, partial and "
+                        + "approximate matches included, most likely first. Use it when "
+                        + "Best match finds nothing."
             }
 
             SettingRow {

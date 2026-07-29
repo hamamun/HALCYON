@@ -53,6 +53,8 @@ def build_controller(engine, *, playlist=None, settings=None, **services):
     controller._resume_ms = 0
     controller._audio_restored = False
     controller._subtitle_restored = False
+    controller._audio_auto_selected = False
+    controller._audio_user_choice = False
     return controller
 
 

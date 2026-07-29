@@ -12,6 +12,7 @@ single edit here (§A.3).
 
 from __future__ import annotations
 
+import glob
 import logging
 from pathlib import Path
 
@@ -110,6 +111,10 @@ class AppController(QObject):
         self._resume_path = ""
         self._audio_restored = False
         self._subtitle_restored = False
+        #: One auto-selection per media, and never over the user (see
+        #: ``_auto_select_default_audio``). Both reset when the media changes.
+        self._audio_auto_selected = False
+        self._audio_user_choice = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -387,6 +392,8 @@ class AppController(QObject):
         self._resume_path = path
         self._audio_restored = False
         self._subtitle_restored = False
+        self._audio_auto_selected = False
+        self._audio_user_choice = False
         self._engine.open(path, resume_ms)
         if resume_ms:
             self.resumePrompted.emit(path, int(resume_ms))
@@ -411,6 +418,10 @@ class AppController(QObject):
         self._resume_path = path
         self._audio_restored = False
         self._subtitle_restored = False
+        # A new file gets a fresh one-shot audio rescue, and owes nothing to
+        # what the user chose for the previous one.
+        self._audio_auto_selected = False
+        self._audio_user_choice = False
         self._library.note_opened(path)
         self._metadata.load(path)
         self._lyrics.load(path)
@@ -444,14 +455,58 @@ class AppController(QObject):
                 log.warning("could not load subtitle %s", Path(path).name)
         self._refresh_tracks()
 
+    #: Sidecar extensions, in the order they are preferred. ``.srt`` first
+    #: because it is the most widely correct; ``.ass``/``.ssa`` next because
+    #: they carry styling worth keeping.
+    _SIDECAR_SUFFIXES = (".srt", ".ass", ".ssa", ".sub", ".vtt")
+
     def _auto_load_subtitle(self, path: str) -> None:
+        """Attach the subtitle sitting next to this file, if there is one.
+
+        Two shapes count as "next to it", and only the first used to:
+
+        * ``Movie.srt`` — the plain sidecar, found with ``with_suffix``;
+        * ``Movie.en.srt`` / ``Movie.en.sdh.srt`` — the *qualified* sidecar.
+
+        The second matters because it is the shape Halcyon's own downloader
+        writes (``core/subtitles._save`` appends the language tag so two
+        languages can coexist). So a subtitle downloaded through the search
+        dialog attached once, for that session, and then silently failed to
+        come back the next time the film was opened — the file was right there
+        on disk and nothing looked for it. "Save next to the video (so they
+        auto-load next time)" is what the Settings row promises; this is the
+        half that makes it true.
+
+        Only one is attached: several are usually the same subtitle in several
+        languages, and adding all of them buries the track list.
+        """
         media = Path(path)
-        for suffix in (".srt", ".ass", ".ssa", ".sub", ".vtt"):
+        if not media.name:
+            return
+
+        for suffix in self._SIDECAR_SUFFIXES:
             sidecar = media.with_suffix(suffix)
             if sidecar.exists():
                 self._engine.add_subtitle_file(str(sidecar))
                 log.info("auto-loaded subtitle %s", sidecar.name)
                 return
+
+        # No plain sidecar — look for a qualified one. Sorted so the choice is
+        # deterministic rather than whatever order the filesystem returns.
+        try:
+            candidates = sorted(
+                child
+                for child in media.parent.glob(f"{glob.escape(media.stem)}.*")
+                if child.is_file() and child.suffix.lower() in self._SIDECAR_SUFFIXES
+            )
+        except OSError:
+            log.debug("could not scan %s for subtitles", media.parent, exc_info=True)
+            return
+
+        for sidecar in candidates:
+            self._engine.add_subtitle_file(str(sidecar))
+            log.info("auto-loaded subtitle %s", sidecar.name)
+            return
 
     # ---------------------------------------------------------------- tracks ---
     def _refresh_tracks(self) -> None:
@@ -477,22 +532,42 @@ class AppController(QObject):
         self.tracksChanged.emit()
 
     def _auto_select_default_audio(self) -> None:
-        """Auto-select the first audio track if none is currently selected.
+        """Rescue a file libVLC opened with **no** audio track selected.
 
         When a video with multiple audio tracks loads, libVLC sometimes defaults
-        to track -1 (disabled), leaving the user with no audio. This ensures
-        that if no audio track is selected and real tracks exist, the first one
-        is automatically selected.
+        to track -1 (disabled), leaving the user with silence. This picks the
+        first real track so sound just works.
+
+        **It fires at most once per media, and never over the user.** That is
+        the whole of the "audio Off will not stay off" bug. Turning audio off is
+        a selection of id -1; every subsequent track refresh — and libVLC raises
+        those freely, on ESAdded/ESDeleted, on an attached .srt, on the poll's
+        heels — saw "current == -1, real tracks exist" and dutifully switched
+        the audio back on. The setter was fighting the user, once per event, so
+        the Off row could never be made to stick.
+
+        Two guards, because they answer two different questions:
+
+        * ``_audio_user_choice`` — did the user express an intent for this file?
+          If so, auto-selection is over for good, whatever they chose.
+        * ``_audio_auto_selected`` — have we already had our one go? A rescue
+          that repeats is indistinguishable from the bug above whenever the
+          engine reports -1 again for an unrelated reason.
+
+        Both reset in ``_on_media_changed``/``openPath``, so the next file gets
+        the same one-shot rescue.
         """
+        if self._audio_user_choice or self._audio_auto_selected:
+            return
         if not self._audio_tracks:
             return
-        
+
         # Check if a real audio track is currently selected
         try:
             current = int(self._engine.current_audio_track())
         except Exception:
             current = -1
-        
+
         # If disabled (-1) and we have real tracks, select the first one
         if current == -1:
             real_tracks = [t for t in self._audio_tracks if not t.get("off")]
@@ -500,9 +575,18 @@ class AppController(QObject):
                 first_track_id = int(real_tracks[0]["id"])
                 try:
                     self._engine.set_audio_track(first_track_id)
-                    log.info("auto-selected first audio track: %s", real_tracks[0].get("label"))
                 except Exception:
                     log.debug("could not auto-select audio track", exc_info=True)
+                else:
+                    self._audio_auto_selected = True
+                    log.info(
+                        "auto-selected first audio track: %s", real_tracks[0].get("label")
+                    )
+        else:
+            # A real track was already live: the rescue was not needed, and must
+            # not lie in wait for the first time the engine transiently reports
+            # -1 (which it does while re-opening a demuxer).
+            self._audio_auto_selected = True
 
     def _restore_remembered_tracks(self) -> None:
         """Re-select the track this file was last watched with.
@@ -597,6 +681,11 @@ class AppController(QObject):
 
     @Slot(int)
     def setAudioTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
+        # Latch *before* the engine call: setting a track makes libVLC raise
+        # tracksChanged, which re-enters _refresh_tracks -> the auto-select
+        # rescue. Latching after would let that rescue undo a switch to Off
+        # before this method had finished making it.
+        self._audio_user_choice = True
         self._engine.set_audio_track(track_id)
         self._refresh_current_tracks()
         self._remember_choice(self._audio_tracks, track_id, "audio")
@@ -626,6 +715,9 @@ class AppController(QObject):
 
     @Slot()
     def cycleAudioTrack(self) -> None:  # noqa: N802 - QML-facing
+        # `A` is a choice exactly as much as clicking a row is — including when
+        # it lands on Off. Same latch, same reason (see setAudioTrack).
+        self._audio_user_choice = True
         self._cycle(self._audio_tracks, self._current_audio, self._engine.set_audio_track)
         self._refresh_current_tracks()
         # `A` is as explicit a choice as clicking the row, so it is remembered

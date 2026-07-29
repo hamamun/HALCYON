@@ -14,8 +14,34 @@ import Halcyon.Ui
 Dialog {
     id: root
 
+    // Live copies of the two Settings values this dialog obeys.
+    //
+    // `Settings.get` is a Slot, not a Q_PROPERTY, so these initialisers are
+    // one-time reads — QML records binding dependencies on properties, and
+    // there is no property here to depend on. That is the same trap that made
+    // the Settings picker itself look broken (see SettingChoice.qml), and it
+    // bit here too: with the dialog left open, changing the match mode in
+    // Settings did not reach the Search button, which went on searching with
+    // whatever mode was current when the dialog was last opened.
+    //
+    // `openFor()` re-reads them, and the Connections below keeps them correct
+    // for a dialog that is already open. Both are needed: the first covers
+    // "open the dialog after changing the setting", the second covers "change
+    // the setting while the dialog is up".
     property string language: Settings.get("subs.online.language", "en")
     property string matchMode: Settings.get("subs.online.matchMode", "best")
+
+    Connections {
+        target: (typeof Settings !== "undefined" && Settings) ? Settings : null
+        enabled: target !== null
+
+        function onChanged(key, value) {
+            if (key === "subs.online.language")
+                root.language = String(value);
+            else if (key === "subs.online.matchMode")
+                root.matchMode = String(value);
+        }
+    }
 
     anchors.centerIn: Overlay.overlay
     width: 620

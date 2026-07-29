@@ -8,4 +8,5 @@ SettingsDialog 1.0 ../../ui/panels/SettingsDialog.qml
 SettingRow 1.0 ../../ui/panels/SettingRow.qml
 SettingSelect 1.0 ../../ui/panels/SettingSelect.qml
 SettingField 1.0 ../../ui/panels/SettingField.qml
+SettingChoice 1.0 ../../ui/panels/SettingChoice.qml
 SubtitleSearchDialog 1.0 ../../ui/panels/SubtitleSearchDialog.qml

@@ -41,14 +41,19 @@ Rectangle {
         }
     }
 
-    default property alias content: contentArea.data
-    Item {
-        id: contentArea
-        anchors.fill: parent
-        anchors.leftMargin: Theme.spaceMd
-        anchors.rightMargin: Theme.spaceSm
-    }
-
+    // The row's own hit area is declared **before** the content on purpose.
+    //
+    // Siblings stack in declaration order, so a MouseArea declared last sits on
+    // top of everything the row contains — including any real control a caller
+    // puts in it. That is what swallowed the first press on the search dialog's
+    // per-result "Download" button: the button never saw the click, the row did,
+    // and only the row's `doubleClicked` (wired to the same download) appeared
+    // to work. Hence "it only downloads on a double click".
+    //
+    // Declared first, the content paints and handles events above it, while
+    // plain Text/Item children — which accept no mouse events — still let a
+    // click fall through to this area. Rows stay clickable; buttons inside them
+    // work on the first click.
     MouseArea {
         id: hoverArea
         anchors.fill: parent
@@ -61,5 +66,13 @@ Rectangle {
                 root.clicked(mouse);
         }
         onDoubleClicked: function(mouse) { root.doubleClicked(mouse) }
+    }
+
+    default property alias content: contentArea.data
+    Item {
+        id: contentArea
+        anchors.fill: parent
+        anchors.leftMargin: Theme.spaceMd
+        anchors.rightMargin: Theme.spaceSm
     }
 }
