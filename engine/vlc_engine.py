@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from enum import IntEnum
 from pathlib import Path
 
@@ -247,6 +248,11 @@ class VlcEngine(QObject):
         self._current_mrl = ""
         self._releasing = False
         self._scrubbing = False
+        # Probe media whose parser failed to acknowledge cancellation are kept
+        # alive rather than released under a native parser thread. This should
+        # stay empty; a bounded parse timeout normally always emits completion.
+        self._deferred_probe_media: list = []
+        self._deferred_probe_lock = threading.Lock()
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -458,7 +464,19 @@ class VlcEngine(QObject):
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
-        media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
+        # Start exactly one parse for this media. Metadata retries only read
+        # snapshots; starting another parse on each retry used to overlap
+        # several native parser operations with decoder startup.
+        parse_flags = self._vlc.MediaParseFlag.local.value
+        fetch_local = getattr(self._vlc.MediaParseFlag, "fetch_local", None)
+        if fetch_local is not None:
+            parse_flags |= fetch_local.value
+        try:
+            media.parse_with_options(parse_flags, 3000)
+        except Exception:
+            # Playback does its own stream discovery, so a preparse failure may
+            # cost tags/artwork but must never prevent the file from opening.
+            log.debug("media preparse could not be started for %s", mrl, exc_info=True)
         self._media = media
         self._player.set_media(media)
         self._current_mrl = mrl
@@ -466,6 +484,87 @@ class VlcEngine(QObject):
         self._player.play()
         if start_ms > 0:
             QTimer.singleShot(300, lambda: self.seek(start_ms))
+
+    def probe_duration(self, path: str, cancellation=None) -> int:
+        """Parse one queued file on the existing libVLC instance.
+
+        Called only by Local's private one-thread probe pool. Keeping instance
+        ownership here avoids constructing/releasing a whole native VLC runtime
+        for every row while another instance is opening the file for playback.
+        The first, auto-played row is not probed at all; its live duration fills
+        the model through ``durationChanged``.
+        """
+        instance = self._instance
+        if instance is None or self._releasing or not path:
+            return 0
+
+        media = event_manager = callback = None
+        parsed = threading.Event()
+        parse_event = None
+        completed = False
+        parse_started = False
+        try:
+            media = instance.media_new_path(str(Path(path).expanduser().resolve()))
+            if media is None:
+                return 0
+            event_manager = media.event_manager()
+            parse_event = self._vlc.EventType.MediaParsedChanged
+
+            def _parsed(_event):
+                parsed.set()
+
+            callback = _parsed  # hard reference until detach below
+            event_manager.event_attach(parse_event, callback)
+            result = media.parse_with_options(self._vlc.MediaParseFlag.local, 1500)
+            if result == -1:
+                return 0
+            parse_started = True
+            try:
+                completed = _enum_int(media.get_parsed_status()) > 0
+            except Exception:
+                pass
+
+            # Poll cancellation so playlist shutdown does not need to wait for
+            # the full parser timeout merely to discover it was cancelled.
+            for _ in range(20):
+                if completed or parsed.wait(0.1):
+                    completed = True
+                    break
+                if cancellation is not None and getattr(cancellation, "cancelled", False):
+                    break
+
+            if not completed:
+                stop_parse = getattr(media, "parse_stop", None)
+                if callable(stop_parse):
+                    stop_parse()
+                # parse_stop promises a ParsedChanged(timeout) event. Do not
+                # release until that acknowledgement, because the parser still
+                # owns the Media pointer until then.
+                completed = parsed.wait(1.0)
+            if not completed:
+                return 0
+            return max(0, int(media.get_duration()))
+        except Exception:
+            log.debug("duration probe failed for %s", path, exc_info=True)
+            return 0
+        finally:
+            if event_manager is not None and parse_event is not None and callback:
+                try:
+                    event_manager.event_detach(parse_event, callback)
+                except Exception:
+                    pass
+            if media is not None:
+                if completed or not parse_started:
+                    try:
+                        media.release()
+                    except Exception:
+                        pass
+                else:
+                    # Safety beats reclaiming one tiny descriptor. Releasing
+                    # here is the exact parse-thread use-after-free fixed in the
+                    # previous round. Keep it until process teardown instead.
+                    with self._deferred_probe_lock:
+                        self._deferred_probe_media.append(media)
 
     @Slot()
     def play(self) -> None:

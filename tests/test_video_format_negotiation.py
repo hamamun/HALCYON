@@ -88,6 +88,21 @@ def call_lock(player):
     return call_lock_with_token(player)[1]
 
 
+def call_unlock(player, token, planes):
+    player.unlock(
+        None, token, ctypes.cast(planes, ctypes.POINTER(ctypes.c_void_p))
+    )
+
+
+def call_frame(player, *, display=True):
+    """Drive the exact vmem.c sequence for one copied picture."""
+    token, planes = call_lock_with_token(player)
+    call_unlock(player, token, planes)
+    if display:
+        player.display(None, token)
+    return token, planes
+
+
 def attached(chroma=Chroma.I420):
     vout = VideoOutput(chroma)
     player = FakePlayer()
@@ -253,27 +268,27 @@ class TestLockContract:
         # what matters is that we did not crash and did not lie about a buffer.
         assert planes[0] in (None, 0) or planes[0] > 0
 
-    def test_picture_token_identifies_the_buffer_displayed_out_of_order(self):
-        """display must publish its lock token, not a mutable global index."""
+    def test_picture_is_published_only_after_unlock_then_display(self):
+        """Drive the callback order used by VLC 3's vmem.c."""
         vout, player = attached()
         call_format(player, 64, 48)
-        first_token, first_planes = call_lock_with_token(player)
-        second_token, second_planes = call_lock_with_token(player)
-        assert first_token and second_token and first_token != second_token
-        assert first_planes[0] != second_planes[0]
+        token, planes = call_lock_with_token(player)
 
-        # VLC is allowed to complete/display pictures in clock order rather than
-        # lock order. The second token must publish the second allocation.
-        player.display(None, second_token)
+        # display-before-unlock is held rather than exposing a half-copied slot.
+        player.display(None, token)
+        assert vout.ring.acquire_read() is None
+        call_unlock(player, token, planes)
+
         claim = vout.ring.acquire_read()
         assert claim is not None
-        assert claim.address == second_planes[0]
+        assert claim.address == planes[0]
         vout.ring.release_read(claim)
 
     def test_late_display_from_an_old_format_is_not_published(self):
         vout, player = attached()
         call_format(player, 64, 48)
-        stale_token, _ = call_lock_with_token(player)
+        stale_token, stale_planes = call_lock_with_token(player)
+        call_unlock(player, stale_token, stale_planes)
 
         call_format(player, 1920, 1080)
         player.display(None, stale_token)
@@ -334,7 +349,8 @@ class TestCallbackRobustness:
             raise RuntimeError("handler blew up")
 
         vout.frame_ready = explode
-        token, _ = call_lock_with_token(player)
+        token, planes = call_lock_with_token(player)
+        call_unlock(player, token, planes)
         player.display(None, token)  # must not raise
         assert vout.ring.serial == 1
 
@@ -386,40 +402,28 @@ class TestCallbackLifetime:
 
 
 class TestPicturesLibVlcNeverDisplays:
-    """The regression that made playback die as soon as media loaded.
+    """Dropped displays are normal, but every vmem lock is still unlocked.
 
-    libVLC does **not** pair every ``lock`` with a ``display``. In
-    ``src/video_output/video_output.c``, ``ThreadDisplayRenderPicture`` calls
-    ``vout_display_Prepare`` (our ``lock``) and only then decides whether the
-    picture is still worth showing; a picture that is late, or that loses the
-    ``drop_next_frame`` race in ``ThreadDisplayPicture``, is released without
-    ``vout_display_Display`` ever running. That is ordinary behaviour on any
-    machine that misses a frame deadline.
-
-    The write-claim rewrite treated an unpublished lock as a slot that stays
-    reserved forever. Three of those — three dropped frames — exhausted a
-    three-slot ring, ``acquire_write`` returned ``None`` for the rest of the
-    session, and every later lock fell through to the scratch pad, which is
-    never published. The picture froze instantly and the process then died on
-    the freed scratch buffer.
+    VLC 3's vmem.c has one ``sys->pic_opaque`` and performs
+    ``lock -> copy -> unlock`` inside Prepare. Display is optional. Therefore
+    the next lock is the exact point where an unlocked, undisplayed claim is
+    known to be abandoned. Tests must include unlock; calling lock repeatedly
+    without it does not model vmem and encouraged the unsafe slot recycling
+    that caused the fourth media-load crash.
     """
 
     def test_ring_survives_pictures_that_are_never_displayed(self):
         vout, player = attached()
         call_format(player, 1920, 1080)
 
-        # Every lock here is a picture libVLC prepares and then drops.
         for _ in range(SLOTS * 4):
-            token, planes = call_lock_with_token(player)
+            token, planes = call_frame(player, display=False)
             assert planes[0], "lock handed VLC a NULL plane"
-            assert token, "lock must always return a usable picture token"
+            assert token, "a real ring reservation needs a picture token"
 
-        # A ring that can no longer hand out a real slot is a frozen picture.
-        assert vout.ring.acquire_write() is not None, (
-            "the frame ring wedged after libVLC dropped a few pictures — "
-            "every subsequent lock would fall through to the scratch pad and "
-            "no frame would ever be published again"
-        )
+        token, planes = call_frame(player)
+        assert token and planes[0]
+        assert vout.ring.serial == 1
 
     def test_frames_still_reach_the_ring_when_some_are_dropped(self):
         vout, player = attached()
@@ -427,29 +431,60 @@ class TestPicturesLibVlcNeverDisplays:
 
         published = 0
         for i in range(60):
-            token, _ = call_lock_with_token(player)
-            if i % 4 == 3:
-                continue  # vout dropped this picture: no display callback
-            player.display(None, token)
-            published += 1
+            call_frame(player, display=(i % 4 != 3))
+            if i % 4 != 3:
+                published += 1
 
         seen, _ = vout.ring.stats()
-        assert seen == published, (
-            f"only {seen} of {published} displayed frames reached the ring"
-        )
+        assert seen == published
 
     def test_write_claims_stay_bounded_when_pictures_are_dropped(self):
-        """An undisplayed lock must not pin its frame buffer forever."""
         vout, player = attached()
         call_format(player, 1920, 1080)
 
         for _ in range(200):
-            call_lock_with_token(player)  # never displayed
+            call_frame(player, display=False)
 
-        assert len(vout._write_claims) <= SLOTS, (
-            f"{len(vout._write_claims)} write claims retained; each pins a "
-            "full frame buffer, so this grows without bound over a film"
-        )
+        # The last unlocked picture remains eligible until the next lock; all
+        # predecessors were conclusively abandoned at a later lock.
+        assert len(vout._write_claims) == 1
+
+    def test_a_slot_is_never_recycled_before_unlock(self):
+        """lock returns before picture_CopyPixels, so active memory is sacred."""
+        vout, player = attached()
+        call_format(player, 64, 48)
+
+        active = [call_lock_with_token(player) for _ in range(SLOTS)]
+        addresses = [planes[0] for _token, planes in active]
+        assert len(set(addresses)) == SLOTS
+
+        scratch_token, scratch_planes = call_lock_with_token(player)
+        assert scratch_token in (None, 0)
+        assert scratch_planes[0]
+        assert scratch_planes[0] not in addresses
+
+        # Finish the synthetic active callbacks so cleanup has no live copy.
+        for token, planes in active:
+            call_unlock(player, token, planes)
+
+    def test_tokens_do_not_alias_when_a_ring_address_is_reused(self):
+        vout, player = attached()
+        call_format(player, 64, 48)
+
+        old_token, old_planes = call_frame(player, display=False)
+        tokens = {old_token}
+        addresses = {old_planes[0]}
+        for _ in range(SLOTS * 3):
+            token, planes = call_frame(player, display=False)
+            assert token not in tokens
+            tokens.add(token)
+            addresses.add(planes[0])
+
+        assert len(addresses) <= SLOTS
+        # A stale callback cannot publish whichever newer reservation happens
+        # to use the same address now.
+        player.display(None, old_token)
+        assert vout.ring.serial == 0
 
 
 class TestScratchPadLifetime:

@@ -47,6 +47,7 @@ class Metadata(QObject):
         self._details: list[dict] = []
         self._path = ""
         self._retries = 0
+        self._generation = 0
 
     @Slot(str)
     def load(self, path: str) -> None:
@@ -60,13 +61,15 @@ class Metadata(QObject):
         """
         self._reset()
         self._retries = 0
+        self._generation += 1
+        generation = self._generation
         if not path:
             self.changed.emit()
             return
         self._path = path
-        self._read(path)
+        self._read(path, generation)
 
-    def _read(self, path: str) -> None:
+    def _read(self, path: str, generation: int) -> None:
         file_path = Path(paths.normalise_path(path))
         self._title = file_path.stem
         details = [
@@ -80,21 +83,13 @@ class Metadata(QObject):
             player = getattr(self._engine, "raw_player", None)
             media = player.get_media() if player is not None else None
             if media is not None:
-                # `local` alone parses the *stream* but never goes looking for
-                # cover art, so ArtworkURL came back empty for every file and
-                # the album-art slot was permanently blank. `fetch_local` is
-                # the flag that extracts embedded covers and picks up
-                # folder.jpg / cover.jpg next to the file. The two are a
-                # bitmask, so they combine.
-                #
-                # MediaParseFlag members are ctypes enums; OR-ing them needs
-                # their .value, and the result is passed back as a plain int.
-                flags = (
-                    vlc.MediaParseFlag.local.value
-                    | vlc.MediaParseFlag.fetch_local.value
-                )
-                media.parse_with_options(flags, 3000)
-
+                # VlcEngine starts one asynchronous local+art parse when it
+                # creates the media. Do not start it again here: this method is
+                # retried while metadata arrives, and the old code launched a
+                # new parser on every retry while playback was opening. Besides
+                # needless work, concurrent parser operations on the media were
+                # part of the crash-prone load path this retry is meant to make
+                # tolerant. Reads are snapshots; a later timer picks up results.
                 def meta(key):
                     try:
                         value = media.get_meta(key)
@@ -157,13 +152,14 @@ class Metadata(QObject):
         # so a file that genuinely has no tags does not retry forever.
         if self._retries < self._MAX_RETRIES and not (self._artist or self._artwork):
             self._retries += 1
-            QTimer.singleShot(400, self._retry)
+            QTimer.singleShot(400, lambda: self._retry(generation))
 
-    def _retry(self) -> None:
-        # The user may have skipped to another track while we waited; only
-        # refresh if this is still the file on air.
-        if self._path:
-            self._read(self._path)
+    def _retry(self, generation: int) -> None:
+        # A single-shot from the previous media may fire after the user skips.
+        # Generation identity prevents it from consuming the new file's retry
+        # budget or reading native track data for the wrong media.
+        if generation == self._generation and self._path:
+            self._read(self._path, generation)
 
     def _reset(self) -> None:
         self._title = ""
