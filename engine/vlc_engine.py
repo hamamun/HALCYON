@@ -453,11 +453,26 @@ class VlcEngine(QObject):
         except Exception:
             log.debug("could not reset the video surface for new media", exc_info=True)
 
+        # Do not release a Media object while the player can still be using it.
+        # The old code only released ``self._media`` here.  On a rapid
+        # audio/video switch libVLC was still parsing/decoding that object while
+        # Python freed it, which is a native use-after-free: it explains both
+        # the intermittent crash and the misleading symptom where the previous
+        # video/album-art surface remained visible.  Stop and detach first,
+        # exactly as shutdown does.
         if self._media is not None:
+            try:
+                self._player.stop()
+            except Exception:
+                log.debug("could not stop previous media", exc_info=True)
+            try:
+                self._player.set_media(None)
+            except Exception:
+                log.debug("could not detach previous media", exc_info=True)
             try:
                 self._media.release()
             except Exception:
-                pass
+                log.debug("could not release previous media", exc_info=True)
             self._media = None
 
         media = self._instance.media_new(mrl)
@@ -1181,6 +1196,19 @@ class VlcEngine(QObject):
     @Property(str, notify=mediaChanged)
     def currentMedia(self) -> str:  # noqa: N802 - QML-facing
         return self._current_mrl
+
+    @Property(bool, notify=mediaChanged)
+    def isVideo(self) -> bool:  # noqa: N802 - QML-facing
+        """Whether the selected file is expected to contain video.
+
+        This is deliberately separate from ``hasVideo``.  ``hasVideo`` means
+        that a decoded frame is available, so it is false during normal video
+        startup.  Using that transient value to choose the artwork card makes
+        every video briefly look like an audio track and can also leave the
+        video scene competing with the old texture during a media switch.
+        """
+        from core.media_types import is_video
+        return is_video(_from_uri(self._current_mrl))
 
     @Property(bool, notify=tracksChanged)
     def hasVideo(self) -> bool:  # noqa: N802 - QML-facing

@@ -23,13 +23,15 @@ from pathlib import Path
 #: Extensions Add Folder will pick up (§P1.5). Deliberately generous — libVLC
 #: plays far more than this, but a recursive scan should not hoover up .txt.
 VIDEO_EXTENSIONS = frozenset({
-    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mts", ".flv",
-    ".webm", ".mpg", ".mpeg", ".m4v", ".3gp", ".ogv", ".vob", ".divx", ".rmvb",
+    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".asf", ".ts", ".m2ts", ".mts",
+    ".mxf", ".flv", ".f4v", ".webm", ".mpg", ".mpeg", ".m4v", ".3gp",
+    ".ogv", ".vob", ".divx", ".rmvb", ".m2v", ".h264", ".264", ".hevc",
 })
 
 AUDIO_EXTENSIONS = frozenset({
-    ".mp3", ".flac", ".aac", ".opus", ".ogg", ".wav", ".m4a", ".wma", ".alac",
-    ".ape", ".aiff", ".dsf", ".mka", ".mpc",
+    ".mp3", ".flac", ".aac", ".opus", ".ogg", ".oga", ".wav", ".m4a", ".wma",
+    ".alac", ".ape", ".aiff", ".aif", ".aifc", ".dsf", ".dff", ".mka", ".mpc",
+    ".m4b", ".m4p", ".mpga", ".caf", ".amr", ".3ga", ".mid", ".midi",
 })
 
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
