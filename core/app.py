@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import modes as mode_registry
 from core import paths
@@ -116,6 +116,12 @@ class AppController(QObject):
         #: media — the only trace libVLC leaves of an add_slave spu is its
         #: file name, so classification matches on it (see _split_* below).
         self._external_sub_files: list[str] = []
+        #: Ground-truth {spu_id -> full path} for every file attached via
+        #: add_slave during this media. Populated from a before/after diff of
+        #: the SPU list — the only race-proof way to bind an add_slave spu to
+        #: the file that produced it (libVLC's SPU description on many builds
+        #: is "Track N", not the file name).
+        self._local_subtitle_map: dict[int, str] = {}
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -399,6 +405,7 @@ class AppController(QObject):
         # External files belong to the media they were attached to; a new
         # media starts with a clean list before its sidecar is auto-loaded.
         self._external_sub_files = []
+        self._local_subtitle_map = {}
         self.mediaNameChanged.emit()
         if self._settings.get("subs.autoLoadSidecar", True):
             self._auto_load_subtitle(path)
@@ -438,18 +445,73 @@ class AppController(QObject):
 
     def _load_external_subtitle(self, path: str) -> bool:
         """The one attach path for subtitle *files* — auto sidecar, user-picked,
-        drag-and-drop and downloaded all arrive here (§4.1)."""
+        drag-and-drop and downloaded all arrive here (§4.1).
+
+        After the slave is attached the SPU list is diffed before/after so the
+        new spu id can be bound to *this* file — that mapping is what lets the
+        Local subtitles section show the real file name (VLC's spu description
+        for a slave is often just "Track N"). The diff is scheduled on a short
+        timer because libVLC parses the file asynchronously; the new id shows
+        up milliseconds after add_slave returns.
+        """
+        # Snapshot the SPU ids that already exist — anything new that appears
+        # after add_slave is a strong candidate for being this file.
+        try:
+            before_ids = {tid for tid, _label in self._engine.subtitle_tracks()}
+        except Exception:
+            before_ids = set()
+
         ok = self._engine.add_subtitle_file(path)
-        if ok:
-            name = Path(path).name
-            if name not in self._external_sub_files:
-                self._external_sub_files.append(name)
-        return ok
+        if not ok:
+            return False
+
+        name = Path(path).name
+        if name not in self._external_sub_files:
+            self._external_sub_files.append(name)
+
+        # Poll a few times — libVLC may take a beat to register the slave, and
+        # a single-shot at 150 ms is not always long enough on a busy machine.
+        # Attempts are cheap (a getter call each) and stop the moment the id
+        # is found. `path` is captured by value; the map is safe to mutate
+        # from the GUI thread these callbacks land on.
+        attempts = {"n": 0}
+
+        def poll_for_slave_id() -> None:
+            attempts["n"] += 1
+            try:
+                current = self._engine.subtitle_tracks()
+            except Exception:
+                current = []
+            new_ids = [tid for tid, _label in current if tid not in before_ids]
+            if new_ids:
+                # If multiple ids appeared (rare — a second slave started at
+                # the same time), take the lowest not already mapped.
+                sub_map = getattr(self, "_local_subtitle_map", None)
+                if sub_map is None:
+                    sub_map = {}
+                    self._local_subtitle_map = sub_map
+                for tid in sorted(new_ids):
+                    if tid not in sub_map:
+                        sub_map[tid] = path
+                        break
+                self._refresh_tracks()
+                return
+            if attempts["n"] < 8:  # up to ~1.2 s total
+                QTimer.singleShot(150, poll_for_slave_id)
+            else:
+                # Give up: the name-based fallback in _refresh_tracks will
+                # still place it under Local subtitles when the label carries
+                # the file name; otherwise it stays under Subtitles rather
+                # than misclassify the wrong track.
+                self._refresh_tracks()
+
+        QTimer.singleShot(150, poll_for_slave_id)
+        return True
 
     # ---------------------------------------------------------------- tracks ---
     def _refresh_tracks(self) -> None:
         try:
-            self._audio_tracks = [
+            raw_audio = [
                 {"id": tid, "label": label} for tid, label in self._engine.audio_tracks()
             ]
             subs = [
@@ -458,14 +520,56 @@ class AppController(QObject):
             self._current_audio_id = self._engine.current_audio_track()
             self._current_subtitle_id = self._engine.current_subtitle_track()
         except Exception:
-            self._audio_tracks = []
+            raw_audio = []
             subs = []
             self._current_audio_id = -1
             self._current_subtitle_id = -1
+
+        # Audio: libVLC surfaces a synthetic (-1, "Disable") row at the top of
+        # every audio_get_track_description(). Mute already covers turning
+        # audio off (§P1.4), so exposing a second control for the same thing
+        # is redundant — and, worse, its id (-1) is what the engine also
+        # returns for "no selection yet", which is the reason the popover
+        # highlighted Disable while a real track was playing.
+        self._audio_tracks = [t for t in raw_audio if t["id"] != -1]
+
+        # If the engine has not settled on a real selection yet, treat the
+        # first real track as current so the popover paints its highlight on
+        # what is actually coming out of the speakers.
+        if self._current_audio_id == -1 and self._audio_tracks:
+            self._current_audio_id = self._audio_tracks[0]["id"]
+
         self._subtitle_tracks = subs
-        self._embedded_subtitle_tracks, self._local_subtitle_tracks = (
-            _split_subtitle_tracks(subs, self._external_sub_files)
-        )
+
+        # Local vs embedded classification. The authoritative source is the
+        # {spu_id -> file_path} map populated at add_slave time — id-matching
+        # is race-proof against VLC labels being "Track N" instead of the
+        # file name. Anything not in the map falls back to the file-name
+        # matcher for tests and for old sessions without a map entry.
+        local_map = getattr(self, "_local_subtitle_map", {}) or {}
+        embedded: list[dict] = []
+        local: list[dict] = []
+        for track in subs:
+            if track["id"] in local_map:
+                # Replace VLC's generic label with the real file name — that
+                # is the whole point of the Local subtitles section.
+                local.append({
+                    "id": track["id"],
+                    "label": Path(local_map[track["id"]]).name,
+                })
+            else:
+                embedded.append(track)
+        # Fallback: names in _external_sub_files that never got mapped to an
+        # id (e.g. a sidecar added before the map existed) still route via the
+        # cosmetic-key matcher.
+        if getattr(self, "_external_sub_files", None):
+            extra_embedded, extra_local = _split_subtitle_tracks(
+                embedded, self._external_sub_files
+            )
+            embedded = extra_embedded
+            local = local + extra_local
+        self._embedded_subtitle_tracks = embedded
+        self._local_subtitle_tracks = local
         self.tracksChanged.emit()
 
     @Property("QVariantList", notify=tracksChanged)

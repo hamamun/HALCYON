@@ -107,54 +107,73 @@ Popover {
 
     // One row implementation for both result sections (§4.1) — a Repeater in
     // Best matches and the ListView in More results both delegate to this.
+    //
+    // The download button is a *sibling* of the ListRow rather than a child of
+    // its content: ListRow's own MouseArea fills the row and, being declared
+    // after the content slot, would consume every click before a nested
+    // AbstractButton could see it. Layering the button on top of the row at
+    // the same level keeps the row's hover feedback and lets the button
+    // receive clicks — one MouseArea per interactive rectangle, no overlap.
     Component {
         id: resultRow
 
-        ListRow {
+        Item {
+            id: rowWrap
             required property var modelData
             width: ListView.view ? ListView.view.width : (parent ? parent.width : 0)
             height: 40
 
-            Column {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.right: downloadButton.left
-                anchors.rightMargin: Theme.spaceSm
-                spacing: 1
+            ListRow {
+                id: rowBg
+                anchors.fill: parent
 
-                Text {
-                    width: parent.width
-                    text: modelData.name
-                    elide: Text.ElideMiddle
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.text
-                }
-                Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: modelData.lang.toUpperCase()
-                        + "  ·  " + root.formatCount(modelData.downloads) + " downloads"
-                        + (modelData.hd ? "  ·  HD" : "")
-                        + (modelData.trusted ? "  ·  trusted" : "")
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.textFaint
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    // Leave room for the download button that sits over the
+                    // row's right edge (30 px button + a small breathing gap).
+                    anchors.right: parent.right
+                    anchors.rightMargin: 40
+                    spacing: 1
+
+                    Text {
+                        width: parent.width
+                        text: rowWrap.modelData.name
+                        elide: Text.ElideMiddle
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.text
+                    }
+                    Text {
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: rowWrap.modelData.lang.toUpperCase()
+                            + "  ·  " + root.formatCount(rowWrap.modelData.downloads) + " downloads"
+                            + (rowWrap.modelData.hd ? "  ·  HD" : "")
+                            + (rowWrap.modelData.trusted ? "  ·  trusted" : "")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.textFaint
+                    }
                 }
             }
 
             IconButton {
                 id: downloadButton
                 anchors.right: parent.right
+                anchors.rightMargin: Theme.spaceXs
                 anchors.verticalCenter: parent.verticalCenter
+                z: 1
                 glyph: Glyphs.download
                 iconSize: 15
                 implicitWidth: 30
                 implicitHeight: 30
                 tooltip: "Download and load"
-                active: root.subs ? root.subs.busyIndex === modelData.idx : false
+                active: root.subs ? root.subs.busyIndex === rowWrap.modelData.idx : false
                 enabled: root.subs ? root.subs.busyIndex === -1 : false
-                onClicked: root.subs.download(modelData.idx)
+                onClicked: {
+                    if (root.subs) root.subs.download(rowWrap.modelData.idx)
+                }
             }
         }
     }

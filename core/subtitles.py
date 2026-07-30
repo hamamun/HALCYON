@@ -495,10 +495,16 @@ def _default_transport_bytes(url: str, api_key: str):
 
 
 def _run_search(transport, query: str, langs: list[str], key: str):
-    """Worker half of ``search()`` — runs off the GUI thread."""
+    """Worker half of ``search()`` — runs off the GUI thread.
+
+    The API is queried *without* a ``languages`` filter so the full catalogue
+    for the title comes back; the language-aware ranking in
+    :func:`_rank_and_split` then floats the user's preferred picks to the top
+    of Best matches while everything else populates the More results section
+    below. Filtering server-side would leave that section empty for most
+    titles — which was the reported bug.
+    """
     params: dict[str, str] = {"query": query}
-    if langs:
-        params["languages"] = ",".join(langs)
     url = f"{_API_BASE}/subtitles?{urllib.parse.urlencode(params)}"
     data, err = transport(url, key, None)
     if err is not None:
