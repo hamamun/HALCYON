@@ -30,6 +30,7 @@ Popover {
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
     property real maxHeight: 0            // 0 = natural height
+    property bool hasVideo: true           // true if current media has video tracks
 
     // The transport bar opens the download flyout; the popover only reports.
     signal downloadRequested()
@@ -199,7 +200,7 @@ Popover {
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeTiny
                     font.weight: Theme.weightBold
-                    color: Theme.textFaint
+                    color: root.hasVideo ? Theme.textFaint : Theme.textDisabled
                     Layout.fillWidth: true
                 }
                 IconButton {
@@ -208,6 +209,8 @@ Popover {
                     implicitWidth: 32
                     implicitHeight: 32
                     tooltip: "Load subtitle file…"
+                    enabled: root.hasVideo
+                    opacity: root.hasVideo ? 1 : Theme.opacityDisabled
                     onClicked: Actions.loadSubtitleFile()
                 }
                 IconButton {
@@ -216,6 +219,8 @@ Popover {
                     implicitWidth: 32
                     implicitHeight: 32
                     tooltip: "Download subtitles…"
+                    enabled: root.hasVideo
+                    opacity: root.hasVideo ? 1 : Theme.opacityDisabled
                     onClicked: root.downloadRequested()
                 }
             }
