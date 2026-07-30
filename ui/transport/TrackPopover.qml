@@ -200,7 +200,8 @@ Popover {
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeTiny
                     font.weight: Theme.weightBold
-                    color: root.hasVideo ? Theme.textFaint : Theme.textDisabled
+                    color: Theme.textFaint
+                    opacity: root.hasVideo ? 1.0 : Theme.opacityDisabled
                     Layout.fillWidth: true
                 }
                 IconButton {
