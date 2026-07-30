@@ -181,15 +181,15 @@ Item {
     TrackPopover {
         id: trackPopover
 
-        // Right edge under the subtitle button (its x is inside the right
-        // cluster's Row — mapping, not arithmetic on relatives, is what keeps
-        // it true), clamped so the popup can never slide past either edge of
-        // the window no matter how narrow it gets.
-        readonly property point anchorRight: subsButton
-            ? subsButton.mapToItem(root, subsButton.width, 0)
-            : Qt.point(root.width - Theme.spaceLg, 0)
-        x: Math.max(Theme.spaceSm,
-                    Math.min(anchorRight.x - width, root.width - width - Theme.spaceSm))
+        // Parented to the subtitle button so positioning happens in its own
+        // coordinate frame — no mapToItem race across nested Rows. The right
+        // edge sits under the button, the bottom rests just above it.
+        //
+        // Popup coords are relative to `parent`, so `x = parent.width - width`
+        // aligns the right edges; the shell's 860px minimum width (Shell.qml)
+        // guarantees the 336px popover always fits, so no clamp is needed.
+        parent: subsButton
+        x: subsButton.width - width
         y: -implicitHeight - Theme.spaceSm
         maxHeight: root.windowHeight > 0 ? Math.max(320, root.windowHeight - 160) : 0
 
