@@ -457,10 +457,13 @@ class AppController(QObject):
         """
         # Snapshot the SPU ids that already exist — anything new that appears
         # after add_slave is a strong candidate for being this file.
+        # Always treat -1 (Disable) as already known, so a race where VLC
+        # hasn't reported any spu yet never maps -1 to a file.
         try:
             before_ids = {tid for tid, _label in self._engine.subtitle_tracks()}
         except Exception:
             before_ids = set()
+        before_ids.add(-1)
 
         ok = self._engine.add_subtitle_file(path)
         if not ok:
@@ -483,7 +486,12 @@ class AppController(QObject):
                 current = self._engine.subtitle_tracks()
             except Exception:
                 current = []
-            new_ids = [tid for tid, _label in current if tid not in before_ids]
+            # Never consider -1 as a new local track — libVLC's Disable
+            # pseudo-track. Without this, an empty before_ids (VLC not yet
+            # parsed) would map -1 to the file.
+            new_ids = [
+                tid for tid, _label in current if tid != -1 and tid not in before_ids
+            ]
             if new_ids:
                 # If multiple ids appeared (rare — a second slave started at
                 # the same time), take the lowest not already mapped.
@@ -491,8 +499,11 @@ class AppController(QObject):
                 if sub_map is None:
                     sub_map = {}
                     self._local_subtitle_map = sub_map
+                # Defensive: purge any stale -1 entry that may have been
+                # created by the old race.
+                sub_map.pop(-1, None)
                 for tid in sorted(new_ids):
-                    if tid not in sub_map:
+                    if tid != -1 and tid not in sub_map:
                         sub_map[tid] = path
                         break
                 self._refresh_tracks()
@@ -556,6 +567,10 @@ class AppController(QObject):
         # file name. Anything not in the map falls back to the file-name
         # matcher for tests and for old sessions without a map entry.
         local_map = getattr(self, "_local_subtitle_map", {}) or {}
+        # Defensive: if an old race left -1 in the map, drop it now.
+        if -1 in local_map:
+            local_map = {k: v for k, v in local_map.items() if k != -1}
+            self._local_subtitle_map = local_map
         embedded: list[dict] = []
         local: list[dict] = []
         for track in subs:

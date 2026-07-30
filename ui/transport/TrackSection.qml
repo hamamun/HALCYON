@@ -70,6 +70,7 @@ ColumnLayout {
 
     // Disable option - sticky header when allowOff is true
     ListRow {
+        id: disableRow
         Layout.fillWidth: true
         visible: root.allowOff && root.tracks.length > 0
         height: root.rowHeight
@@ -84,7 +85,7 @@ ColumnLayout {
             elide: Text.ElideRight
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
-            color: current ? Theme.accent : Theme.text
+            color: disableRow.current ? Theme.accent : Theme.text
         }
     }
 
