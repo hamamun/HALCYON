@@ -19,6 +19,31 @@ ColumnLayout {
     property string emptyText: "None"
     property bool allowOff: false
 
+    // Find if there is a native Disable track in root.tracks
+    readonly property var nativeDisableTrack: {
+        if (!root.allowOff || !root.tracks) return null;
+        for (var i = 0; i < root.tracks.length; i++) {
+            if (root.tracks[i] && root.tracks[i].id === -1) {
+                return root.tracks[i];
+            }
+        }
+        return null;
+    }
+
+    readonly property string disableLabel: nativeDisableTrack ? nativeDisableTrack.label : "Disable"
+
+    // Filtered tracks list: exclude id: -1 if allowOff is true
+    readonly property var displayTracks: {
+        if (!root.allowOff || !root.tracks) return root.tracks || [];
+        var res = [];
+        for (var i = 0; i < root.tracks.length; i++) {
+            if (root.tracks[i] && root.tracks[i].id !== -1) {
+                res.push(root.tracks[i]);
+            }
+        }
+        return res;
+    }
+
     readonly property int maxVisibleRows: 5
     readonly property int rowHeight: 30
 
@@ -35,7 +60,7 @@ ColumnLayout {
     }
 
     Text {
-        visible: root.tracks.length === 0 && !root.allowOff
+        visible: root.displayTracks.length === 0 && !root.allowOff
         text: root.emptyText
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSizeSmall
@@ -55,7 +80,7 @@ ColumnLayout {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.right: parent.right
-            text: "Disable"
+            text: root.disableLabel
             elide: Text.ElideRight
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
@@ -65,9 +90,9 @@ ColumnLayout {
 
     Item {
         Layout.fillWidth: true
-        visible: root.tracks.length > 0
+        visible: root.displayTracks.length > 0
 
-        readonly property int visibleRows: Math.min(root.maxVisibleRows, root.tracks.length)
+        readonly property int visibleRows: Math.min(root.maxVisibleRows, root.displayTracks.length)
         implicitHeight: list.needsScroll
                         ? root.maxVisibleRows * root.rowHeight
                           + (root.maxVisibleRows - 1) * list.spacing
@@ -81,7 +106,7 @@ ColumnLayout {
 
             readonly property bool needsScroll: count > root.maxVisibleRows
 
-            model: root.tracks
+            model: root.displayTracks
             spacing: Theme.spaceXs
             clip: true
             interactive: needsScroll

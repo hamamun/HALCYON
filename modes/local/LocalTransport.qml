@@ -29,6 +29,7 @@ Item {
     property int currentAudioId: -1
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
+    property bool hasVideo: true
 
     // The bar must never auto-hide while the subtitle popover or the download
     // flyout is open (§P1.4).
