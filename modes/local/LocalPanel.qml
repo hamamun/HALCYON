@@ -41,7 +41,7 @@ Item {
         anchors.top: parent.top
 
         IconButton {
-            glyph: Glyphs.addFile
+            glyph: Glyphs.openFile
             tooltip: "Add files (Ctrl+O)"
             onClicked: Actions.addFiles()
         }
@@ -186,7 +186,7 @@ Item {
         TextButton {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Add files"
-            glyph: Glyphs.addFile
+            glyph: Glyphs.openFile
             onClicked: Actions.addFiles()      // same action, not a copy
         }
     }

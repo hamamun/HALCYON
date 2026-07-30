@@ -74,6 +74,7 @@ class AppController(QObject):
     subtitleDelayChanged = Signal()
     tracksChanged = Signal()
     resumePrompted = Signal(str, int)
+    mediaNameChanged = Signal()
 
     def __init__(
         self,
@@ -104,6 +105,17 @@ class AppController(QObject):
         self._subtitle_delay = 0
         self._audio_tracks: list[dict] = []
         self._subtitle_tracks: list[dict] = []
+        # Split views of the same spu list: tracks found inside the media vs
+        # files this session attached (add_slave). One spu id appears in
+        # exactly one of them.
+        self._embedded_subtitle_tracks: list[dict] = []
+        self._local_subtitle_tracks: list[dict] = []
+        self._current_audio_id = -1
+        self._current_subtitle_id = -1
+        #: Basenames of every external subtitle attached for the current
+        #: media — the only trace libVLC leaves of an add_slave spu is its
+        #: file name, so classification matches on it (see _split_* below).
+        self._external_sub_files: list[str] = []
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -247,6 +259,12 @@ class AppController(QObject):
         """Filesystem path of whatever the engine currently has open."""
         return _from_uri(self._engine.currentMedia or "")
 
+    def current_media_path(self) -> str:
+        """Public for the subtitle downloader, which saves beside this file.
+
+        QML never sees it — the UI gets :attr:`currentFileStem` instead."""
+        return self._current_path()
+
     def _stop_if_orphaned(self, playing_path: str) -> None:
         """Stop playback if ``playing_path`` is no longer in the queue."""
         if not playing_path:
@@ -378,6 +396,10 @@ class AppController(QObject):
         self._equalizer.reapply()
         self._subtitle_delay = 0
         self.subtitleDelayChanged.emit()
+        # External files belong to the media they were attached to; a new
+        # media starts with a clean list before its sidecar is auto-loaded.
+        self._external_sub_files = []
+        self.mediaNameChanged.emit()
         if self._settings.get("subs.autoLoadSidecar", True):
             self._auto_load_subtitle(path)
         self._refresh_tracks()
@@ -399,7 +421,7 @@ class AppController(QObject):
             log.info("subtitle dropped with nothing playing — ignored")
             return
         for path in paths:
-            if self._engine.add_subtitle_file(path):
+            if self._load_external_subtitle(path):
                 log.info("loaded subtitle %s", Path(path).name)
             else:
                 log.warning("could not load subtitle %s", Path(path).name)
@@ -410,9 +432,19 @@ class AppController(QObject):
         for suffix in (".srt", ".ass", ".ssa", ".sub", ".vtt"):
             sidecar = media.with_suffix(suffix)
             if sidecar.exists():
-                self._engine.add_subtitle_file(str(sidecar))
+                self._load_external_subtitle(str(sidecar))
                 log.info("auto-loaded subtitle %s", sidecar.name)
                 return
+
+    def _load_external_subtitle(self, path: str) -> bool:
+        """The one attach path for subtitle *files* — auto sidecar, user-picked,
+        drag-and-drop and downloaded all arrive here (§4.1)."""
+        ok = self._engine.add_subtitle_file(path)
+        if ok:
+            name = Path(path).name
+            if name not in self._external_sub_files:
+                self._external_sub_files.append(name)
+        return ok
 
     # ---------------------------------------------------------------- tracks ---
     def _refresh_tracks(self) -> None:
@@ -420,12 +452,20 @@ class AppController(QObject):
             self._audio_tracks = [
                 {"id": tid, "label": label} for tid, label in self._engine.audio_tracks()
             ]
-            self._subtitle_tracks = [
+            subs = [
                 {"id": tid, "label": label} for tid, label in self._engine.subtitle_tracks()
             ]
+            self._current_audio_id = self._engine.current_audio_track()
+            self._current_subtitle_id = self._engine.current_subtitle_track()
         except Exception:
             self._audio_tracks = []
-            self._subtitle_tracks = []
+            subs = []
+            self._current_audio_id = -1
+            self._current_subtitle_id = -1
+        self._subtitle_tracks = subs
+        self._embedded_subtitle_tracks, self._local_subtitle_tracks = (
+            _split_subtitle_tracks(subs, self._external_sub_files)
+        )
         self.tracksChanged.emit()
 
     @Property("QVariantList", notify=tracksChanged)
@@ -436,13 +476,40 @@ class AppController(QObject):
     def subtitleTracks(self) -> list:  # noqa: N802 - QML-facing
         return self._subtitle_tracks
 
+    @Property("QVariantList", notify=tracksChanged)
+    def embeddedSubtitleTracks(self) -> list:  # noqa: N802 - QML-facing
+        return self._embedded_subtitle_tracks
+
+    @Property("QVariantList", notify=tracksChanged)
+    def localSubtitleTracks(self) -> list:  # noqa: N802 - QML-facing
+        return self._local_subtitle_tracks
+
+    @Property(int, notify=tracksChanged)
+    def currentAudioId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_audio_id
+
+    @Property(int, notify=tracksChanged)
+    def currentSubtitleId(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_subtitle_id
+
+    @Property(str, notify=mediaNameChanged)
+    def currentFileStem(self) -> str:  # noqa: N802 - QML-facing
+        """File name of the playing media without extension — the subtitle
+        download flyout's default search text and save-name base."""
+        path = self._current_path()
+        return Path(path).stem if path else ""
+
     @Slot(int)
     def setAudioTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_audio_track(track_id)
+        # Refresh so the popover's "current" marker follows the click now,
+        # not whenever the next external event happens to rebuild the lists.
+        self._refresh_tracks()
 
     @Slot(int)
     def setSubtitleTrack(self, track_id: int) -> None:  # noqa: N802 - QML-facing
         self._engine.set_subtitle_track(track_id)
+        self._refresh_tracks()
 
     @Slot()
     def cycleAudioTrack(self) -> None:  # noqa: N802 - QML-facing
@@ -460,7 +527,7 @@ class AppController(QObject):
 
     @Slot(str)
     def loadSubtitle(self, url: str) -> None:  # noqa: N802 - QML-facing
-        self._engine.add_subtitle_file(_normalise(url))
+        self._load_external_subtitle(_normalise(url))
         self._refresh_tracks()
 
     @Slot(int)
@@ -498,6 +565,51 @@ def _is_subtitle(path: str) -> bool:
     from modes.local.playlist import SUBTITLE_EXTENSIONS
 
     return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
+
+
+def _name_key(text: str) -> str:
+    """Punctuation-insensitive comparison key for a track label or file name.
+
+    ``"Movie.2024.1080p-[GRP].srt"`` and ``"movie 2024 1080p grp"`` must land
+    on the same key whichever cosmetic form VLC picked for the spu description.
+    """
+    lowered = text.lower()
+    for ch in "._-[](){},":
+        lowered = lowered.replace(ch, " ")
+    return " ".join(lowered.split())
+
+
+def _split_subtitle_tracks(
+    tracks: list[dict], external_files: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Partition *(embedded, local)* subtitle tracks by file name.
+
+    libVLC exposes no "this spu came from ``add_slave``" flag; the only trace an
+    external file leaves in the spu list is its file name in the description.
+    Matching by name (instead of by add order) is immune to VLC reporting the
+    tracks in several bursts while a media parses — a race an id-diff would
+    lose. An empty external list means everything is embedded, which is the
+    whole answer for media with no sidecar at all.
+    """
+    keys = set()
+    for file_name in external_files:
+        keys.add(_name_key(file_name))
+        keys.add(_name_key(Path(file_name).stem))
+    keys.discard("")
+
+    embedded: list[dict] = []
+    local: list[dict] = []
+    for track in tracks:
+        label_key = _name_key(track["label"])
+        # id -1 is libVLC's "Disable" pseudo-track, not a spu — never let a
+        # file literally named "disable.srt" drag it into the local list.
+        is_local = (
+            track["id"] != -1
+            and bool(label_key)
+            and any(key in label_key or label_key in key for key in keys)
+        )
+        (local if is_local else embedded).append(track)
+    return embedded, local
 
 
 def _normalise(raw) -> str:

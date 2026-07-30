@@ -631,6 +631,24 @@ class VlcEngine(QObject):
     def subtitle_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.video_get_spu_description())
 
+    def current_audio_track(self) -> int:
+        """Id of the audio track VLC actually has selected, as it is now.
+
+        The popover paints its "current" marker from this, so it must be the
+        engine's word — a UI-side guess goes stale the first time VLC picks a
+        default track on its own (every new media does this)."""
+        try:
+            return int(self._player.audio_get_track())
+        except Exception:
+            return -1
+
+    def current_subtitle_track(self) -> int:
+        """Id of the spu VLC is showing right now; ``-1`` when disabled."""
+        try:
+            return int(self._player.video_get_spu())
+        except Exception:
+            return -1
+
     @Slot(int)
     def set_audio_track(self, track_id: int) -> None:
         self._player.audio_set_track(int(track_id))

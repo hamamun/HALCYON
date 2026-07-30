@@ -1,6 +1,7 @@
 module Halcyon.Transport
 
 SeekBar 1.0 ../../ui/transport/SeekBar.qml
+SubtitleDownloadDialog 1.0 ../../ui/transport/SubtitleDownloadDialog.qml
 VolumeControl 1.0 ../../ui/transport/VolumeControl.qml
 TimeDisplay 1.0 ../../ui/transport/TimeDisplay.qml
 TrackPopover 1.0 ../../ui/transport/TrackPopover.qml

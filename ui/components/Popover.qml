@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls.Basic
 import Halcyon.Ui
 
-// The one popover — §B.1. The transport gear menu, preset pickers and the
-// settings flyout are all this.
+// The one popover — §B.1. The transport subtitle menu, the download flyout,
+// preset pickers and the settings flyout are all this.
 //
 // Note it reports `opened` outward: the transport bar must never auto-hide while
 // a popover is open (§P1.4), and this is how it knows.

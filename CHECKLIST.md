@@ -185,7 +185,13 @@
       `remaining · playback · media`
       *(revised: replaces the click-to-toggle elapsed↔remaining control. The
       toggle hid one value behind the other and was undiscoverable.)*
-- [ ] `TrackPopover.qml` — ⚙ grouping speed, audio track, subtitle track, subtitle delay
+- [ ] `TrackPopover.qml` — CC icon, grouping speed, audio track, embedded +
+  local subtitles, subtitle delay; 5-row cap + `ThinScrollBar`; right edge
+  anchored under the button, window-edge clamped
+- [ ] `SubtitleDownloadDialog.qml` — OpenSubtitles flyout: collapsible
+  API-key/languages (persisted), search, best-match top 3 + scrollable rest,
+  one-tap download → saved beside media → loaded into Local subtitles
+  (`core/subtitles.py`, context property `Subs`)
 - [ ] `TransportScrim.qml` — vertical gradient for legibility over bright video
 
 ### Build — Local's arrangement

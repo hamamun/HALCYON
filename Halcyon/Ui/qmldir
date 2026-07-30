@@ -10,11 +10,13 @@ singleton Actions 1.0 ../../ui/Actions.qml
 singleton Glyphs 1.0 ../../ui/components/Glyphs.qml
 
 GlassPanel 1.0 ../../ui/components/GlassPanel.qml
+GlassField 1.0 ../../ui/components/GlassField.qml
 IconButton 1.0 ../../ui/components/IconButton.qml
 HSlider 1.0 ../../ui/components/HSlider.qml
 ListRow 1.0 ../../ui/components/ListRow.qml
 PanelToolbar 1.0 ../../ui/components/PanelToolbar.qml
 Popover 1.0 ../../ui/components/Popover.qml
 TextButton 1.0 ../../ui/components/TextButton.qml
+ThinScrollBar 1.0 ../../ui/components/ThinScrollBar.qml
 ConfirmDialog 1.0 ../../ui/components/ConfirmDialog.qml
 StackLayoutLite 1.0 ../../ui/components/StackLayoutLite.qml
