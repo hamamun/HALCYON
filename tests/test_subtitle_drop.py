@@ -155,6 +155,11 @@ class TestSubtitleRouting:
         controller._subtitle_delay = 0
         controller._audio_tracks = []
         controller._subtitle_tracks = []
+        controller._embedded_subtitle_tracks = []
+        controller._local_subtitle_tracks = []
+        controller._current_audio_id = -1
+        controller._current_subtitle_id = -1
+        controller._external_sub_files = []
         return controller
 
     def test_lone_subtitle_is_attached_not_queued(self, qt_app, subtitle_file):

@@ -56,7 +56,7 @@ QtObject {
     function toggleMute()           { return _call("toggleMute") }
 
     // -------------------------------------------------------------- tracks --
-    // The one home: transport bar → gear popover.
+    // The one home: transport bar → subtitle popover.
     function setAudioTrack(id)      { return _call("setAudioTrack", id) }
     function cycleAudioTrack()      { return _call("cycleAudioTrack") }
     function setSubtitleTrack(id)   { return _call("setSubtitleTrack", id) }

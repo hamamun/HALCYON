@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.metadata import Metadata
     from core.power import PowerGuard
     from core.settings import Settings
+    from core.subtitles import SubtitleBackend
     from engine.equalizer import Equalizer
     from engine.vlc_engine import VlcEngine
 
@@ -136,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         player, settings, library, metadata, lyrics, equalizer, parent=app
     )
     mode_list = ModeList(app)
+    subs_backend = SubtitleBackend(settings, controller, parent=app)
     _KEEP_ALIVE.extend(
         [
             settings,
@@ -147,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             power_guard,
             controller,
             mode_list,
+            subs_backend,
         ]
     )
 
@@ -160,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx.setContextProperty("App", controller)
     ctx.setContextProperty("Modes", mode_list)
     ctx.setContextProperty("Settings", settings)
+    ctx.setContextProperty("Subs", subs_backend)
     ctx.setContextProperty("Player", player)
     ctx.setContextProperty("Library", library)
     ctx.setContextProperty("Metadata", metadata)
@@ -202,6 +206,13 @@ def main(argv: list[str] | None = None) -> int:
             power_guard.release()
         except Exception:
             log.exception("power guard release failed")
+
+        # Subtitle jobs first: they call back into the controller when they
+        # land, so they must stop before it (and the engine) goes away.
+        try:
+            subs_backend.shutdown()
+        except Exception:
+            log.exception("subtitle backend shutdown failed")
 
         # Neither half may be skipped because the other threw: a failed
         # controller flush must not leave libVLC's threads running.

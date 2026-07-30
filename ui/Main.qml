@@ -230,6 +230,14 @@ Shell {
             item.audioTracks = Qt.binding(function() { return App.audioTracks });
         if ("subtitleTracks" in item)
             item.subtitleTracks = Qt.binding(function() { return App.subtitleTracks });
+        if ("embeddedSubtitleTracks" in item)
+            item.embeddedSubtitleTracks = Qt.binding(function() { return App.embeddedSubtitleTracks });
+        if ("localSubtitleTracks" in item)
+            item.localSubtitleTracks = Qt.binding(function() { return App.localSubtitleTracks });
+        if ("currentAudioId" in item)
+            item.currentAudioId = Qt.binding(function() { return App.currentAudioId });
+        if ("currentSubtitleId" in item)
+            item.currentSubtitleId = Qt.binding(function() { return App.currentSubtitleId });
         if ("subtitleDelayMs" in item)
             item.subtitleDelayMs = Qt.binding(function() { return App.subtitleDelayMs });
     }
@@ -304,8 +312,8 @@ Shell {
                     // binding: the bar would keep whatever repeat mode and
                     // track list existed the instant it loaded. Binding
                     // properties on the Loader propagates them to `item` and
-                    // keeps updating, which is what makes the gear popover and
-                    // the repeat/shuffle buttons reflect reality.
+                    // keeps updating, which is what makes the subtitle popover
+                    // and the repeat/shuffle buttons reflect reality.
                     //
                     // Guarded with hasOwnProperty-free `??`-style defaults so a
                     // mode whose bar declares fewer properties (M3U's six

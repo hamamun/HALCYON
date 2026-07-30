@@ -7,7 +7,7 @@ import Halcyon.Transport
 // TWO ROWS, ~72px, arranged for Local's fourteen controls:
 //
 //   ●━━━━━━━━━━━━━━○···········································
-//   ▶ ⏹ ⏮ ⏪ ⏩ ⏭  🔊━━━  -01:23 · 04:56 · 06:19    ☰ ⚙ 🔁 🔀 ⛶
+//   ▶ ⏹ ⏮ ⏪ ⏩ ⏭  🔊━━━  -01:23 · 04:56 · 06:19    ☰ CC 🔁 🔀 ⛶
 //
 // Every control here is a SHARED part from ui/transport/ or a shared IconButton.
 // This file contributes arrangement only — no new colours, no new radii, no new
@@ -24,14 +24,21 @@ Item {
     //: Bound by the shell in Main.qml — see bindTransport().
     property bool playlistVisible: false
     property var audioTracks: []
-    property var subtitleTracks: []
+    property var embeddedSubtitleTracks: []
+    property var localSubtitleTracks: []
     property int currentAudioId: -1
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
 
-    // The bar must never auto-hide while the gear popover is open (§P1.4).
-    readonly property bool popoverOpen: trackPopover.opened
+    // The bar must never auto-hide while the subtitle popover or the download
+    // flyout is open (§P1.4).
+    readonly property bool popoverOpen: trackPopover.opened || subDownload.opened
     readonly property bool scrubbing: seekBar.scrubbing
+
+    // The attached Window, captured in the bar's own scope (the only valid
+    // place — attached properties don't resolve through an id from a child).
+    // Null until the bar is in a window; popups cap their height from it.
+    readonly property real windowHeight: Window ? Window.height : 0
 
     implicitHeight: 72
     height: implicitHeight
@@ -143,10 +150,10 @@ Item {
                     onClicked: Actions.toggleLeftPanel()
                 }
                 IconButton {
-                    id: gearButton
-                    glyph: Glyphs.settings
+                    id: subsButton
+                    glyph: Glyphs.subtitles
                     tooltip: "Speed, audio and subtitles"
-                    active: trackPopover.opened
+                    active: trackPopover.opened || subDownload.opened
                     onClicked: trackPopover.opened ? trackPopover.close() : trackPopover.open()
                 }
                 IconButton {
@@ -173,13 +180,38 @@ Item {
 
     TrackPopover {
         id: trackPopover
-        x: gearButton ? gearButton.x + root.width - width - Theme.spaceLg : 0
+
+        // Right edge under the subtitle button (its x is inside the right
+        // cluster's Row — mapping, not arithmetic on relatives, is what keeps
+        // it true), clamped so the popup can never slide past either edge of
+        // the window no matter how narrow it gets.
+        readonly property point anchorRight: subsButton
+            ? subsButton.mapToItem(root, subsButton.width, 0)
+            : Qt.point(root.width - Theme.spaceLg, 0)
+        x: Math.max(Theme.spaceSm,
+                    Math.min(anchorRight.x - width, root.width - width - Theme.spaceSm))
         y: -implicitHeight - Theme.spaceSm
+        maxHeight: root.windowHeight > 0 ? Math.max(320, root.windowHeight - 160) : 0
+
         rate: root.player ? root.player.rate : 1.0
         audioTracks: root.audioTracks
-        subtitleTracks: root.subtitleTracks
+        subtitleTracks: root.embeddedSubtitleTracks
+        localSubtitleTracks: root.localSubtitleTracks
         currentAudioId: root.currentAudioId
         currentSubtitleId: root.currentSubtitleId
         subtitleDelayMs: root.subtitleDelayMs
+
+        onDownloadRequested: {
+            close();
+            subDownload.open();
+        }
+    }
+
+    SubtitleDownloadDialog {
+        id: subDownload
+        x: Math.max(Theme.spaceLg,
+                    Math.min((root.width - width) / 2, root.width - width - Theme.spaceLg))
+        y: -implicitHeight - Theme.spaceSm
+        maxHeight: root.windowHeight > 0 ? Math.max(320, root.windowHeight - 160) : 0
     }
 }

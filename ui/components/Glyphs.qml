@@ -32,7 +32,9 @@ QtObject {
     readonly property string repeatAll:  "\uE8EE"
     readonly property string repeatOne:  "\uE8ED"
     readonly property string shuffle:    "\uE8B1"
-    readonly property string addFile:    "\uE8E5"
+    // OpenFile — a document with an arrow, reads "open/browse a file".
+    // Deliberately NOT a folder: folders mean "media folder" here (addFolder).
+    readonly property string openFile:   "\uE8E5"
     readonly property string addFolder:  "\uE8F4"
     readonly property string clearAll:   "\uE74D"
     readonly property string clearItem:  "\uE738"
@@ -47,15 +49,21 @@ QtObject {
     readonly property string close:      "\uE8BB"
     readonly property string chevronLeft:  "\uE76B"
     readonly property string chevronRight: "\uE76C"
+    readonly property string chevronDown:  "\uE70D"
+    readonly property string chevronUp:    "\uE70E"
     readonly property string search:     "\uE721"
 
     // panels
     readonly property string info:       "\uE946"
     readonly property string lyrics:     "\uE8D2"
     readonly property string equalizer:  "\uE9E9"
-    readonly property string subtitles:  "\uED1E"
+    readonly property string subtitles:  "\uED1E"   // Fluent "Subtitles" (CC)
     readonly property string audioTrack: "\uE8D6"
     readonly property string speed:      "\uEC4A"
+    readonly property string download:   "\uE896"
+    // Eye pair — Fluent/MDL2 "View" and "Hide", for API-key reveal toggles.
+    readonly property string eyeShow:    "\uE890"
+    readonly property string eyeHide:    "\uED1A"
     readonly property string music:      "\uE8D6"
     readonly property string video:      "\uE714"
     readonly property string bookmark:   "\uE734"
