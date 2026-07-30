@@ -117,6 +117,7 @@ Item {
                 Item { width: Theme.spaceMd; height: 1 }
 
                 VolumeControl {
+                    id: volumeControl
                     anchors.verticalCenter: parent.verticalCenter
                     volume: root.player ? root.player.volume : 80
                     muted: root.player ? root.player.muted : false
@@ -200,6 +201,7 @@ Item {
         currentAudioId: root.currentAudioId
         currentSubtitleId: root.currentSubtitleId
         subtitleDelayMs: root.subtitleDelayMs
+        hasVideo: root.hasVideo
 
         onDownloadRequested: {
             close();

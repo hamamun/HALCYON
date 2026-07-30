@@ -34,6 +34,17 @@ Popover {
     // never ran (tools, focused QML tests).
     readonly property var subs: (typeof Subs !== "undefined") ? Subs : null
 
+    // Show OSD when download status changes
+    Connections {
+        target: subs
+        function onStatusChanged() {
+            if (subs && subs.status.length > 0) {
+                var glyph = subs.statusIsError ? Glyphs.volumeMute : Glyphs.download;
+                Actions.osd(subs.status, glyph);
+            }
+        }
+    }
+
     // Session state — deliberate choices about what persists:
     //   settingsExpanded, apiKey, languages → Settings (once, forever);
     //   query, keyVisible, searched           → die with the window.

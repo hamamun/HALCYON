@@ -35,12 +35,32 @@ ColumnLayout {
     }
 
     Text {
-        visible: root.tracks.length === 0
+        visible: root.tracks.length === 0 && !root.allowOff
         text: root.emptyText
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.textFaint
         Layout.fillWidth: true
+    }
+
+    // Disable option - sticky header when allowOff is true
+    ListRow {
+        Layout.fillWidth: true
+        visible: root.allowOff && root.tracks.length > 0
+        height: root.rowHeight
+        current: root.currentId === -1
+        onClicked: root.trackChosen(-1)
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            text: "Disable"
+            elide: Text.ElideRight
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            color: current ? Theme.accent : Theme.text
+        }
     }
 
     Item {

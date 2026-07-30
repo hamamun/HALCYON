@@ -110,12 +110,45 @@ Shell {
         }
 
         // ------------------------------------------------------ tracks --
-        function setAudioTrack(id)    { App.setAudioTrack(id) }
-        function cycleAudioTrack()    { App.cycleAudioTrack() }
-        function setSubtitleTrack(id) { App.setSubtitleTrack(id) }
-        function cycleSubtitleTrack() { App.cycleSubtitleTrack() }
+        function setAudioTrack(id) {
+            App.setAudioTrack(id);
+            if (id === -1) {
+                osd("Audio disabled", Glyphs.volumeMute);
+            } else {
+                var track = App.audioTracks.filter(function(t) { return t.id === id; })[0];
+                osd("Audio: " + (track ? track.label : "Track " + id), Glyphs.volumeHigh);
+            }
+        }
+        function cycleAudioTrack() {
+            App.cycleAudioTrack();
+            if (App.audioTracks.length > 0) {
+                osd("Audio: " + App.audioTracks[0].label, Glyphs.volumeHigh);
+            }
+        }
+        function setSubtitleTrack(id) {
+            App.setSubtitleTrack(id);
+            if (id === -1) {
+                osd("Subtitles disabled", Glyphs.subtitles);
+            } else {
+                var track = App.subtitleTracks.filter(function(t) { return t.id === id; })[0];
+                if (!track) {
+                    track = App.localSubtitleTracks.filter(function(t) { return t.id === id; })[0];
+                }
+                osd("Subtitles: " + (track ? track.label : "Track " + id), Glyphs.subtitles);
+            }
+        }
+        function cycleSubtitleTrack() {
+            App.cycleSubtitleTrack();
+            if (App.subtitleTracks.length > 0) {
+                osd("Subtitles: " + App.subtitleTracks[0].label, Glyphs.subtitles);
+            }
+        }
         function loadSubtitleFile()   { subtitleDialog.open() }
-        function adjustSubtitleDelay(ms) { App.adjustSubtitleDelay(ms) }
+        function adjustSubtitleDelay(ms) {
+            App.adjustSubtitleDelay(ms);
+            var sign = ms > 0 ? "+" : "";
+            osd("Subtitle delay " + sign + ms + " ms", Glyphs.subtitles);
+        }
 
         // ---------------------------------------------------- playlist --
         function addFiles()        { fileDialog.open() }
@@ -240,6 +273,8 @@ Shell {
             item.currentSubtitleId = Qt.binding(function() { return App.currentSubtitleId });
         if ("subtitleDelayMs" in item)
             item.subtitleDelayMs = Qt.binding(function() { return App.subtitleDelayMs });
+        if ("hasVideo" in item)
+            item.hasVideo = Qt.binding(function() { return App.hasVideo });
     }
 
     // ======================================================================
@@ -585,7 +620,7 @@ Shell {
         id: subtitleDialog
         title: "Load subtitle file"
         nameFilters: ["Subtitles (*.srt *.ass *.ssa *.sub *.vtt)", "All files (*)"]
-        onAccepted: App.loadSubtitle(selectedFile.toString())
+        onAccepted: { App.loadSubtitle(selectedFile.toString()); Actions.osd("Subtitle loaded", Glyphs.subtitles) }
     }
 
     SettingsDialog {

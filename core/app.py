@@ -104,6 +104,7 @@ class AppController(QObject):
 
         self._subtitle_delay = 0
         self._audio_tracks: list[dict] = []
+        self._video_tracks: list[dict] = []
         self._subtitle_tracks: list[dict] = []
         # Split views of the same spu list: tracks found inside the media vs
         # files this session attached (add_slave). One spu id appears in
@@ -514,6 +515,9 @@ class AppController(QObject):
             raw_audio = [
                 {"id": tid, "label": label} for tid, label in self._engine.audio_tracks()
             ]
+            raw_video = [
+                {"id": tid, "label": label} for tid, label in self._engine.video_tracks()
+            ]
             subs = [
                 {"id": tid, "label": label} for tid, label in self._engine.subtitle_tracks()
             ]
@@ -521,9 +525,14 @@ class AppController(QObject):
             self._current_subtitle_id = self._engine.current_subtitle_track()
         except Exception:
             raw_audio = []
+            raw_video = []
             subs = []
             self._current_audio_id = -1
             self._current_subtitle_id = -1
+
+        # Video tracks: filter out -1 Disable if present (though VLC typically
+        # doesn't surface one for video)
+        self._video_tracks = [t for t in raw_video if t["id"] != -1]
 
         # Audio: libVLC surfaces a synthetic (-1, "Disable") row at the top of
         # every audio_get_track_description(). Mute already covers turning
@@ -577,6 +586,10 @@ class AppController(QObject):
         return self._audio_tracks
 
     @Property("QVariantList", notify=tracksChanged)
+    def videoTracks(self) -> list:  # noqa: N802 - QML-facing
+        return self._video_tracks
+
+    @Property("QVariantList", notify=tracksChanged)
     def subtitleTracks(self) -> list:  # noqa: N802 - QML-facing
         return self._subtitle_tracks
 
@@ -595,6 +608,11 @@ class AppController(QObject):
     @Property(int, notify=tracksChanged)
     def currentSubtitleId(self) -> int:  # noqa: N802 - QML-facing
         return self._current_subtitle_id
+
+    @Property(bool, notify=tracksChanged)
+    def hasVideo(self) -> bool:  # noqa: N802 - QML-facing
+        """True if the current media has at least one video track."""
+        return len(self._video_tracks) > 0
 
     @Property(str, notify=mediaNameChanged)
     def currentFileStem(self) -> str:  # noqa: N802 - QML-facing

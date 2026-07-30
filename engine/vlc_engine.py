@@ -628,6 +628,10 @@ class VlcEngine(QObject):
     def audio_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.audio_get_track_description())
 
+    def video_tracks(self) -> list[tuple[int, str]]:
+        """Video tracks of the current media, if any."""
+        return _describe_tracks(getattr(self._player, "video_get_track_description", lambda: None)())
+
     def subtitle_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.video_get_spu_description())
 
