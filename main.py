@@ -103,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.settings import Settings
     from core.subtitles import SubtitleBackend
     from engine.equalizer import Equalizer
+    from engine.video_adjust import VideoAdjust
     from engine.vlc_engine import VlcEngine
 
     paths.seed_defaults()
@@ -128,13 +129,14 @@ def main(argv: list[str] | None = None) -> int:
     metadata = Metadata(player, parent=app)
     lyrics = Lyrics(parent=app)
     equalizer = Equalizer(player, parent=app)
+    video_adjust = VideoAdjust(player, settings, parent=app)
     # Stops Windows blanking the monitor mid-film. Parented to the app and kept
     # in _KEEP_ALIVE like every other service: if it is collected its release()
     # never runs and the wake request outlives the playback that justified it.
     power_guard = PowerGuard(player, parent=app)
 
     controller = AppController(
-        player, settings, library, metadata, lyrics, equalizer, parent=app
+        player, settings, library, metadata, lyrics, equalizer, video_adjust, parent=app
     )
     mode_list = ModeList(app)
     subs_backend = SubtitleBackend(settings, controller, parent=app)
@@ -146,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             metadata,
             lyrics,
             equalizer,
+            video_adjust,
             power_guard,
             controller,
             mode_list,
@@ -169,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx.setContextProperty("Metadata", metadata)
     ctx.setContextProperty("Lyrics", lyrics)
     ctx.setContextProperty("Equalizer", equalizer)
+    ctx.setContextProperty("VideoAdjust", video_adjust)
 
     # --- per-mode contexts -------------------------------------------------
     # Each mode gets to publish one object. The shell never names a mode; it
