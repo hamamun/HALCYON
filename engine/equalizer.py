@@ -1,7 +1,7 @@
 """10-band equalizer — Milestone 1.7.
 
 Wraps ``libvlc_audio_equalizer_*``. Applies live, with no playback restart, and
-persists to ``eq.json``.
+persists the active equalizer values to ``eq.json``.
 
 Because this hangs off libVLC rather than off any one mode, it works for *any*
 Halcyon playback — including M3U streams in Phase 2 (§P2.4). Same component,
@@ -47,7 +47,6 @@ class Equalizer(QObject):
         self._amps = [0.0] * BAND_COUNT
         self._current_preset = 0
         self._builtin: list[str] = []
-        self._user: dict[str, list[float]] = {}
         self._path = paths.data_file(FILENAME)
 
         try:
@@ -77,10 +76,19 @@ class Equalizer(QObject):
             return False
         return all(abs(a) < 1e-6 for a in self._amps)
 
+    def _builtin_preset_indexes(self) -> list[int]:
+        """Return every VLC preset except its duplicate Flat entry."""
+        return [i for i, name in enumerate(self._builtin) if name.casefold() != "flat"]
+
+    def _custom_preset_index(self) -> int:
+        return len(self.presetNames) - 1
+
     @Property("QVariantList", notify=presetChanged)
     def presetNames(self) -> list:  # noqa: N802 - QML-facing
-        # Stable model: 0=Flat, 1=Custom, 2+=builtins + user presets
-        return ["Flat", "Custom", *self._builtin, *sorted(self._user)]
+        # Flat is supplied by Halcyon, VLC's other presets follow, and Custom
+        # is the final state used after a manual adjustment. VLC commonly
+        # exposes its own Flat preset, so omit that duplicate by name.
+        return ["Flat", *[self._builtin[i] for i in self._builtin_preset_indexes()], "Custom"]
 
     @Property("QVariantList", constant=True)
     def bandLabels(self) -> list:  # noqa: N802 - QML-facing
@@ -96,22 +104,16 @@ class Equalizer(QObject):
         if not (0 <= index < len(names)):
             return
         self._current_preset = index
-        name = names[index]
 
         if index == 0:
-            # Flat
             self._preamp = 0.0
             self._amps = [0.0] * BAND_COUNT
-        elif index == 1:
-            # Custom — do nothing, keep current values
+        elif index == self._custom_preset_index():
+            # Custom represents the current manual values; it does not alter them.
             pass
-        elif name in self._user:
-            values = self._user[name]
-            self._preamp = values[0]
-            self._amps = list(values[1:])
         else:
-            # builtin presets: index 2+ map to builtin_index = index - 2
-            builtin_index = index - 2
+            builtin_index = self._builtin_preset_indexes()[index - 1]
+            name = self._builtin[builtin_index]
             try:
                 eq = self._vlc.libvlc_audio_equalizer_new_from_preset(builtin_index)
                 if eq:
@@ -124,18 +126,10 @@ class Equalizer(QObject):
             except Exception:
                 log.exception("could not load preset %s", name)
 
-        self._enabled = index > 1 or any(self._amps) or self._preamp != 0
+        self._enabled = not self._is_flat()
         self._apply()
         self.preampChanged.emit()
         self.bandsChanged.emit()
-        self.presetChanged.emit()
-        self.save()
-
-    @Slot(str)
-    def save_user_preset(self, name: str) -> None:
-        if not name:
-            return
-        self._user[name] = [self._preamp, *self._amps]
         self.presetChanged.emit()
         self.save()
 
@@ -153,7 +147,7 @@ class Equalizer(QObject):
             return
         self._amps[band] = value
         self._enabled = True
-        self._current_preset = 0 if self._is_flat() else 1
+        self._current_preset = 0 if self._is_flat() else self._custom_preset_index()
         self._apply()
         self.bandsChanged.emit()
         self.presetChanged.emit()
@@ -170,6 +164,7 @@ class Equalizer(QObject):
             return
         self._preamp = value
         self._enabled = True
+        self._current_preset = 0 if self._is_flat() else self._custom_preset_index()
         self._apply()
         self.preampChanged.emit()
         self.presetChanged.emit()
@@ -231,22 +226,10 @@ class Equalizer(QObject):
         amps = data.get("bands", [])
         if isinstance(amps, list) and len(amps) == BAND_COUNT:
             self._amps = [float(a) for a in amps]
-        self._current_preset = int(data.get("preset", 0))
-        user = data.get("user", {})
-        if isinstance(user, dict):
-            self._user = {
-                str(k): [float(x) for x in v]
-                for k, v in user.items()
-                if isinstance(v, list) and len(v) == BAND_COUNT + 1
-            }
-        # Migrate old saves (before Flat/Custom split):
-        # old: 0 = flat/custom, 1 = first builtin, ...
-        # new: 0 = Flat, 1 = Custom, 2 = first builtin, ...
-        if self._current_preset == 0:
-            if not self._is_flat():
-                self._current_preset = 1
-        elif self._current_preset >= 1:
-            self._current_preset = self._current_preset + 1
+        # Old files may contain user presets and index-based selections. User
+        # presets are intentionally no longer supported. The persisted values
+        # remain valid; non-flat legacy values are shown as Custom.
+        self._current_preset = 0 if self._is_flat() else self._custom_preset_index()
 
     def save(self) -> None:
         payload = {
@@ -254,7 +237,6 @@ class Equalizer(QObject):
             "preamp": self._preamp,
             "bands": self._amps,
             "preset": self._current_preset,
-            "user": self._user,
         }
         try:
             tmp = self._path.with_suffix(".tmp")

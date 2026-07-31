@@ -4,8 +4,8 @@ import Halcyon.Ui
 
 // Equalizer — Milestone 1.7 + Video adjust (Milestone 1.7).
 //
-// 10 bands, 31 Hz - 16 kHz, +/-20 dB, preamp, VLC's built-in presets plus user
-// presets. Applies live via libvlc_audio_equalizer_*.
+// 10 bands, 31 Hz - 16 kHz, +/-20 dB, preamp, and VLC's built-in presets.
+// Applies live via libvlc_audio_equalizer_*.
 //
 // Video adjust below it: contrast, brightness, hue, saturation, gamma via
 // libvlc_video_set_adjust_*. No presets (VLC has none) — manual sliders only,
@@ -34,48 +34,130 @@ Item {
             width: parent.width
             spacing: Theme.spaceMd
 
-            // --------------------------------------------------- preset row --
-            Row {
+            // --------------------------------------------------- presets ---
+            // Keep every preset visible: the right dock itself owns scrolling,
+            // so this grid deliberately has no nested Flickable.
+            Column {
+                id: presetsSection
                 width: parent.width
                 spacing: Theme.spaceSm
 
-                ComboBox {
-                    id: presetBox
-                    width: parent.width - resetButton.width - Theme.spaceSm
-                    model: root.eq ? root.eq.presetNames : []
-                    currentIndex: root.eq ? root.eq.currentPreset : 0
-                    onActivated: if (root.eq) root.eq.apply_preset(currentIndex)
-
-                    background: Rectangle {
-                        radius: Theme.radiusSmall
-                        color: Theme.glassFill
-                        border.width: 1
-                        border.color: Theme.glassBorder
+                function longestPresetName() {
+                    var names = root.eq ? root.eq.presetNames : []
+                    var longest = ""
+                    for (var i = 0; i < names.length; ++i) {
+                        if (String(names[i]).length > longest.length)
+                            longest = String(names[i])
                     }
-                    contentItem: Text {
-                        leftPadding: Theme.spaceMd
-                        text: presetBox.displayText
+                    return longest
+                }
+
+                // Prefer a dense grid, but never make a long preset label feel
+                // cramped. Three columns remain the readable lower limit.
+                property int columnCount: {
+                    var buttonWidth = Math.ceil(presetTextMetrics.advanceWidth) + Theme.spaceSm * 2
+                    var fiveWidth = buttonWidth * 5 + Theme.spaceXs * 4
+                    var fourWidth = buttonWidth * 4 + Theme.spaceXs * 3
+                    return width >= fiveWidth ? 5 : width >= fourWidth ? 4 : 3
+                }
+
+                TextMetrics {
+                    id: presetTextMetrics
+                    text: presetsSection.longestPresetName()
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeTiny
+                    font.weight: Theme.weightMedium
+                }
+
+                Row {
+                    width: parent.width
+
+                    Text {
+                        width: parent.width - resetButton.width
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "PRESETS"
                         font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.text
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                        font.pixelSize: Theme.fontSizeTiny
+                        font.weight: Theme.weightBold
+                        color: Theme.textFaint
                     }
 
-                    // Keep combo in sync when preset changes from code (reset -> Flat, manual tweak -> Custom)
-                    Connections {
-                        target: root.eq
-                        function onPresetChanged() {
-                            presetBox.currentIndex = root.eq ? root.eq.currentPreset : 0
+                    IconButton {
+                        id: resetButton
+                        glyph: Glyphs.refresh
+                        tooltip: "Reset to Flat"
+                        onClicked: if (root.eq) root.eq.reset()
+                    }
+                }
+
+                Grid {
+                    id: presetGrid
+                    width: parent.width
+                    columns: presetsSection.columnCount
+                    columnSpacing: Theme.spaceXs
+                    rowSpacing: Theme.spaceXs
+
+                    Repeater {
+                        model: root.eq ? root.eq.presetNames : []
+
+                        delegate: AbstractButton {
+                            id: presetButton
+                            required property int index
+                            required property string modelData
+                            readonly property bool selected: root.eq && index === root.eq.currentPreset
+
+                            width: (presetGrid.width - (presetGrid.columns - 1) * presetGrid.columnSpacing)
+                                   / presetGrid.columns
+                            height: 30
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            onClicked: if (root.eq) root.eq.apply_preset(index)
+
+                            background: Rectangle {
+                                radius: Theme.radiusSmall
+                                color: presetButton.selected ? Theme.accentDim
+                                     : presetButton.pressed ? Theme.glassFillPressed
+                                     : presetButton.hovered ? Theme.glassFillHover
+                                     : Theme.glassFill
+                                border.width: 1
+                                border.color: presetButton.selected ? Theme.accent
+                                              : presetButton.activeFocus ? Theme.glassBorderStrong
+                                              : Theme.glassBorder
+
+                                Behavior on color {
+                                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                                }
+                            }
+
+                            contentItem: Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.spaceSm
+                                anchors.rightMargin: Theme.spaceSm
+                                text: presetButton.modelData
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeTiny
+                                font.weight: Theme.weightMedium
+                                color: presetButton.selected ? Theme.accent : Theme.textMuted
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+
+                            ToolTip.visible: hovered && truncated
+                            ToolTip.delay: 500
+                            ToolTip.text: modelData
+                            property bool truncated: contentItem.implicitWidth > width - Theme.spaceSm * 2
                         }
                     }
                 }
 
-                IconButton {
-                    id: resetButton
-                    glyph: Glyphs.refresh
-                    tooltip: "Reset to Flat"
-                    onClicked: if (root.eq) root.eq.reset()
+                Connections {
+                    target: root.eq
+                    function onPresetChanged() {
+                        // The bindings above update the active button. Keeping
+                        // this connection makes that intent explicit when the
+                        // backend changes it after a manual slider adjustment.
+                    }
                 }
             }
 
