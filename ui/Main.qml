@@ -14,13 +14,19 @@ import Halcyon.Overlay
 //  │  ┌────────┐  Stage (video + OSD)         ┌──────────┐   │
 //  │  │PanelHost│  full-width                  │InfoPanel │   │
 //  │  │ overlay │                              │ overlay  │   │
-//  │  │  z:10   ├──────────────────────────────┤  z:10    │   │
-//  │  │         │  mode transport bar          │          │   │
-//  │  └────────┘  full-width, never moves     └──────────┘   │
+//  │  │  z:10   │                              │  z:10    │   │
+//  │  └────────┘                              └──────────┘   │
+//  │  ──────────  mode transport bar  ──────────────────────  │
+//  │              full-width, never moves                     │
 //  └──────────────────────────────────────────────────────────┘
 //
 // Panels float over the video area — they never push the transport bar or
-// squeeze the video. Clicking on the video area outside the panels closes them.
+// squeeze the video. Both docks stop at the top edge of the transport bar
+// (see body.transportInset) so the controls are never covered.
+//
+// Panels are opened and closed *only* by their toggles — the toolbar buttons
+// and Ctrl+L / Ctrl+I. Clicking the video does not dismiss them; a click on
+// the stage means play/pause and nothing else.
 // The lyrics tab can expand for better readability (§P1.5).
 //
 // The chassis is fixed. Which panel, which stage and which bar load into it
@@ -310,6 +316,24 @@ Shell {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
 
+            // How much of the body's bottom edge the mode's transport bar owns.
+            //
+            // The bar lives inside the Stage and is anchored to its bottom, so
+            // a panel anchored to `body.bottom` would sit *on top of* it and
+            // swallow the controls. Both docks therefore stop short by exactly
+            // the bar's own height — they end where the controls begin.
+            //
+            // Read from the Loader rather than hardcoded: each mode declares
+            // its own bar height (§B.2 — Local's two rows are 72px, M3U's
+            // single row is shorter), and `transportLoader.height` follows the
+            // loaded item's implicitHeight. A mode with no bar reports 0.
+            //
+            // Gated on `chromeVisible` so that when the bar fades out under
+            // auto-hide (§P1.4) the panels reclaim the full height instead of
+            // leaving a dead strip where the bar used to be.
+            readonly property real transportInset:
+                (transportLoader.active && window.chromeVisible) ? transportLoader.height : 0
+
             // Stage takes full width — panels float on top
             Stage {
                 id: stage
@@ -369,67 +393,41 @@ Shell {
                 }
             }
 
-            // Left panel — floats over the stage (overlay)
+            // Left panel — floats over the stage (overlay).
+            // Stops at the top of the transport bar so the controls stay
+            // visible and clickable while the dock is open.
             PanelHost {
                 id: panelHost
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
+                anchors.bottomMargin: body.transportInset
                 open: !window.fullscreen && Settings.get("window.leftPanelVisible", true)
                 source: window.modeSpec ? window.modeSpec.panelQml : ""
                 blurSource: stage
                 z: 10
+
+                // Match the bar's own fade so the panel edge and the bar move
+                // together rather than the panel snapping to a new height.
+                Behavior on anchors.bottomMargin {
+                    NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                }
             }
 
-            // Right panel — floats over the stage (overlay)
+            // Right panel — floats over the stage (overlay).
+            // Same bottom stop as the left dock — see body.transportInset.
             InfoPanel {
                 id: infoPanel
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
+                anchors.bottomMargin: body.transportInset
                 open: !window.fullscreen && Settings.get("window.rightPanelVisible", false)
                 blurSource: stage
                 z: 10
-            }
 
-            // Click-outside-to-close overlay.
-            //
-            // Sits between the stage (z:0) and the floating panels (z:10).
-            // Uses propagateComposedEvents so stage clicks (play/pause, video
-            // interaction) still work. The click handler inspects the mouse x
-            // position: if the click falls inside a panel's footprint, it lets
-            // the event through untouched; otherwise it closes both panels and
-            // passes the click to the stage beneath.
-            MouseArea {
-                anchors.fill: parent
-                z: 5
-                visible: panelHost.open || infoPanel.open
-                enabled: visible
-                propagateComposedEvents: true
-
-                onClicked: {
-                    var x = mouse.x;
-                    var onLeftPanel  = panelHost.open  && x < panelHost.width;
-                    var onRightPanel = infoPanel.open  && x > (parent.width - infoPanel.width);
-
-                    if (onLeftPanel || onRightPanel) {
-                        // Click landed on a panel — let the panel handle it.
-                        mouse.accepted = false;
-                        return;
-                    }
-
-                    // Click landed on empty stage area — close both panels,
-                    // but still pass the click through to the stage below so
-                    // video play/pause keeps working.
-                    if (panelHost.open) {
-                        panelHost.open = false;
-                        Settings.set("window.leftPanelVisible", false);
-                    }
-                    if (infoPanel.open) {
-                        infoPanel.open = false;
-                        Settings.set("window.rightPanelVisible", false);
-                    }
-                    mouse.accepted = false;
+                Behavior on anchors.bottomMargin {
+                    NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
                 }
             }
         }

@@ -71,7 +71,15 @@ QtObject {
     readonly property string refresh:    "\uE72C"
     readonly property string home:       "\uE80F"
 
-    // Panel expand/collapse — chevrons read as "widen" / "narrow" for a dock.
-    readonly property string expandPanel:  "\uE902"   // Fluent "ExpandAll" / outward arrows
-    readonly property string collapsePanel: "\uE903"  // Fluent "CollapseAll" / inward arrows
+    // Right-dock widen/narrow, used by the Lyrics tab.
+    //
+    // Aliases onto the chevron pair above rather than introducing new
+    // codepoints: for a dock pinned to the right edge, "grow" moves its inner
+    // edge left and "shrink" moves it back right, so the chevrons point the way
+    // the panel is about to travel.
+    //
+    // Do not substitute E902/E903 here. E902 is "Group" (an unrelated glyph)
+    // and E903 is unassigned in Segoe Fluent Icons — it renders as tofu.
+    readonly property string expandPanel:   chevronLeft    // widen  ← 
+    readonly property string collapsePanel: chevronRight   // narrow →
 }
