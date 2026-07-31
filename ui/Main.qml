@@ -10,12 +10,18 @@ import Halcyon.Overlay
 //
 //  ┌──────────────────────────────────────────────────────────┐
 //  │ ◆ Halcyon   [ Local ]                    ⚙  ─  □  ✕      │ 44px
-//  ├────────────┬─────────────────────────────┬───────────────┤
-//  │ PanelHost  │  Stage (video + OSD)        │  InfoPanel    │
-//  │  300px     │                             │   320px       │
-//  │            ├─────────────────────────────┤  collapsible  │
-//  │            │  mode transport bar         │               │
-//  └────────────┴─────────────────────────────┴───────────────┘
+//  ├──────────────────────────────────────────────────────────┤
+//  │  ┌────────┐  Stage (video + OSD)         ┌──────────┐   │
+//  │  │PanelHost│  full-width                  │InfoPanel │   │
+//  │  │ overlay │                              │ overlay  │   │
+//  │  │  z:10   ├──────────────────────────────┤  z:10    │   │
+//  │  │         │  mode transport bar          │          │   │
+//  │  └────────┘  full-width, never moves     └──────────┘   │
+//  └──────────────────────────────────────────────────────────┘
+//
+// Panels float over the video area — they never push the transport bar or
+// squeeze the video. Clicking on the video area outside the panels closes them.
+// The lyrics tab can expand for better readability (§P1.5).
 //
 // The chassis is fixed. Which panel, which stage and which bar load into it
 // comes from the active ModeSpec (§A.2) — that is the whole extension mechanism.
@@ -280,7 +286,7 @@ Shell {
     }
 
     // ======================================================================
-    // LAYOUT
+    // LAYOUT — Floating panels overlay the video, transport bar stays full-width
     // ======================================================================
     Rectangle {
         anchors.fill: parent
@@ -304,20 +310,11 @@ Shell {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
 
-            PanelHost {
-                id: panelHost
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                open: !window.fullscreen && Settings.get("window.leftPanelVisible", true)
-                source: window.modeSpec ? window.modeSpec.panelQml : ""
-                blurSource: stage
-            }
-
+            // Stage takes full width — panels float on top
             Stage {
                 id: stage
-                anchors.left: panelHost.right
-                anchors.right: infoPanel.left
+                anchors.left: parent.left
+                anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 source: window.modeSpec ? window.modeSpec.stageQml : ""
@@ -372,6 +369,19 @@ Shell {
                 }
             }
 
+            // Left panel — floats over the stage (overlay)
+            PanelHost {
+                id: panelHost
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                open: !window.fullscreen && Settings.get("window.leftPanelVisible", true)
+                source: window.modeSpec ? window.modeSpec.panelQml : ""
+                blurSource: stage
+                z: 10
+            }
+
+            // Right panel — floats over the stage (overlay)
             InfoPanel {
                 id: infoPanel
                 anchors.right: parent.right
@@ -379,6 +389,48 @@ Shell {
                 anchors.bottom: parent.bottom
                 open: !window.fullscreen && Settings.get("window.rightPanelVisible", false)
                 blurSource: stage
+                z: 10
+            }
+
+            // Click-outside-to-close overlay.
+            //
+            // Sits between the stage (z:0) and the floating panels (z:10).
+            // Uses propagateComposedEvents so stage clicks (play/pause, video
+            // interaction) still work. The click handler inspects the mouse x
+            // position: if the click falls inside a panel's footprint, it lets
+            // the event through untouched; otherwise it closes both panels and
+            // passes the click to the stage beneath.
+            MouseArea {
+                anchors.fill: parent
+                z: 5
+                visible: panelHost.open || infoPanel.open
+                enabled: visible
+                propagateComposedEvents: true
+
+                onClicked: {
+                    var x = mouse.x;
+                    var onLeftPanel  = panelHost.open  && x < panelHost.width;
+                    var onRightPanel = infoPanel.open  && x > (parent.width - infoPanel.width);
+
+                    if (onLeftPanel || onRightPanel) {
+                        // Click landed on a panel — let the panel handle it.
+                        mouse.accepted = false;
+                        return;
+                    }
+
+                    // Click landed on empty stage area — close both panels,
+                    // but still pass the click through to the stage below so
+                    // video play/pause keeps working.
+                    if (panelHost.open) {
+                        panelHost.open = false;
+                        Settings.set("window.leftPanelVisible", false);
+                    }
+                    if (infoPanel.open) {
+                        infoPanel.open = false;
+                        Settings.set("window.rightPanelVisible", false);
+                    }
+                    mouse.accepted = false;
+                }
             }
         }
     }
