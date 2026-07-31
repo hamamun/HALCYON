@@ -23,7 +23,11 @@ Both features work together to provide a better user experience without breaking
 - Stage (video) takes full width always
 - Transport bar sits at bottom, full-width, never moves
 - Both panels float on top of the video area as overlays
+- Both panels stop at the top edge of the transport bar, so the controls are
+  never covered (see `body.transportInset` in `ui/Main.qml`)
 - Panels slide in/out from the edges
+- Panels are opened and closed **only** by their toggles (toolbar buttons and
+  Ctrl+L / Ctrl+I). Clicking the video does not dismiss them.
 
 ### Technical Implementation
 
@@ -33,21 +37,30 @@ Both features work together to provide a better user experience without breaking
 - Stage uses full width (`anchors.left: parent.left; anchors.right: parent.right`)
 - Transport bar remains inside Stage but Stage is now full-width
 
-**Click-Outside-to-Close:**
-- Added a transparent MouseArea at `z: 5` (below panels, above stage)
-- Only visible when at least one panel is open
-- Uses `propagateComposedEvents: true` so video clicks still work
-- Checks mouse X position to determine if click is on a panel or empty space
-- Clicks on panels: pass through to panel (no action)
-- Clicks on empty stage area: close both panels + pass click to stage (video play/pause works)
+**Panel Height (stopping at the transport bar):**
+- `body.transportInset` reports the mode bar's height, read from
+  `transportLoader.height` rather than hardcoded, so each mode's own bar height
+  is respected (§B.2) and a mode with no bar reports 0
+- Both docks set `anchors.bottomMargin: body.transportInset`
+- Gated on `chromeVisible`: when the bar fades under fullscreen auto-hide the
+  inset drops to 0 and the panels reclaim the full height, animated over
+  `Theme.durAutoHide` so the panel edge and the bar move together
+
+**Panel Dismissal:**
+- Panels close *only* via `Actions.toggleLeftPanel()` / `toggleRightPanel()`,
+  reached from the transport-bar buttons and Ctrl+L / Ctrl+I
+- There is deliberately **no** click-outside-to-close overlay: a click on the
+  stage means play/pause and nothing else
 
 ### User Experience
 
 - Open left panel (Ctrl+L) → slides in from left, overlays video
 - Open right panel (Ctrl+I) → slides in from right, overlays video
 - Both panels can be open simultaneously
-- Click anywhere on the video (outside panels) → both panels close
-- Video play/pause still works by clicking the video
+- Panels stay open until their toggle is pressed again — clicking the video
+  play/pauses and leaves the docks alone
+- Both panels end at the top of the transport bar; the controls stay visible
+  and clickable with either dock open
 - Transport bar never moves or resizes
 
 ---
@@ -126,9 +139,9 @@ Both features work together to provide a better user experience without breaking
 
 ## Files Modified
 
-1. **ui/Main.qml** (72 lines changed)
+1. **ui/Main.qml**
    - Restructured layout: Stage full-width, panels as overlays
-   - Added click-outside-to-close MouseArea
+   - Added `body.transportInset` and anchored both docks above the transport bar
    - Updated layout comments
 
 2. **ui/panels/InfoPanel.qml** (42 lines added)
@@ -141,9 +154,11 @@ Both features work together to provide a better user experience without breaking
 3. **ui/Theme.qml** (1 line added)
    - Added `rightPanelExpandedWidth: 560` constant
 
-4. **ui/components/Glyphs.qml** (4 lines added)
-   - Added `expandPanel` glyph (U+E902)
-   - Added `collapsePanel` glyph (U+E903)
+4. **ui/components/Glyphs.qml**
+   - `expandPanel` / `collapsePanel` alias the existing `chevronLeft` (U+E76B)
+     and `chevronRight` (U+E76C)
+   - Do **not** use U+E902/U+E903 here: E902 is "Group" (an unrelated glyph) and
+     E903 is unassigned in Segoe Fluent Icons, so it renders as tofu
 
 ---
 
@@ -155,10 +170,10 @@ Both features work together to provide a better user experience without breaking
    - Both panels open at same time — should work
    - Video should always be full-width
 
-2. **Click-Outside-to-Close:**
-   - Open a panel, click on video area — panel should close
-   - Click should also trigger video play/pause
-   - Click on panel itself — should interact with panel, not close it
+2. **Panel Dismissal:**
+   - Open a panel, click on the video area — the panel must stay open and the
+     click should play/pause
+   - The only things that close a dock are its toolbar button and Ctrl+L / Ctrl+I
 
 3. **Lyrics Expand:**
    - Open right panel, switch to Lyrics tab
@@ -171,14 +186,19 @@ Both features work together to provide a better user experience without breaking
    - Open/close panels — transport bar should never move
    - Play/pause, seek, volume — all should work normally
    - Transport bar position should be identical whether panels are open or closed
+   - With either dock open, every control in the bar must remain visible and
+     clickable — nothing overlaps it
+   - Fullscreen: let the bar auto-hide with a dock open — the panel should grow
+     to fill the freed space, and shrink back when the bar returns
 
 ---
 
 ## Known Limitations
 
-1. **Click-Outside Behavior:**
-   - Clicking outside a panel closes BOTH panels (not just the one you clicked outside of)
-   - This is intentional — simpler mental model than tracking which panel to close
+1. **Panel Dismissal:**
+   - Docks are dismissed only by their own toggles; there is no click-away
+     shortcut. This is intentional — a click on the video is play/pause, and one
+     gesture should not mean two things.
 
 2. **Lyrics Expand:**
    - Expanded state resets when switching tabs (by design)
