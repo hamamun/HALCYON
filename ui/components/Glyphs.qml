@@ -70,4 +70,8 @@ QtObject {
     readonly property string globe:      "\uE774"
     readonly property string refresh:    "\uE72C"
     readonly property string home:       "\uE80F"
+
+    // Panel expand/collapse — chevrons read as "widen" / "narrow" for a dock.
+    readonly property string expandPanel:  "\uE902"   // Fluent "ExpandAll" / outward arrows
+    readonly property string collapsePanel: "\uE903"  // Fluent "CollapseAll" / inward arrows
 }
