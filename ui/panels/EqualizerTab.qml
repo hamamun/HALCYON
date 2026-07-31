@@ -62,7 +62,7 @@ Item {
                         elide: Text.ElideRight
                     }
 
-                    // Keep combo in sync when preset changes from code (band edit -> Custom, reset -> Custom flat)
+                    // Keep combo in sync when preset changes from code (reset -> Flat, manual tweak -> Custom)
                     Connections {
                         target: root.eq
                         function onPresetChanged() {
@@ -74,7 +74,7 @@ Item {
                 IconButton {
                     id: resetButton
                     glyph: Glyphs.refresh
-                    tooltip: "Reset to flat"
+                    tooltip: "Reset to Flat"
                     onClicked: if (root.eq) root.eq.reset()
                 }
             }
