@@ -23,6 +23,9 @@ Item {
     //: Reflects the left dock's state so the playlist button can light up.
     //: Bound by the shell in Main.qml — see bindTransport().
     property bool playlistVisible: false
+    //: Reflects the right dock (Info/Lyrics/Equalizer) so the new button can
+    //: light up — symmetric to playlistVisible.
+    property bool infoPanelVisible: false
     property var audioTracks: []
     property var embeddedSubtitleTracks: []
     property var localSubtitleTracks: []
@@ -150,6 +153,15 @@ Item {
                     tooltip: "Playlist (Ctrl+L)"
                     active: root.playlistVisible
                     onClicked: Actions.toggleLeftPanel()
+                }
+                // Right dock toggle (Info / Lyrics / Equalizer) — symmetric to
+                // the playlist button. Was only reachable via Ctrl+I / Ctrl+E
+                // which made the equalizer undiscoverable.
+                IconButton {
+                    glyph: Glyphs.equalizer
+                    tooltip: "Equalizer / Info (Ctrl+I)"
+                    active: root.infoPanelVisible
+                    onClicked: Actions.toggleRightPanel()
                 }
                 IconButton {
                     id: subsButton
