@@ -259,6 +259,8 @@ Shell {
             });
         if ("playlistVisible" in item)
             item.playlistVisible = Qt.binding(function() { return panelHost.open });
+        if ("infoPanelVisible" in item)
+            item.infoPanelVisible = Qt.binding(function() { return infoPanel.open });
         if ("audioTracks" in item)
             item.audioTracks = Qt.binding(function() { return App.audioTracks });
         if ("subtitleTracks" in item)

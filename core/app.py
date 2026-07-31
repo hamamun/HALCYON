@@ -84,6 +84,7 @@ class AppController(QObject):
         metadata,
         lyrics,
         equalizer,
+        video_adjust=None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -93,6 +94,7 @@ class AppController(QObject):
         self._metadata = metadata
         self._lyrics = lyrics
         self._equalizer = equalizer
+        self._video_adjust = video_adjust
 
         self._active_mode = settings.get("ui.mode", "local")
         if mode_registry.find(self._active_mode) is None:
@@ -401,6 +403,11 @@ class AppController(QObject):
         self._metadata.load(path)
         self._lyrics.load(path)
         self._equalizer.reapply()
+        if self._video_adjust is not None:
+            try:
+                self._video_adjust.reapply()
+            except Exception:
+                log.debug("video adjust reapply failed", exc_info=True)
         self._subtitle_delay = 0
         self.subtitleDelayChanged.emit()
         # External files belong to the media they were attached to; a new
