@@ -38,6 +38,16 @@ Shell {
     readonly property var modeSpec: Modes.spec(activeMode)
     property bool chromeVisible: true
 
+    // The docks' open state lives here as plain bools, NOT as an imperative
+    // toggle on the docks. `panelHost.open = !panelHost.open` compiles fine but
+    // *removes* the binding the dock was declared with — Qt logs "Overwriting
+    // binding ... that was initially bound at ..." (qt.qml.binding.removal),
+    // and from the first Ctrl+L onward the dock no longer knows fullscreen
+    // must force it shut. Toggles write these bools, the docks bind `open`
+    // to them, and the binding survives every toggle.
+    property bool leftPanelOpen: Settings.get("window.leftPanelVisible", true)
+    property bool rightPanelOpen: Settings.get("window.rightPanelVisible", false)
+
     // The OS-level title: taskbar button, Alt-Tab, window list. The frameless
     // shell draws no caption of its own, so this is otherwise invisible to the
     // user — but it is what Windows shows, and "Halcyon" for every window is
@@ -190,15 +200,15 @@ Shell {
         }
         function exitFullscreen()  { if (window.fullscreen) toggleFullscreen() }
         function toggleLeftPanel() {
-            panelHost.open = !panelHost.open;
-            Settings.set("window.leftPanelVisible", panelHost.open);
+            window.leftPanelOpen = !window.leftPanelOpen;
+            Settings.set("window.leftPanelVisible", window.leftPanelOpen);
         }
         function toggleRightPanel() {
-            infoPanel.open = !infoPanel.open;
-            Settings.set("window.rightPanelVisible", infoPanel.open);
+            window.rightPanelOpen = !window.rightPanelOpen;
+            Settings.set("window.rightPanelVisible", window.rightPanelOpen);
         }
         function showEqualizer() {
-            infoPanel.open = true;
+            window.rightPanelOpen = true;
             infoPanel.currentTab = 2;
             Settings.set("window.rightPanelVisible", true);
         }
@@ -394,7 +404,7 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
-                open: !window.fullscreen && Settings.get("window.leftPanelVisible", true)
+                open: !window.fullscreen && window.leftPanelOpen
                 source: window.modeSpec ? window.modeSpec.panelQml : ""
                 blurSource: stage
                 z: 10
@@ -414,7 +424,7 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
-                open: !window.fullscreen && Settings.get("window.rightPanelVisible", false)
+                open: !window.fullscreen && window.rightPanelOpen
                 blurSource: stage
                 z: 10
 
