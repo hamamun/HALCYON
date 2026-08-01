@@ -287,11 +287,12 @@ class Metadata(QObject):
             # that extracts embedded covers and picks up folder.jpg / cover.jpg
             # next to the file. The two are a bitmask, so they combine.
             try:
-                flags = (
-                    vlc.MediaParseFlag.local.value
-                    | vlc.MediaParseFlag.fetch_local.value
-                )
-                media.parse_with_options(flags, 3000)
+                if self._retries == 0:
+                    flags = (
+                        vlc.MediaParseFlag.local.value
+                        | vlc.MediaParseFlag.fetch_local.value
+                    )
+                    media.parse_with_options(flags, 3000)
             except Exception:
                 log.debug("parse_with_options failed for %s", path, exc_info=True)
 

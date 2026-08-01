@@ -87,8 +87,8 @@ Item {
                     glyph: modelData.glyph
                     tooltip: modelData.label
                     active: root.currentTab === index
-                    badge: Array.isArray(root.badges) && root.badges.length > index
-                           ? root.badges[index] === true : false
+                    badge: Array.isArray(tabs.badges) && tabs.badges.length > index
+                           ? tabs.badges[index] === true : false
                     onClicked: root.currentTab = index
                 }
             }

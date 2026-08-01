@@ -602,19 +602,19 @@ Shell {
 
         _availToastKey = player.currentMedia;
         if (subs)
-            osd("Subtitles available", Glyphs.subtitles);
+            Actions.osd("Subtitles available", Glyphs.subtitles);
         if (lyr) {
             if (subs)
                 availToastTimer.restart();   // second toast after the first fades
             else
-                osd("Lyrics available", Glyphs.lyrics);
+                Actions.osd("Lyrics available", Glyphs.lyrics);
         }
     }
 
     Timer {
         id: availToastTimer
         interval: 1400
-        onTriggered: osd("Lyrics available", Glyphs.lyrics)
+        onTriggered: Actions.osd("Lyrics available", Glyphs.lyrics)
     }
 
     Connections {
@@ -624,7 +624,7 @@ Shell {
         function onResumePrompted(path, positionMs) {
             // Silent resume already landed — tell the user where we continued.
             if (window.osdEnabled() && positionMs > 0)
-                osd("Resumed from " + window.formatTime(positionMs), Glyphs.play);
+                Actions.osd("Resumed from " + window.formatTime(positionMs), Glyphs.play);
         }
         function onTracksChanged() {
             window.maybeAvailabilityToasts();
