@@ -28,6 +28,29 @@ def _fmt_bitrate(bps: int) -> str:
     return f"{bps // 1000} kbps" if bps > 0 else "\u2014"
 
 
+def _fmt_size(bytes_val: int) -> str:
+    if bytes_val <= 0:
+        return "\u2014"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if bytes_val < 1024.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(bytes_val)} B"
+            return f"{bytes_val:.1f} {unit}"
+        bytes_val /= 1024.0
+    return "\u2014"
+
+
+def _clean_str(val: object) -> str:
+    if not val:
+        return ""
+    if isinstance(val, bytes):
+        try:
+            return val.decode("utf-8", "ignore").strip("\x00 ")
+        except Exception:
+            return str(val)
+    return str(val).strip("\x00 ")
+
+
 class Metadata(QObject):
     """Metadata for whatever is currently loaded."""
 
@@ -68,10 +91,22 @@ class Metadata(QObject):
     def _read(self, path: str) -> None:
         file_path = Path(paths.normalise_path(path))
         self._title = file_path.stem
+
+        file_size = 0
+        try:
+            if file_path.exists():
+                file_size = file_path.stat().st_size
+        except Exception:
+            file_size = 0
+
         details = [
             {"label": "File", "value": file_path.name},
-            {"label": "Container", "value": file_path.suffix.lstrip(".").upper() or "\u2014"},
         ]
+        if file_size > 0:
+            details.append({"label": "File size", "value": _fmt_size(file_size)})
+        details.append(
+            {"label": "Container", "value": file_path.suffix.lstrip(".").upper() or "\u2014"}
+        )
 
         try:
             import vlc
@@ -106,9 +141,28 @@ class Metadata(QObject):
                 self._album = meta(vlc.Meta.Album)
                 self._artwork = meta(vlc.Meta.ArtworkURL)
 
+                genre = meta(vlc.Meta.Genre)
+                date_str = meta(vlc.Meta.Date)
+                track_num = meta(vlc.Meta.TrackNumber)
+                track_total = meta(vlc.Meta.TrackTotal)
+
                 duration = int(media.get_duration())
                 details.append({"label": "Duration", "value": _fmt_duration(duration)})
 
+                if self._album:
+                    details.append({"label": "Album", "value": self._album})
+                if track_num and str(track_num).strip() not in ("0", ""):
+                    t_str = str(track_num).strip()
+                    if track_total and str(track_total).strip() not in ("0", ""):
+                        t_str = f"{t_str} of {str(track_total).strip()}"
+                    details.append({"label": "Track", "value": t_str})
+                if genre:
+                    details.append({"label": "Genre", "value": genre})
+                if date_str:
+                    details.append({"label": "Year", "value": str(date_str).strip()})
+
+                audio_count = 0
+                subtitle_tracks: list[str] = []
                 for track in media.tracks_get() or []:
                     if track.type == vlc.TrackType.video and track.video:
                         video = track.video.contents
@@ -129,20 +183,48 @@ class Metadata(QObject):
                             {"label": "Video codec", "value": _fourcc(track.codec)}
                         )
                     elif track.type == vlc.TrackType.audio:
+                        audio_count += 1
+                        suffix = f" #{audio_count}" if audio_count > 1 else ""
                         audio = track.audio.contents
+                        codec_str = _fourcc(track.codec)
+                        lang_str = _clean_str(getattr(track, "language", ""))
+                        if lang_str and lang_str.lower() not in codec_str.lower():
+                            codec_str = f"{codec_str} ({lang_str})"
                         details.append(
-                            {"label": "Audio codec", "value": _fourcc(track.codec)}
+                            {"label": f"Audio codec{suffix}", "value": codec_str}
                         )
                         details.append(
                             {
-                                "label": "Channels",
+                                "label": f"Channels{suffix}",
                                 "value": f"{audio.channels} ch @ {audio.rate} Hz",
                             }
                         )
                         if track.bitrate:
                             details.append(
-                                {"label": "Bitrate", "value": _fmt_bitrate(track.bitrate)}
+                                {"label": f"Bitrate{suffix}", "value": _fmt_bitrate(track.bitrate)}
                             )
+                    elif (
+                        track.type == getattr(vlc.TrackType, "ext", getattr(vlc.TrackType, "text", 2))
+                        or getattr(track.type, "value", track.type) == 2
+                    ):
+                        sub_lang = _clean_str(getattr(track, "language", ""))
+                        sub_desc = _clean_str(getattr(track, "description", ""))
+                        sub_codec = _fourcc(track.codec)
+                        item = sub_lang or sub_desc or sub_codec
+                        if sub_lang and sub_codec and sub_codec not in item:
+                            item = f"{sub_lang} ({sub_codec})"
+                        elif sub_desc and sub_codec and sub_codec not in item:
+                            item = f"{sub_desc} ({sub_codec})"
+                        if item and item not in subtitle_tracks:
+                            subtitle_tracks.append(item)
+
+                if subtitle_tracks:
+                    details.append(
+                        {
+                            "label": "Subtitles" if len(subtitle_tracks) > 1 else "Subtitle",
+                            "value": ", ".join(subtitle_tracks),
+                        }
+                    )
         except Exception:
             log.debug("metadata parse failed for %s", path, exc_info=True)
 
@@ -151,7 +233,9 @@ class Metadata(QObject):
 
         # If the parse has not produced tags yet, look again shortly. Bounded
         # so a file that genuinely has no tags does not retry forever.
-        if self._retries < self._MAX_RETRIES and not (self._artist or self._artwork):
+        if self._retries < self._MAX_RETRIES and not (
+            self._artist or self._artwork or self._album
+        ):
             self._retries += 1
             QTimer.singleShot(400, self._retry)
 
@@ -192,8 +276,10 @@ class Metadata(QObject):
 
 def _fourcc(codec: int) -> str:
     try:
+        if not codec:
+            return ""
         raw = codec.to_bytes(4, "little")
         text = raw.decode("ascii", "ignore").strip("\x00 ")
         return text.upper() or str(codec)
     except Exception:
-        return str(codec)
+        return str(codec) if codec else ""

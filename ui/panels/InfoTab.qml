@@ -71,14 +71,14 @@ Flickable {
                 spacing: Theme.spaceSm
 
                 Text {
-                    width: 90
+                    width: 105
                     text: modelData.label
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.textFaint
                 }
                 Text {
-                    width: parent.width - 90 - Theme.spaceSm
+                    width: parent.width - 105 - Theme.spaceSm
                     text: modelData.value
                     elide: Text.ElideRight
                     font.family: Theme.fontFamily
