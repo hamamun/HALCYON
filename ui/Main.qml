@@ -573,6 +573,74 @@ Shell {
     }
 
     // ======================================================================
+    // TOASTS — resume + content availability (§P1.5). Local-mode only: the
+    // OSD gate in osdEnabled() means M3U/Web never fire these.
+    // ======================================================================
+
+    //: mrl of the media the "Subtitles/Lyrics available" toasts have already
+    //: run for — reopening the same file must not re-toast; a new file can.
+    property string _availToastKey: ""
+
+    function maybeAvailabilityToasts() {
+        if (!osdEnabled())
+            return;
+        var player = (typeof Player !== "undefined" && Player) ? Player : null;
+        var app = (typeof App !== "undefined" && App) ? App : null;
+        if (!player || !app || !player.currentMedia
+                || player.currentMedia === _availToastKey)
+            return;
+
+        // The parse lands a beat after the file opens — the tracks list and
+        // the lyrics both populate asynchronously. If neither is here yet,
+        // stay silent and let the next tracksChanged / Lyrics.changed retry.
+        var subs = app.hasVideo
+                   && (app.embeddedSubtitleTracks.length + app.localSubtitleTracks.length) > 0;
+        var lyricsObj = (typeof Lyrics !== "undefined" && Lyrics) ? Lyrics : null;
+        var lyr = lyricsObj ? lyricsObj.lines.length > 0 : false;
+        if (!subs && !lyr)
+            return;
+
+        _availToastKey = player.currentMedia;
+        if (subs)
+            osd("Subtitles available", Glyphs.subtitles);
+        if (lyr) {
+            if (subs)
+                availToastTimer.restart();   // second toast after the first fades
+            else
+                osd("Lyrics available", Glyphs.lyrics);
+        }
+    }
+
+    Timer {
+        id: availToastTimer
+        interval: 1400
+        onTriggered: osd("Lyrics available", Glyphs.lyrics)
+    }
+
+    Connections {
+        target: (typeof App !== "undefined" && App) ? App : null
+        enabled: target !== null
+
+        function onResumePrompted(path, positionMs) {
+            // Silent resume already landed — tell the user where we continued.
+            if (window.osdEnabled() && positionMs > 0)
+                osd("Resumed from " + window.formatTime(positionMs), Glyphs.play);
+        }
+        function onTracksChanged() {
+            window.maybeAvailabilityToasts();
+        }
+    }
+
+    Connections {
+        target: (typeof Lyrics !== "undefined" && Lyrics) ? Lyrics : null
+        enabled: target !== null
+
+        function onChanged() {
+            window.maybeAvailabilityToasts();
+        }
+    }
+
+    // ======================================================================
     // HOTKEYS — §P1.5. Every binding invokes an Actions entry, never a
     // behaviour of its own.
     // ======================================================================

@@ -34,6 +34,12 @@ Item {
     property int subtitleDelayMs: 0
     property bool hasVideo: true
 
+    // Badge state for the CC button: a dot whenever subtitle tracks exist
+    // (embedded in the file or loaded from disk), lit accent when they are on.
+    readonly property bool subtitlesAvailable:
+        (embeddedSubtitleTracks.length + localSubtitleTracks.length) > 0
+    readonly property bool subtitlesOn: currentSubtitleId >= 0
+
     // The bar must never auto-hide while the subtitle popover or the download
     // flyout is open (§P1.4).
     readonly property bool popoverOpen: trackPopover.opened || subDownload.opened
@@ -168,6 +174,8 @@ Item {
                     glyph: Glyphs.subtitles
                     tooltip: "Speed, audio and subtitles"
                     active: trackPopover.opened || subDownload.opened
+                    badge: root.subtitlesAvailable
+                    badgeOn: root.subtitlesOn
                     onClicked: trackPopover.opened ? trackPopover.close() : trackPopover.open()
                 }
                 IconButton {

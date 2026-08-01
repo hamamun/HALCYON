@@ -13,6 +13,11 @@ Item {
     property alias spacing: row.spacing
     property int alignment: Qt.AlignLeft
 
+    //: Per-button badge flags, index-aligned with the buttons. The right dock
+    //: uses this to dot its Lyrics tab when a .lrc exists; anything else
+    //: simply leaves it empty (no badges anywhere).
+    property var badges: []
+
     implicitHeight: Theme.toolbarRowHeight
     height: Theme.toolbarRowHeight
 

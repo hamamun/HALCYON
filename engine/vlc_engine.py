@@ -138,7 +138,9 @@ BASE_VLC_ARGS = [
     "--no-video-title-show",
     "--avcodec-threads=0",
     "--no-snapshot-preview",
-    "--no-stats",
+    # Stats stay ON: the Info panel's live counters (input bitrate,
+    # decoded/dropped frames) come from libvlc_media_get_stats, and
+    # "--no-stats" starves them to zeros (§P1.5).
     "--no-osd",  # Halcyon draws its own OSD in the scene graph (§6.2)
     # ------------------------------------------------------------------
     # Hardware decoding is INCOMPATIBLE with the vmem video callbacks.
