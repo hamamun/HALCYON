@@ -296,9 +296,17 @@ class VlcEngine(QObject):
         em = getattr(self, "_event_manager", None)
         if em is None:
             return
-        for event_type, handler in getattr(self, "_event_wiring", []):
+        for event_type, _handler in getattr(self, "_event_wiring", []):
             try:
-                em.event_detach(event_type, handler)
+                # python-vlc's EventManager.event_detach takes ONLY the event
+                # type — it drops every callback registered under it on that
+                # manager. Passing the handler as a second argument raises
+                # TypeError, which this except swallowed at DEBUG, so all ten
+                # callbacks stayed live right through player teardown: the
+                # exit-time QObject::disconnect warning this method exists to
+                # prevent. One handler per type is attached, so dropping by
+                # type detaches exactly what _attach_events registered.
+                em.event_detach(event_type)
             except Exception:
                 log.debug("event_detach failed for %s", event_type, exc_info=True)
         self._event_wiring = []
