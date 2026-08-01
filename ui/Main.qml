@@ -212,6 +212,14 @@ Shell {
             infoPanel.currentTab = 2;
             Settings.set("window.rightPanelVisible", true);
         }
+        // Lands the right dock on the Lyrics tab — used by the Equalizer/Info
+        // button when its lyrics dot is showing, so a single click delivers
+        // the lyrics the dot promised instead of the default Info tab.
+        function showLyrics() {
+            window.rightPanelOpen = true;
+            infoPanel.currentTab = 1;   // 0 Info, 1 Lyrics, 2 Equalizer
+            Settings.set("window.rightPanelVisible", true);
+        }
         function showSettings()    { settingsDialog.open() }
 
         // -------------------------------------------------------- mode --
@@ -299,6 +307,15 @@ Shell {
             item.subtitleDelayMs = Qt.binding(function() { return App.subtitleDelayMs });
         if ("hasVideo" in item)
             item.hasVideo = Qt.binding(function() { return App.hasVideo });
+        // Availability flags for the two transport-bar dots (§P1.6). Subtitles
+        // is computed in the controller (it knows tracks + active state);
+        // lyrics is read straight off the Lyrics object's parsed lines.
+        if ("subtitlesAvailable" in item)
+            item.subtitlesAvailable = Qt.binding(function() { return App.subtitlesAvailable });
+        if ("lyricsAvailable" in item)
+            item.lyricsAvailable = Qt.binding(function() {
+                return typeof Lyrics !== "undefined" && !!Lyrics && Lyrics.lines.length > 0;
+            });
     }
 
     // ======================================================================

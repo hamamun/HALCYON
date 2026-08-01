@@ -17,6 +17,14 @@ AbstractButton {
     property color iconColor: Theme.text
     property color activeColor: Theme.accent
     property bool showRing: true
+    // A small "something is available" dot in the top-right corner — used by
+    // the transport bar's subtitle and lyrics buttons to advertise content the
+    // user has not opened yet. Off by default so every other IconButton is
+    // unchanged; the dot only appears where a caller opts in.
+    property bool showDot: false
+    // Colour of the dot. Defaults to the accent so the two transport badges
+    // share one look; a caller may override it (e.g. to differentiate kinds).
+    property color dotColor: Theme.accent
 
     implicitWidth: Theme.hitTarget
     implicitHeight: Theme.hitTarget
@@ -62,4 +70,31 @@ AbstractButton {
     ToolTip.visible: hovered && tooltip.length > 0
     ToolTip.delay: 500
     ToolTip.text: tooltip
+
+    // The availability dot. Anchored to the button's own top-right corner and
+    // raised above background/contentItem so it is never covered. A thin ring
+    // in the base colour keeps it legible over a bright video frame; the dot
+    // itself is the accent. Fades in/out with the same fast curve as the rest
+    // of the button so it never pops.
+    Rectangle {
+        id: availabilityDot
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: Theme.spaceXs
+        anchors.rightMargin: Theme.spaceXs
+        width: Theme.badgeSize
+        height: Theme.badgeSize
+        radius: width / 2
+        color: root.dotColor
+        border.width: 1
+        border.color: Theme.base
+        z: 1
+
+        opacity: root.showDot ? 1.0 : 0.0
+        visible: opacity > 0.0
+
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+        }
+    }
 }

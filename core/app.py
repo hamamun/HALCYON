@@ -108,6 +108,10 @@ class AppController(QObject):
         self._audio_tracks: list[dict] = []
         self._video_tracks: list[dict] = []
         self._subtitle_tracks: list[dict] = []
+        #: Drives the CC button's availability badge (§P1.6): true only when
+        #: the current video has subtitles the user could switch on. Recomputed
+        #: in _refresh_tracks so it tracks reality the instant tracks arrive.
+        self._subtitles_available = False
         # Split views of the same spu list: tracks found inside the media vs
         # files this session attached (add_slave). One spu id appears in
         # exactly one of them.
@@ -629,6 +633,22 @@ class AppController(QObject):
             local = local + extra_local
         self._embedded_subtitle_tracks = embedded
         self._local_subtitle_tracks = local
+
+        # Availability hint for the CC button badge. The badge promises
+        # "something here you could switch on", so it is true only when the
+        # media is video, at least one real subtitle exists (embedded or
+        # loaded from disk — VLC's -1 "Disable" pseudo-track never counts),
+        # AND none is currently active. The moment the user turns subtitles
+        # on, currentSubtitleId leaves -1 and the badge disappears.
+        real_subs = [
+            t for t in (embedded + local) if t["id"] != -1
+        ]
+        self._subtitles_available = (
+            len(self._video_tracks) > 0
+            and bool(real_subs)
+            and self._current_subtitle_id == -1
+        )
+
         self.tracksChanged.emit()
 
     @Property("QVariantList", notify=tracksChanged)
@@ -663,6 +683,17 @@ class AppController(QObject):
     def hasVideo(self) -> bool:  # noqa: N802 - QML-facing
         """True if the current media has at least one video track."""
         return len(self._video_tracks) > 0
+
+    @Property(bool, notify=tracksChanged)
+    def subtitlesAvailable(self) -> bool:  # noqa: N802 - QML-facing
+        """True when the current video has subtitles the user could switch on.
+
+        Drives the CC button's availability badge. It re-evaluates on every
+        ``tracksChanged`` — the same signal the popover reads — so the badge
+        follows reality the instant tracks arrive asynchronously or the user
+        toggles a subtitle on or off.
+        """
+        return self._subtitles_available
 
     @Property(str, notify=mediaNameChanged)
     def currentFileStem(self) -> str:  # noqa: N802 - QML-facing

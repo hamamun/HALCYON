@@ -33,6 +33,10 @@ Item {
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
     property bool hasVideo: true
+    //: Availability hints for the CC and Equalizer/Info button dots (§P1.6).
+    //: Bound by the shell in Main.qml — see bindTransport().
+    property bool subtitlesAvailable: false
+    property bool lyricsAvailable: false
 
     // The bar must never auto-hide while the subtitle popover or the download
     // flyout is open (§P1.4).
@@ -157,17 +161,37 @@ Item {
                 // Right dock toggle (Info / Lyrics / Equalizer) — symmetric to
                 // the playlist button. Was only reachable via Ctrl+I / Ctrl+E
                 // which made the equalizer undiscoverable.
+                //
+                // A dot appears here when lyrics are available and the dock is
+                // shut — "there's something to read inside." Clicking while the
+                // dot is up opens the dock straight on the Lyrics tab so the
+                // dot's promise is delivered in one click rather than leaving
+                // the user on the default Info tab. The dot hides while the
+                // dock is open (the user is already where it points) and the
+                // click then just closes it, as before.
                 IconButton {
                     glyph: Glyphs.equalizer
                     tooltip: "Equalizer / Info (Ctrl+I)"
                     active: root.infoPanelVisible
-                    onClicked: Actions.toggleRightPanel()
+                    showDot: root.lyricsAvailable && !root.infoPanelVisible
+                    onClicked: {
+                        if (root.infoPanelVisible)
+                            Actions.toggleRightPanel();          // already open -> close
+                        else if (root.lyricsAvailable)
+                            Actions.showLyrics();                // dot promised lyrics
+                        else
+                            Actions.toggleRightPanel();          // open on default tab
+                    }
                 }
                 IconButton {
                     id: subsButton
                     glyph: Glyphs.subtitles
                     tooltip: "Speed, audio and subtitles"
                     active: trackPopover.opened || subDownload.opened
+                    // Dot = "this video has subtitles you haven't switched on."
+                    // It vanishes the moment a subtitle is active (the
+                    // controller's subtitlesAvailable flag tracks that).
+                    showDot: root.subtitlesAvailable
                     onClicked: trackPopover.opened ? trackPopover.close() : trackPopover.open()
                 }
                 IconButton {
