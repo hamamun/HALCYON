@@ -83,6 +83,10 @@ QtObject {
     function toggleLeftPanel()      { return _call("toggleLeftPanel") }
     function toggleRightPanel()     { return _call("toggleRightPanel") }
     function showEqualizer()        { return _call("showEqualizer") }
+    // Open the right dock straight onto the Lyrics tab — the destination the
+    // lyrics availability dot on the Equalizer/Info button advertises. Mirrors
+    // showEqualizer() (which lands on tab 2); this lands on tab 1.
+    function showLyrics()           { return _call("showLyrics") }
     function showSettings()         { return _call("showSettings") }
 
     // ---------------------------------------------------------------- mode --

@@ -84,3 +84,26 @@ def gui_app(qt_application):
     if not GUI_AVAILABLE:
         pytest.skip("QtGui is unavailable — QML cannot be instantiated here")
     return qt_application
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_probe_threadpool():
+    """Let the global QThreadPool finish before the interpreter tears down.
+
+    Local's playlist probes each file's duration on
+    ``QThreadPool.globalInstance()`` runnables (modes/local/playlist.py). A
+    runnable can still be mid-``done.emit`` when the last test ends and pytest
+    begins destroying the QObjects those signals target — emitting into a
+    half-destroyed receiver segfaults the process (exit 139) instead of raising.
+    Which probe happens to be in flight at exit depends on test ordering and
+    timing, so the full run can crash while every module passes in isolation.
+    Draining the pool at session end removes the race for every test, not just
+    the one that happened to trip it.
+    """
+    yield
+    try:
+        from PySide6.QtCore import QThreadPool
+
+        QThreadPool.globalInstance().waitForDone(2000)
+    except Exception:
+        pass
