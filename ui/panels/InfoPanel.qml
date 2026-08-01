@@ -86,11 +86,10 @@ Item {
 
             // Expand/collapse toggle — only visible on the Lyrics tab.
             // Sits on the right edge of the toolbar so it does not crowd the
-            // centred tab buttons.
-            IconButton {
-                anchors.right: parent.right
-                anchors.rightMargin: Theme.spaceXs
-                anchors.verticalCenter: parent.verticalCenter
+            // centred tab buttons. Placed in the toolbar's rightActions slot
+            // (not as an anchored child of the button Row, which Qt rejects)
+            // so it lands on the right edge as intended.
+            rightActions: IconButton {
                 visible: root.currentTab === 1
                 glyph: root.lyricsExpanded ? Glyphs.collapsePanel : Glyphs.expandPanel
                 tooltip: root.lyricsExpanded ? "Collapse lyrics" : "Expand lyrics"

@@ -18,6 +18,14 @@ Item {
 
     default property alias buttons: row.data
 
+    //: Right-edge slot for buttons that must not sit inside the main Row.
+    //: Putting an anchored child directly in `row` draws the QML warning
+    //: "Cannot specify left/right/horizontalCenter/fill/centerIn anchors for
+    //: items inside Row" — a Row ignores horizontal anchors, so the button
+    //: silently lost its intended edge. Anything assigned to `rightActions`
+    //: is placed in this separate right-anchored Row instead.
+    property alias rightActions: rightRow.data
+
     Row {
         id: row
         anchors.verticalCenter: parent.verticalCenter
@@ -26,6 +34,14 @@ Item {
         anchors.horizontalCenter: root.alignment === Qt.AlignHCenter ? parent.horizontalCenter : undefined
         anchors.leftMargin: Theme.spaceSm
         anchors.rightMargin: Theme.spaceSm
+        spacing: Theme.spaceXs
+    }
+
+    Row {
+        id: rightRow
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.rightMargin: Theme.spaceXs
         spacing: Theme.spaceXs
     }
 

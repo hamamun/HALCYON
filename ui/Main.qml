@@ -39,14 +39,17 @@ Shell {
     property bool chromeVisible: true
 
     // The docks' open state lives here as plain bools, NOT as an imperative
-    // toggle on the docks. `panelHost.open = !panelHost.open` compiles fine but
-    // *removes* the binding the dock was declared with — Qt logs "Overwriting
-    // binding ... that was initially bound at ..." (qt.qml.binding.removal),
-    // and from the first Ctrl+L onward the dock no longer knows fullscreen
-    // must force it shut. Toggles write these bools, the docks bind `open`
-    // to them, and the binding survives every toggle.
-    property bool leftPanelOpen: Settings.get("window.leftPanelVisible", true)
-    property bool rightPanelOpen: Settings.get("window.rightPanelVisible", false)
+    // toggle on the docks, and NOT as bindings. `panelHost.open = !x` and
+    // `rightPanelOpen: Settings.get(...)` both compile, but the first removes
+    // the dock's binding and the second removes this property's own binding —
+    // Qt logs "Overwriting binding ... that was initially bound at ..."
+    // (qt.qml.binding.removal). Toggles write these bools, the docks bind
+    // `open` to them, and that binding survives every toggle because these are
+    // plain values. The initial value is loaded from Settings in
+    // Component.onCompleted (see below), so there is never a binding here for
+    // a write to clobber.
+    property bool leftPanelOpen: false
+    property bool rightPanelOpen: false
 
     // The OS-level title: taskbar button, Alt-Tab, window list. The frameless
     // shell draws no caption of its own, so this is otherwise invisible to the
@@ -57,6 +60,12 @@ Shell {
     visible: true
 
     Component.onCompleted: {
+        // Seed the plain dock bools from the persisted settings. Done here
+        // rather than as property bindings so that the imperative writes in
+        // toggleRightPanel()/showLyrics()/showEqualizer() never clobber a
+        // declared binding (and so Qt never logs "Overwriting binding").
+        leftPanelOpen = Settings.get("window.leftPanelVisible", true);
+        rightPanelOpen = Settings.get("window.rightPanelVisible", false);
         restoreGeometry();
         Actions.host = actionHost;
     }
