@@ -56,6 +56,30 @@ Item {
         bigTimer.restart();
     }
 
+    // -------------------------------------------------- resume toast (new) --
+    // Shows a resume message with an interactive "Start Over" button.
+    // Uses a longer hold time because it contains an action.
+    // Clicking the button emits startOverClicked(path).
+    signal startOverClicked(string path)
+
+    property string _resumePath: ""
+
+    function showResume(path, positionMs) {
+        if (!_can()) return;
+
+        _resumePath = path || "";
+
+        var minutes = Math.floor(positionMs / 60000);
+        var seconds = Math.floor((positionMs % 60000) / 1000);
+        var timeStr = (minutes > 0 ? minutes + ":" : "") +
+                      (seconds < 10 && minutes > 0 ? "0" : "") + seconds;
+
+        resumeText.text = "Resumed from " + timeStr;
+        resumePill.visible = true;
+        resumePill.opacity = 1;
+        resumeTimer.restart();
+    }
+
     function _can() {
         return root.osdEnabled && !root.suppressed;
     }
@@ -110,6 +134,92 @@ Item {
             id: hideDelay
             interval: Theme.durOsdFade
             onTriggered: if (statusPill.opacity === 0) statusPill.visible = false
+        }
+    }
+
+    // -------------------------------------------------- resume toast pill --
+    Rectangle {
+        id: resumePill
+        visible: false
+        opacity: 0
+        x: Theme.spaceXl
+        y: Theme.spaceXl
+        width: resumeRow.implicitWidth + Theme.spaceLg * 2
+        height: 40
+        radius: Theme.radiusPill
+        color: Qt.rgba(0.043, 0.055, 0.078, 0.85)
+        border.width: 1
+        border.color: Theme.glassBorder
+
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.durOsdFade; easing.type: Theme.easingOsd }
+        }
+
+        Row {
+            id: resumeRow
+            anchors.centerIn: parent
+            spacing: Theme.spaceSm
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                font.family: Theme.fontFamilyIcons
+                font.pixelSize: Theme.iconSize
+                color: Theme.accent
+                text: "\ue8b5"   // play/resume icon
+            }
+
+            Text {
+                id: resumeText
+                anchors.verticalCenter: parent.verticalCenter
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeOsd
+                color: Theme.text
+            }
+
+            // Start Over button
+            Rectangle {
+                width: startOverText.implicitWidth + 16
+                height: 26
+                radius: 6
+                color: Qt.rgba(1, 1, 1, 0.08)
+                border.width: 1
+                border.color: Theme.glassBorder
+
+                anchors.verticalCenter: parent.verticalCenter
+
+                Text {
+                    id: startOverText
+                    anchors.centerIn: parent
+                    text: "Start Over"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.text
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        if (root._resumePath) {
+                            root.startOverClicked(root._resumePath);
+                        }
+                        resumePill.opacity = 0;
+                    }
+                }
+            }
+        }
+
+        Timer {
+            id: resumeTimer
+            interval: 8000   // longer than normal OSD (user can click)
+            onTriggered: resumePill.opacity = 0
+        }
+
+        onOpacityChanged: if (opacity === 0) resumeHideDelay.start()
+
+        Timer {
+            id: resumeHideDelay
+            interval: Theme.durOsdFade
+            onTriggered: if (resumePill.opacity === 0) resumePill.visible = false
         }
     }
 
