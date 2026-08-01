@@ -73,6 +73,30 @@ On Linux/macOS (development only) Halcyon falls back to the system libVLC if
 python main.py
 ```
 
+### Debugging
+
+```bash
+python main.py --debug          # or: set HALCYON_DEBUG=1
+```
+
+In VS Code, press **F5** and pick **Halcyon (debug)** (`.vscode/launch.json`).
+
+Debug mode does two things that matter when a control "does nothing and prints
+no error":
+
+* raises Halcyon's own logging to `DEBUG`;
+* installs a Qt message handler, so **QML** warnings — a mistyped property, a
+  `ReferenceError` inside a signal handler, a binding loop — land in the same
+  console as the Python logs, with file and line:
+
+```
+09:29:09 WARNING qml   file:///…/ui/Main.qml:601: ReferenceError: Libary is not defined
+09:29:09 DEBUG   core.library   resume /movies/film.mkv at 867000 ms
+```
+
+QML warnings are logged at **any** level, not just in debug — a warning there
+means a binding is dead, which is otherwise invisible from a bug report.
+
 ### The compositing spike (Milestone 1.0 — the gate)
 
 Before trusting the architecture, run the standalone spike. It proves glass blur

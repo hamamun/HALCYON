@@ -116,6 +116,10 @@ QtObject {
     readonly property int durSlow:    380
     readonly property int durOsdFade: 250
     readonly property int durOsdHold: 800
+    //: Hold time for an OSD pill that carries a control the user may click
+    //: (the resume toast's Start Over). A transient pill is read; this one has
+    //: to be noticed, aimed at and hit.
+    readonly property int durOsdHoldAction: 8000
     readonly property int durAutoHide: 180
     readonly property int easing:     Easing.OutCubic
     readonly property int easingOsd:  Easing.OutQuad

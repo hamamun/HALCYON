@@ -1,0 +1,74 @@
+{
+  // Halcyon debug launchers.
+  //
+  // "Halcyon (debug)" is the one to use when something in the UI silently does
+  // nothing. It turns on DEBUG logging and routes Qt's own messages — QML
+  // warnings, ReferenceErrors in signal handlers, binding loops — into the same
+  // console stream as the Python logs. Without it those go to Qt's default
+  // handler and are easy to miss entirely, which is exactly how a dead QML
+  // connection reads as "no error, just nothing happening".
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Halcyon (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "args": ["--debug"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "HALCYON_DEBUG": "1",
+        // Unbuffered, or Python's stdout buffering reorders the log lines
+        // against Qt's stderr and the trace stops making sense.
+        "PYTHONUNBUFFERED": "1",
+        // Print the file:line of every QML warning.
+        "QML_IMPORT_TRACE": "0",
+        "QT_LOGGING_RULES": "qt.qml.binding.removal.info=true"
+      }
+    },
+    {
+      "name": "Halcyon (debug + open a file)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      // Prompts for a path, so resume can be exercised on a real file without
+      // editing this file each time.
+      "args": ["--debug", "${input:mediaFile}"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "HALCYON_DEBUG": "1",
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "Halcyon (normal)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests", "-v"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mediaFile",
+      "type": "promptString",
+      "description": "Full path to a media file to open on launch",
+      "default": ""
+    }
+  ]
+}

@@ -56,28 +56,37 @@ Item {
         bigTimer.restart();
     }
 
-    // -------------------------------------------------- resume toast (new) --
-    // Shows a resume message with an interactive "Start Over" button.
-    // Uses a longer hold time because it contains an action.
-    // Clicking the button emits startOverClicked(path).
+    // ------------------------------------------------------- resume toast --
+    // "Resuming from 24:31" with a Start Over button (§P1.5, plan §6.2).
+    //
+    // Held far longer than the other pills because it is the only one that
+    // asks the user for a decision — 800 ms is enough to read a volume level,
+    // not enough to notice a button, move to it and click it.
     signal startOverClicked(string path)
 
-    property string _resumePath: ""
+    //: The file the visible toast refers to. Captured when the toast is shown
+    //: rather than read live, so a queue advancing under a still-visible toast
+    //: cannot make Start Over rewind the wrong file.
+    property string resumePath: ""
+
+    //: How the position is rendered. Supplied by the shell so the toast uses
+    //: the same formatter as the clock and the seek bar (§4.1) — the local
+    //: version this replaced printed 1:14:27 as "74:27" and 0:42 as "42".
+    property var formatTime: function(ms) { return Math.round(ms / 1000) + "s" }
 
     function showResume(path, positionMs) {
         if (!_can()) return;
-
-        _resumePath = path || "";
-
-        var minutes = Math.floor(positionMs / 60000);
-        var seconds = Math.floor((positionMs % 60000) / 1000);
-        var timeStr = (minutes > 0 ? minutes + ":" : "") +
-                      (seconds < 10 && minutes > 0 ? "0" : "") + seconds;
-
-        resumeText.text = "Resumed from " + timeStr;
+        root.resumePath = path || "";
+        resumeText.text = "Resuming from " + root.formatTime(positionMs);
         resumePill.visible = true;
         resumePill.opacity = 1;
         resumeTimer.restart();
+    }
+
+    //: Dismiss without acting — used when the media changes under the toast.
+    function hideResume() {
+        resumeTimer.stop();
+        resumePill.opacity = 0;
     }
 
     function _can() {
@@ -165,7 +174,9 @@ Item {
                 font.family: Theme.fontFamilyIcons
                 font.pixelSize: Theme.iconSize
                 color: Theme.accent
-                text: "\ue8b5"   // play/resume icon
+                // From the shared set, never a literal codepoint (§B.1). The
+                // hardcoded \ue8b5 this replaces was not the play glyph at all.
+                text: Glyphs.play
             }
 
             Text {
@@ -178,14 +189,20 @@ Item {
 
             // Start Over button
             Rectangle {
-                width: startOverText.implicitWidth + 16
+                width: startOverText.implicitWidth + Theme.spaceLg
                 height: 26
-                radius: 6
-                color: Qt.rgba(1, 1, 1, 0.08)
+                radius: Theme.radiusSmall
+                color: startOverArea.containsMouse ? Theme.glassFillHover
+                                                   : Theme.glassFill
                 border.width: 1
-                border.color: Theme.glassBorder
+                border.color: startOverArea.containsMouse ? Theme.glassBorderStrong
+                                                          : Theme.glassBorder
 
                 anchors.verticalCenter: parent.verticalCenter
+
+                Behavior on color {
+                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                }
 
                 Text {
                     id: startOverText
@@ -197,12 +214,14 @@ Item {
                 }
 
                 MouseArea {
+                    id: startOverArea
                     anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (root._resumePath) {
-                            root.startOverClicked(root._resumePath);
-                        }
-                        resumePill.opacity = 0;
+                        if (root.resumePath)
+                            root.startOverClicked(root.resumePath);
+                        root.hideResume();
                     }
                 }
             }
@@ -210,7 +229,9 @@ Item {
 
         Timer {
             id: resumeTimer
-            interval: 8000   // longer than normal OSD (user can click)
+            // Long enough to read the toast and click the button. The other
+            // pills are transient; this one is a prompt.
+            interval: Theme.durOsdHoldAction
             onTriggered: resumePill.opacity = 0
         }
 

@@ -395,7 +395,35 @@ class AppController(QObject):
             resume_ms = self._library.resume_position(path)
         self._engine.open(path, resume_ms)
         if resume_ms:
+            log.info("resuming %s at %d ms", path, resume_ms)
             self.resumePrompted.emit(path, resume_ms)
+
+    @Slot(str)
+    def startOver(self, path: str) -> None:  # noqa: N802 - QML-facing
+        """Abandon a resume: forget the saved position and play from the top.
+
+        Three steps, and the order is load-bearing. Cancelling the engine's
+        pending resume seek has to come first: that seek is applied when the
+        media reaches Playing, which may be *after* this call, so seeking to 0
+        while one is still queued is undone a moment later and playback jumps
+        back to exactly where the user asked to leave.
+
+        The two bookkeeping steps are individually guarded so a failure in
+        either still leaves the picture rewound — that is the part the user can
+        see, and a stale entry in recent.json is not worth losing it over.
+        """
+        cancel = getattr(self._engine, "cancel_pending_resume", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                log.debug("could not cancel the pending resume seek", exc_info=True)
+        try:
+            self._library.clear_position(path)
+        except Exception:
+            log.debug("could not clear the saved position", exc_info=True)
+        self._engine.seek(0)
+        log.info("start over: %s", path)
 
     def _on_media_changed(self, mrl: str) -> None:
         path = _from_uri(mrl)
