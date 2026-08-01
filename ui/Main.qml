@@ -573,6 +573,33 @@ Shell {
     }
 
     // ======================================================================
+    // RESUME TOAST — listens to the signal emitted by AppController.openPath
+    // ======================================================================
+    Connections {
+        target: App
+        function onResumePrompted(path, positionMs) {
+            // Only show in modes that support OSD (Local)
+            if (window.osdEnabled()) {
+                osdLayer.showResume(path, positionMs);
+            }
+        }
+    }
+
+    Connections {
+        target: osdLayer
+        function onStartOverClicked(path) {
+            // Clear saved position
+            if (typeof Library !== "undefined" && Library.clear_position) {
+                Library.clear_position(path);
+            }
+            // Seek back to beginning
+            if (window.usesPlayer() && typeof Player !== "undefined" && Player) {
+                Player.seek(0);
+            }
+        }
+    }
+
+    // ======================================================================
     // HOTKEYS — §P1.5. Every binding invokes an Actions entry, never a
     // behaviour of its own.
     // ======================================================================
