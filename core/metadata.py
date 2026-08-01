@@ -41,13 +41,22 @@ def _fmt_size(bytes_val: int) -> str:
 
 
 def _clean_str(val: object) -> str:
-    if not val:
+    if val is None:
         return ""
     if isinstance(val, bytes):
         try:
             return val.decode("utf-8", "ignore").strip("\x00 ")
         except Exception:
             return str(val)
+    if hasattr(val, "value"):
+        val = getattr(val, "value", None)
+        if val is None:
+            return ""
+        if isinstance(val, bytes):
+            try:
+                return val.decode("utf-8", "ignore").strip("\x00 ")
+            except Exception:
+                return str(val)
     return str(val).strip("\x00 ")
 
 
@@ -123,11 +132,20 @@ class Metadata(QObject):
                 #
                 # MediaParseFlag members are ctypes enums; OR-ing them needs
                 # their .value, and the result is passed back as a plain int.
-                flags = (
-                    vlc.MediaParseFlag.local.value
-                    | vlc.MediaParseFlag.fetch_local.value
-                )
-                media.parse_with_options(flags, 3000)
+                #
+                # Only request parsing on the initial load (_retries == 0).
+                # Re-invoking parse_with_options while the media is already
+                # playing or seeking during a retry causes demuxer contention
+                # and can crash libVLC.
+                if self._retries == 0:
+                    try:
+                        flags = (
+                            vlc.MediaParseFlag.local.value
+                            | vlc.MediaParseFlag.fetch_local.value
+                        )
+                        media.parse_with_options(flags, 3000)
+                    except Exception:
+                        log.debug("parse_with_options failed for %s", path, exc_info=True)
 
                 def meta(key):
                     try:
@@ -146,7 +164,10 @@ class Metadata(QObject):
                 track_num = meta(vlc.Meta.TrackNumber)
                 track_total = meta(vlc.Meta.TrackTotal)
 
-                duration = int(media.get_duration())
+                try:
+                    duration = int(media.get_duration())
+                except Exception:
+                    duration = 0
                 details.append({"label": "Duration", "value": _fmt_duration(duration)})
 
                 if self._album:
@@ -164,59 +185,65 @@ class Metadata(QObject):
                 audio_count = 0
                 subtitle_tracks: list[str] = []
                 for track in media.tracks_get() or []:
-                    if track.type == vlc.TrackType.video and track.video:
-                        video = track.video.contents
-                        details.append(
-                            {
-                                "label": "Resolution",
-                                "value": f"{video.width}\u00D7{video.height}",
-                            }
-                        )
-                        fps = (
-                            video.frame_rate_num / video.frame_rate_den
-                            if video.frame_rate_den
-                            else 0
-                        )
-                        if fps:
-                            details.append({"label": "Frame rate", "value": f"{fps:.3g} fps"})
-                        details.append(
-                            {"label": "Video codec", "value": _fourcc(track.codec)}
-                        )
-                    elif track.type == vlc.TrackType.audio:
-                        audio_count += 1
-                        suffix = f" #{audio_count}" if audio_count > 1 else ""
-                        audio = track.audio.contents
-                        codec_str = _fourcc(track.codec)
-                        lang_str = _clean_str(getattr(track, "language", ""))
-                        if lang_str and lang_str.lower() not in codec_str.lower():
-                            codec_str = f"{codec_str} ({lang_str})"
-                        details.append(
-                            {"label": f"Audio codec{suffix}", "value": codec_str}
-                        )
-                        details.append(
-                            {
-                                "label": f"Channels{suffix}",
-                                "value": f"{audio.channels} ch @ {audio.rate} Hz",
-                            }
-                        )
-                        if track.bitrate:
+                    try:
+                        if track.type == vlc.TrackType.video:
+                            codec_str = _fourcc(track.codec)
+                            if track.video:
+                                video = track.video.contents
+                                details.append(
+                                    {
+                                        "label": "Resolution",
+                                        "value": f"{video.width}\u00D7{video.height}",
+                                    }
+                                )
+                                fps = (
+                                    video.frame_rate_num / video.frame_rate_den
+                                    if video.frame_rate_den
+                                    else 0
+                                )
+                                if fps:
+                                    details.append({"label": "Frame rate", "value": f"{fps:.3g} fps"})
                             details.append(
-                                {"label": f"Bitrate{suffix}", "value": _fmt_bitrate(track.bitrate)}
+                                {"label": "Video codec", "value": codec_str}
                             )
-                    elif (
-                        track.type == getattr(vlc.TrackType, "ext", getattr(vlc.TrackType, "text", 2))
-                        or getattr(track.type, "value", track.type) == 2
-                    ):
-                        sub_lang = _clean_str(getattr(track, "language", ""))
-                        sub_desc = _clean_str(getattr(track, "description", ""))
-                        sub_codec = _fourcc(track.codec)
-                        item = sub_lang or sub_desc or sub_codec
-                        if sub_lang and sub_codec and sub_codec not in item:
-                            item = f"{sub_lang} ({sub_codec})"
-                        elif sub_desc and sub_codec and sub_codec not in item:
-                            item = f"{sub_desc} ({sub_codec})"
-                        if item and item not in subtitle_tracks:
-                            subtitle_tracks.append(item)
+                        elif track.type == vlc.TrackType.audio:
+                            audio_count += 1
+                            suffix = f" #{audio_count}" if audio_count > 1 else ""
+                            codec_str = _fourcc(track.codec)
+                            lang_str = _clean_str(getattr(track, "language", ""))
+                            if lang_str and lang_str.lower() not in codec_str.lower():
+                                codec_str = f"{codec_str} ({lang_str})"
+                            details.append(
+                                {"label": f"Audio codec{suffix}", "value": codec_str}
+                            )
+                            if track.audio:
+                                audio = track.audio.contents
+                                details.append(
+                                    {
+                                        "label": f"Channels{suffix}",
+                                        "value": f"{audio.channels} ch @ {audio.rate} Hz",
+                                    }
+                                )
+                            if getattr(track, "bitrate", 0):
+                                details.append(
+                                    {"label": f"Bitrate{suffix}", "value": _fmt_bitrate(track.bitrate)}
+                                )
+                        elif (
+                            track.type == getattr(vlc.TrackType, "ext", getattr(vlc.TrackType, "text", 2))
+                            or getattr(track.type, "value", track.type) == 2
+                        ):
+                            sub_lang = _clean_str(getattr(track, "language", ""))
+                            sub_desc = _clean_str(getattr(track, "description", ""))
+                            sub_codec = _fourcc(track.codec)
+                            item = sub_lang or sub_desc or sub_codec
+                            if sub_lang and sub_codec and sub_codec not in item:
+                                item = f"{sub_lang} ({sub_codec})"
+                            elif sub_desc and sub_codec and sub_codec not in item:
+                                item = f"{sub_desc} ({sub_codec})"
+                            if item and item not in subtitle_tracks:
+                                subtitle_tracks.append(item)
+                    except Exception:
+                        log.debug("failed to inspect track %s in %s", track, path, exc_info=True)
 
                 if subtitle_tracks:
                     details.append(
