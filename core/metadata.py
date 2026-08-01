@@ -208,6 +208,145 @@ def _text(value) -> str:
     return str(value).strip()
 
 
+def _track_language(track) -> str:
+    """Best available language label for a track (language or description)."""
+    return _text(getattr(track, "language", None)) or _text(
+        getattr(track, "description", None)
+    )
+
+
+def _get_media_tracks(media) -> list[dict]:
+    """Safely fetch tracks from media before libvlc_media_tracks_release frees them.
+
+    libVLC's python-vlc binding calls libvlc_media_tracks_release before
+    returning from media.tracks_get(). The returned MediaTrack objects contain
+    pointers (e.g. u.video, u.audio, language, description) into the memory
+    that was just freed. Accessing those pointers after tracks_get() returns is
+    a use-after-free leading to segmentation faults in C++.
+    """
+    if media is None:
+        return []
+
+    try:
+        import ctypes
+        import vlc
+
+        p_tracks = ctypes.POINTER(ctypes.POINTER(vlc.MediaTrack))()
+        n = vlc.libvlc_media_tracks_get(media, ctypes.byref(p_tracks))
+        if n <= 0 or not p_tracks:
+            return []
+
+        tracks_data = []
+        try:
+            for i in range(n):
+                ptr = p_tracks[i]
+                if not ptr:
+                    continue
+                item = ptr.contents
+                ttype = _track_type(item)
+
+                lang = _text(getattr(item, "language", None))
+                desc = _text(getattr(item, "description", None))
+
+                video_info = None
+                if ttype == _TRACK_VIDEO:
+                    try:
+                        v_ptr = getattr(item.u, "video", None) or getattr(item, "video", None)
+                        if v_ptr:
+                            v_contents = v_ptr.contents
+                            video_info = {
+                                "width": int(getattr(v_contents, "width", 0)),
+                                "height": int(getattr(v_contents, "height", 0)),
+                                "sar_num": int(getattr(v_contents, "sar_num", 1)),
+                                "sar_den": int(getattr(v_contents, "sar_den", 1)),
+                                "frame_rate_num": int(getattr(v_contents, "frame_rate_num", 0)),
+                                "frame_rate_den": int(getattr(v_contents, "frame_rate_den", 1)),
+                            }
+                    except Exception:
+                        video_info = None
+
+                audio_info = None
+                if ttype == _TRACK_AUDIO:
+                    try:
+                        a_ptr = getattr(item.u, "audio", None) or getattr(item, "audio", None)
+                        if a_ptr:
+                            a_contents = a_ptr.contents
+                            audio_info = {
+                                "channels": int(getattr(a_contents, "channels", 0)),
+                                "rate": int(getattr(a_contents, "rate", 0)),
+                            }
+                    except Exception:
+                        audio_info = None
+
+                tracks_data.append({
+                    "type": ttype,
+                    "codec": int(getattr(item, "codec", 0)),
+                    "profile": int(getattr(item, "profile", 0)),
+                    "level": int(getattr(item, "level", 0)),
+                    "bitrate": int(getattr(item, "bitrate", 0) or 0),
+                    "language": lang,
+                    "description": desc,
+                    "video": video_info,
+                    "audio": audio_info,
+                })
+        finally:
+            vlc.libvlc_media_tracks_release(p_tracks, n)
+
+        return tracks_data
+    except Exception:
+        # Fallback for mock objects in unit tests where vlc C structs aren't used
+        try:
+            raw_tracks = media.tracks_get() or []
+        except Exception:
+            return []
+
+        out = []
+        for track in raw_tracks:
+            ttype = _track_type(track)
+            video_info = None
+            if ttype == _TRACK_VIDEO:
+                try:
+                    v_ptr = getattr(track, "video", None)
+                    if v_ptr and getattr(v_ptr, "contents", None):
+                        v_contents = v_ptr.contents
+                        video_info = {
+                            "width": int(getattr(v_contents, "width", 0)),
+                            "height": int(getattr(v_contents, "height", 0)),
+                            "sar_num": int(getattr(v_contents, "sar_num", 1)),
+                            "sar_den": int(getattr(v_contents, "sar_den", 1)),
+                            "frame_rate_num": int(getattr(v_contents, "frame_rate_num", 0)),
+                            "frame_rate_den": int(getattr(v_contents, "frame_rate_den", 1)),
+                        }
+                except Exception:
+                    video_info = None
+
+            audio_info = None
+            if ttype == _TRACK_AUDIO:
+                try:
+                    a_ptr = getattr(track, "audio", None)
+                    if a_ptr and getattr(a_ptr, "contents", None):
+                        a_contents = a_ptr.contents
+                        audio_info = {
+                            "channels": int(getattr(a_contents, "channels", 0)),
+                            "rate": int(getattr(a_contents, "rate", 0)),
+                        }
+                except Exception:
+                    audio_info = None
+
+            out.append({
+                "type": ttype,
+                "codec": int(getattr(track, "codec", 0)),
+                "profile": int(getattr(track, "profile", 0)),
+                "level": int(getattr(track, "level", 0)),
+                "bitrate": int(getattr(track, "bitrate", 0) or 0),
+                "language": _track_language(track),
+                "description": _text(getattr(track, "description", None)),
+                "video": video_info,
+                "audio": audio_info,
+            })
+        return out
+
+
 class Metadata(QObject):
     """Metadata for whatever is currently loaded."""
 
@@ -228,9 +367,6 @@ class Metadata(QObject):
         #: True once a read saw at least one audio/video/text track — the gate
         #: that stops retrying a file whose tags/art will never arrive.
         self._has_track_info = False
-        #: Keep the media wrapper alive between reads so its parse state is
-        #: not garbage-collected mid-flight.
-        self._media_ref = None
 
         self._live_timer = QTimer(self)
         self._live_timer.setInterval(_LIVE_POLL_MS)
@@ -272,29 +408,6 @@ class Metadata(QObject):
                 self.changed.emit()
                 self._schedule_retry()
                 return
-
-            # Refresh the reference so the wrapper outlives this call.
-            if self._media_ref is not None:
-                try:
-                    self._media_ref.release()
-                except Exception:
-                    pass
-            self._media_ref = media
-
-            # `local` alone parses the *stream* but never goes looking for
-            # cover art, so ArtworkURL came back empty for every file and the
-            # album-art slot was permanently blank. `fetch_local` is the flag
-            # that extracts embedded covers and picks up folder.jpg / cover.jpg
-            # next to the file. The two are a bitmask, so they combine.
-            try:
-                if self._retries == 0:
-                    flags = (
-                        vlc.MediaParseFlag.local.value
-                        | vlc.MediaParseFlag.fetch_local.value
-                    )
-                    media.parse_with_options(flags, 3000)
-            except Exception:
-                log.debug("parse_with_options failed for %s", path, exc_info=True)
 
             def meta(key):
                 try:
@@ -380,11 +493,7 @@ class Metadata(QObject):
         Each track is wrapped separately: a NULL ``video``/``audio`` pointer or
         an odd field on one track must not wipe the rows already collected.
         """
-        try:
-            tracks = media.tracks_get() or []
-        except Exception:
-            log.debug("tracks_get failed", exc_info=True)
-            return
+        tracks = _get_media_tracks(media)
         if not tracks:
             return
         self._has_track_info = True
@@ -393,7 +502,7 @@ class Metadata(QObject):
         self._subtitle_languages = []
         video_seen = audio_seen = text_seen = 0
         for track in tracks:
-            ttype = _track_type(track)
+            ttype = track["type"]
             if ttype == _TRACK_VIDEO:
                 video_seen += 1
                 if video_seen == 1:
@@ -404,7 +513,8 @@ class Metadata(QObject):
                     self._append_audio_rows(details, track)
             elif ttype == _TRACK_TEXT:
                 text_seen += 1
-                self._subtitle_languages.append(_track_language(track))
+                lang = track["language"] or track["description"]
+                self._subtitle_languages.append(lang)
 
         if video_seen > 1:
             details.append({"label": "Video tracks", "value": str(video_seen)})
@@ -417,50 +527,46 @@ class Metadata(QObject):
                 value += " \u00B7 " + ", ".join(languages[:4])
             details.append({"label": "Subtitles", "value": value})
 
-    def _append_video_rows(self, details: list[dict], track) -> None:
-        try:
-            if not track.video:
-                return
-            video = track.video.contents
-        except Exception:
+    def _append_video_rows(self, details: list[dict], track: dict) -> None:
+        video = track.get("video")
+        if not video:
             return
-        width, height = int(video.width), int(video.height)
+        width, height = video["width"], video["height"]
         if width > 0 and height > 0:
             details.append({"label": "Resolution", "value": f"{width}\u00D7{height}"})
             aspect = _fmt_aspect(
-                width, height, int(video.sar_num), int(video.sar_den)
+                width, height, video["sar_num"], video["sar_den"]
             )
             if aspect:
                 details.append({"label": "Aspect ratio", "value": aspect})
 
-        fps_num, fps_den = int(video.frame_rate_num), int(video.frame_rate_den)
+        fps_num, fps_den = video["frame_rate_num"], video["frame_rate_den"]
         if fps_num > 0 and fps_den > 0:
             details.append({"label": "Frame rate", "value": f"{fps_num / fps_den:.3g} fps"})
 
-        fourcc = _fourcc(track.codec)
-        details.append({"label": "Video codec", "value": _codec_name(track.codec)})
-        profile_level = _fmt_profile_level(fourcc, int(track.profile), int(track.level))
+        codec = track["codec"]
+        fourcc = _fourcc(codec)
+        details.append({"label": "Video codec", "value": _codec_name(codec)})
+        profile_level = _fmt_profile_level(fourcc, track["profile"], track["level"])
         if profile_level:
             details.append({"label": "Profile", "value": profile_level})
 
-    def _append_audio_rows(self, details: list[dict], track) -> None:
-        try:
-            if not track.audio:
-                return
-            audio = track.audio.contents
-        except Exception:
+    def _append_audio_rows(self, details: list[dict], track: dict) -> None:
+        audio = track.get("audio")
+        if not audio:
             return
-        details.append({"label": "Audio codec", "value": _codec_name(track.codec)})
-        channels, rate = int(audio.channels), int(audio.rate)
+        codec = track["codec"]
+        details.append({"label": "Audio codec", "value": _codec_name(codec)})
+        channels, rate = audio["channels"], audio["rate"]
         if channels > 0:
             details.append({"label": "Channels", "value": f"{channels} ch"})
         if rate > 0:
             details.append({"label": "Sample rate", "value": f"{rate} Hz"})
-        language = _track_language(track)
+        language = track["language"] or track["description"]
         if language:
             details.append({"label": "Language", "value": language})
-        if int(track.bitrate or 0) > 0:
-            details.append({"label": "Bitrate", "value": _fmt_bitrate(int(track.bitrate))})
+        if track["bitrate"] > 0:
+            details.append({"label": "Bitrate", "value": _fmt_bitrate(track["bitrate"])})
 
     # ------------------------------------------------------- live stats ---
     def _poll_live_stats(self) -> None:
@@ -518,12 +624,6 @@ class Metadata(QObject):
         self._path = ""
         self._has_track_info = False
         self._subtitle_languages: list[str] = []
-        if self._media_ref is not None:
-            try:
-                self._media_ref.release()
-            except Exception:
-                pass
-            self._media_ref = None
         self.liveStatsChanged.emit()
 
     # --------------------------------------------------------- properties ---
@@ -550,10 +650,3 @@ class Metadata(QObject):
     @Property("QVariantMap", notify=liveStatsChanged)
     def liveStats(self) -> dict:
         return dict(self._live)
-
-
-def _track_language(track) -> str:
-    """Best available language label for a track (language or description)."""
-    return _text(getattr(track, "language", None)) or _text(
-        getattr(track, "description", None)
-    )

@@ -703,12 +703,14 @@ class AppController(QObject):
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
 
 
-#: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily
-#: so core/ never depends on a mode package at import time (§A.1).
-def _is_subtitle(path: str) -> bool:
-    from modes.local.playlist import SUBTITLE_EXTENSIONS
+#: Sidecar subtitle formats.
+_SUBTITLE_EXTENSIONS = {
+    ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup", ".smi", ".txt",
+}
 
-    return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
+
+def _is_subtitle(path: str) -> bool:
+    return Path(path).suffix.lower() in _SUBTITLE_EXTENSIONS
 
 
 def _name_key(text: str) -> str:
