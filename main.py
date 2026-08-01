@@ -46,10 +46,20 @@ _KEEP_ALIVE: list = []
 
 
 def configure_logging() -> None:
+    log_level_env = os.environ.get("HALCYON_LOG_LEVEL", "").strip().upper()
+    debug_flag = "--debug" in sys.argv or os.environ.get("HALCYON_DEBUG", "1").strip().lower() in ("1", "true", "yes")
+    if log_level_env in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        level = getattr(logging, log_level_env)
+    elif debug_flag:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
+        force=True,
     )
 
 

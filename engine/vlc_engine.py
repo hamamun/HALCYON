@@ -423,7 +423,11 @@ class VlcEngine(QObject):
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
-        media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
+        flags = (
+            self._vlc.MediaParseFlag.local.value
+            | self._vlc.MediaParseFlag.fetch_local.value
+        )
+        media.parse_with_options(flags, 3000)
         self._media = media
         self._player.set_media(media)
         self._current_mrl = mrl
