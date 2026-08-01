@@ -172,3 +172,70 @@ def test_video_metadata_details(tmp_path):
     assert "Album" not in labels
     assert "Genre" not in labels
     assert "Year" not in labels
+
+
+def test_null_track_pointers(tmp_path):
+    file_path = tmp_path / "stream.mkv"
+    file_path.write_bytes(b"0" * 1024)
+
+    media = MagicMock()
+    media.get_duration.return_value = 10000
+
+    video_track = MagicMock()
+    video_track.type = vlc.TrackType.video
+    video_track.codec = int.from_bytes(b"h264", "little")
+    video_track.video = None  # Simulates ctypes NULL pointer
+
+    audio_track = MagicMock()
+    audio_track.type = vlc.TrackType.audio
+    audio_track.codec = int.from_bytes(b"mp4a", "little")
+    audio_track.audio = None  # Simulates ctypes NULL pointer
+    audio_track.bitrate = 0
+    audio_track.language = None
+
+    media.tracks_get.return_value = [video_track, audio_track]
+
+    engine = MagicMock()
+    engine.raw_player.get_media.return_value = media
+
+    metadata = Metadata(engine)
+    metadata.load(str(file_path))
+
+    details = metadata.details
+    labels = [d["label"] for d in details]
+    assert "Video codec" in labels
+    assert "Audio codec" in labels
+    assert "Resolution" not in labels
+    assert "Channels" not in labels
+
+
+def test_parse_with_options_called_only_once(tmp_path):
+    file_path = tmp_path / "retry_test.mkv"
+    file_path.write_bytes(b"0" * 1024)
+
+    media = MagicMock()
+    media.get_duration.return_value = 10000
+    media.tracks_get.return_value = []
+    media.get_meta.return_value = ""
+
+    engine = MagicMock()
+    engine.raw_player.get_media.return_value = media
+
+    metadata = Metadata(engine)
+    metadata.load(str(file_path))
+
+    assert media.parse_with_options.call_count == 1
+
+    # Simulate a timer-triggered retry while media is playing/seeking
+    metadata._retry()
+    assert media.parse_with_options.call_count == 1
+
+
+def test_clean_str_ctypes_like():
+    class FakeCtypesStr:
+        def __init__(self, val):
+            self.value = val
+
+    assert _clean_str(FakeCtypesStr(b"spa")) == "spa"
+    assert _clean_str(FakeCtypesStr(None)) == ""
+
