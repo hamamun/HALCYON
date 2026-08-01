@@ -209,7 +209,15 @@ def test_null_track_pointers(tmp_path):
     assert "Channels" not in labels
 
 
-def test_parse_with_options_called_only_once(tmp_path):
+def test_parse_with_options_not_called_from_metadata(tmp_path):
+    """Metadata must never call parse_with_options itself.
+
+    The engine performs the (single) parse_with_options with full flags
+    (local | fetch_local) before emitting mediaChanged. Calling it again
+    from metadata (even guarded) while the media is attached to the player
+    has been observed to cause demuxer contention and hard crashes inside
+    libVLC as soon as a track is loaded.
+    """
     file_path = tmp_path / "retry_test.mkv"
     file_path.write_bytes(b"0" * 1024)
 
@@ -217,6 +225,8 @@ def test_parse_with_options_called_only_once(tmp_path):
     media.get_duration.return_value = 10000
     media.tracks_get.return_value = []
     media.get_meta.return_value = ""
+    # Ensure the method exists on the mock so we can assert it is untouched
+    media.parse_with_options = MagicMock()
 
     engine = MagicMock()
     engine.raw_player.get_media.return_value = media
@@ -224,11 +234,12 @@ def test_parse_with_options_called_only_once(tmp_path):
     metadata = Metadata(engine)
     metadata.load(str(file_path))
 
-    assert media.parse_with_options.call_count == 1
+    # Must be zero — we deliberately removed the call from _read
+    assert media.parse_with_options.call_count == 0
 
-    # Simulate a timer-triggered retry while media is playing/seeking
+    # Retries must also never invoke it
     metadata._retry()
-    assert media.parse_with_options.call_count == 1
+    assert media.parse_with_options.call_count == 0
 
 
 def test_clean_str_ctypes_like():

@@ -128,8 +128,15 @@ class _ProbeTask(QRunnable):
             if instance is not None:
                 media = instance.media_new_path(self._path)
                 if media is not None:
-                    media.parse_with_options(vlc.MediaParseFlag.local, 2000)
-                    duration = max(0, int(media.get_duration()))
+                    try:
+                        flags = vlc.MediaParseFlag.local.value
+                        media.parse_with_options(flags, 2000)
+                    except Exception:
+                        pass
+                    try:
+                        duration = max(0, int(media.get_duration()))
+                    except Exception:
+                        duration = 0
         except Exception:
             log.debug("probe failed for %s", self._path, exc_info=True)
         finally:

@@ -123,30 +123,11 @@ class Metadata(QObject):
             player = getattr(self._engine, "raw_player", None)
             media = player.get_media() if player is not None else None
             if media is not None:
-                # `local` alone parses the *stream* but never goes looking for
-                # cover art, so ArtworkURL came back empty for every file and
-                # the album-art slot was permanently blank. `fetch_local` is
-                # the flag that extracts embedded covers and picks up
-                # folder.jpg / cover.jpg next to the file. The two are a
-                # bitmask, so they combine.
-                #
-                # MediaParseFlag members are ctypes enums; OR-ing them needs
-                # their .value, and the result is passed back as a plain int.
-                #
-                # Only request parsing on the initial load (_retries == 0).
-                # Re-invoking parse_with_options while the media is already
-                # playing or seeking during a retry causes demuxer contention
-                # and can crash libVLC.
-                if self._retries == 0:
-                    try:
-                        flags = (
-                            vlc.MediaParseFlag.local.value
-                            | vlc.MediaParseFlag.fetch_local.value
-                        )
-                        media.parse_with_options(flags, 3000)
-                    except Exception:
-                        log.debug("parse_with_options failed for %s", path, exc_info=True)
-
+                # Parsing is performed exactly once by the engine (in open())
+                # with full local+fetch_local flags *before* mediaChanged is
+                # emitted. Re-invoking parse_with_options from here (even
+                # guarded) while the media is attached to the player can cause
+                # demuxer contention / crashes inside libVLC. Do not call it.
                 def meta(key):
                     try:
                         value = media.get_meta(key)
@@ -305,8 +286,20 @@ def _fourcc(codec: int) -> str:
     try:
         if not codec:
             return ""
-        raw = codec.to_bytes(4, "little")
+        # codec may arrive as c_uint32 / ctype wrapper or plain int depending
+        # on python-vlc / track struct access.
+        if hasattr(codec, "value"):
+            codec = getattr(codec, "value", 0)
+        if not codec:
+            return ""
+        ival = int(codec)
+        if not ival:
+            return ""
+        raw = ival.to_bytes(4, "little")
         text = raw.decode("ascii", "ignore").strip("\x00 ")
-        return text.upper() or str(codec)
+        return text.upper() or str(ival)
     except Exception:
-        return str(codec) if codec else ""
+        try:
+            return str(int(codec)) if codec else ""
+        except Exception:
+            return ""

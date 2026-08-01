@@ -442,7 +442,17 @@ class VlcEngine(QObject):
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
-        media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
+        # Parse once here (with artwork fetch) before play and before
+        # Metadata reads. Doing it in Metadata as well caused double-parse
+        # races / demuxer contention that crashed libVLC on media load.
+        flags = (
+            self._vlc.MediaParseFlag.local.value
+            | self._vlc.MediaParseFlag.fetch_local.value
+        )
+        try:
+            media.parse_with_options(flags, 3000)
+        except Exception:
+            log.debug("engine parse_with_options failed for %s", path_or_url, exc_info=True)
         self._media = media
         self._player.set_media(media)
         self._current_mrl = mrl
