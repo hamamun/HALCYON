@@ -19,6 +19,12 @@ Item {
     property int currentTab: 0        // 0 Info, 1 Lyrics, 2 Equalizer
     property bool lyricsExpanded: false
 
+    //: A .lrc sidecar was found for the current track — dots the Lyrics tab
+    //: button so the user knows the words are waiting. Guarded for qmlscene /
+    //: tests, where the Lyrics context property may not exist.
+    readonly property bool lyricsAvailable: (typeof Lyrics !== "undefined" && Lyrics)
+                                            ? Lyrics.lines.length > 0 : false
+
     // Width: expanded only when on the Lyrics tab AND the user toggled expand.
     readonly property real expandedWidth: Math.min(Theme.rightPanelExpandedWidth, parent ? parent.width * 0.45 : Theme.rightPanelExpandedWidth)
     readonly property real normalWidth: Theme.rightPanelWidth
@@ -66,6 +72,7 @@ Item {
             width: parent.width
             anchors.top: parent.top
             alignment: Qt.AlignHCenter
+            badges: [false, root.lyricsAvailable, false]
 
             Repeater {
                 model: [
@@ -80,6 +87,8 @@ Item {
                     glyph: modelData.glyph
                     tooltip: modelData.label
                     active: root.currentTab === index
+                    badge: Array.isArray(root.badges) && root.badges.length > index
+                           ? root.badges[index] === true : false
                     onClicked: root.currentTab = index
                 }
             }

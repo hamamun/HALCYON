@@ -71,15 +71,98 @@ Flickable {
                 spacing: Theme.spaceSm
 
                 Text {
-                    width: 90
+                    width: 100
                     text: modelData.label
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.textFaint
                 }
                 Text {
-                    width: parent.width - 90 - Theme.spaceSm
+                    width: parent.width - 100 - Theme.spaceSm
                     text: modelData.value
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.text
+                }
+            }
+        }
+
+        // --------------------------------------------- live stats --
+        // Counters polled once a second while playing (§P1.5). Hidden until
+        // the first reading lands, so an idle file shows nothing stale.
+        Column {
+            width: parent.width
+            spacing: Theme.spaceXs
+            visible: root.meta && root.meta.liveStats
+                     && root.meta.liveStats.inputBitrate !== ""
+
+            Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
+
+            Text {
+                text: "LIVE"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeTiny
+                font.weight: Theme.weightBold
+                color: Theme.textFaint
+            }
+
+            Row {
+                width: parent.width
+                spacing: Theme.spaceSm
+
+                Text {
+                    width: 100
+                    text: "Input bitrate"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.textFaint
+                }
+                Text {
+                    width: parent.width - 100 - Theme.spaceSm
+                    text: root.meta ? root.meta.liveStats.inputBitrate : ""
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.text
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: Theme.spaceSm
+
+                Text {
+                    width: 100
+                    text: "Decoded frames"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.textFaint
+                }
+                Text {
+                    width: parent.width - 100 - Theme.spaceSm
+                    text: root.meta ? root.meta.liveStats.decodedFrames : ""
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.text
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: Theme.spaceSm
+
+                Text {
+                    width: 100
+                    text: "Dropped frames"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.textFaint
+                }
+                Text {
+                    width: parent.width - 100 - Theme.spaceSm
+                    text: root.meta ? root.meta.liveStats.droppedFrames : ""
                     elide: Text.ElideRight
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
