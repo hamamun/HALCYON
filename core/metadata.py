@@ -110,7 +110,7 @@ class Metadata(QObject):
                 details.append({"label": "Duration", "value": _fmt_duration(duration)})
 
                 for track in media.tracks_get() or []:
-                    if track.type == vlc.TrackType.video:
+                    if track.type == vlc.TrackType.video and track.video:
                         video = track.video.contents
                         details.append(
                             {
