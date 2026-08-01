@@ -25,4 +25,8 @@ vendor/vlc/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+
+# Editor settings stay local, but the debug launch configuration is shared:
+# it is how you get QML warnings into the console (see README → Debugging).
+.vscode/*
+!.vscode/launch.json

@@ -45,18 +45,79 @@ if str(ROOT) not in sys.path:
 _KEEP_ALIVE: list = []
 
 
-def configure_logging() -> None:
+def debug_enabled(argv: list[str]) -> bool:
+    """``--debug`` on the command line, or ``HALCYON_DEBUG=1`` in the env.
+
+    Two switches because the two callers differ: a launch configuration passes
+    an argument, while ``py main.py`` from a terminal is easier to flip with an
+    environment variable.
+    """
+    if any(a in ("--debug", "-d") for a in argv[1:]):
+        return True
+    return os.environ.get("HALCYON_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def configure_logging(debug: bool = False) -> None:
+    """Set up logging, and in debug mode route *Qt's* messages here too.
+
+    Qt and QML do not use Python's logging. QML warnings — a mistyped property,
+    a broken signal handler, a binding loop — go straight to Qt's own message
+    handler, which by default writes to stderr in a format nothing else here
+    uses, and which is swallowed entirely in some launchers. That is why a
+    broken QML connection can look like "nothing happened" with a clean console.
+
+    In debug mode we install a handler that forwards every Qt/QML message into
+    the same logger as the Python side, so one stream carries both.
+    """
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
+    )
+    if not debug:
+        return
+
+    # Third-party noise stays at INFO — debug is for Halcyon's own modules.
+    for noisy in ("urllib3", "requests", "charset_normalizer", "PIL"):
+        logging.getLogger(noisy).setLevel(logging.INFO)
+
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+    qt_log = logging.getLogger("qt")
+    levels = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+
+    def handler(mode, context, message) -> None:
+        # file/line are only populated for QML and for debug builds of Qt, but
+        # when they are present they are the whole value of the message.
+        where = ""
+        if getattr(context, "file", None):
+            where = f" [{context.file}:{context.line}]"
+        qt_log.log(levels.get(mode, logging.INFO), "%s%s", message, where)
+
+    qInstallMessageHandler(handler)
+
+    # Qt keeps most QML diagnostics behind logging categories that are off by
+    # default. Binding loops and unqualified lookups are exactly the class of
+    # bug that shows up as a silently dead UI, so turn them on.
+    os.environ.setdefault(
+        "QT_LOGGING_RULES",
+        "qt.qml.binding.removal.info=true;qt.qml.diskcache.debug=false",
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
-    configure_logging()
+    debug = debug_enabled(argv)
+    configure_logging(debug)
     log = logging.getLogger("halcyon")
+    if debug:
+        log.debug("debug mode on — Qt/QML messages are routed through logging")
 
     # --- graphics API, before anything Qt exists ---------------------------
     from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
@@ -186,6 +247,15 @@ def main(argv: list[str] | None = None) -> int:
             ctx.setContextProperty(_context_name(spec.id), context_object)
 
     # --- load the UI -------------------------------------------------------
+    # Warnings are logged always, not only in debug. A QML warning means a
+    # binding or a signal handler is dead, which the user experiences as a
+    # control that does nothing — the single hardest failure to diagnose from a
+    # bug report, and free to surface here.
+    qml_engine.warnings.connect(
+        lambda warnings: [
+            logging.getLogger("qml").warning("%s", w.toString()) for w in warnings
+        ]
+    )
     qml_engine.load(QUrl.fromLocalFile(str(ROOT / "ui" / "Main.qml")))
     if not qml_engine.rootObjects():
         log.error("QML failed to load — see the messages above")

@@ -343,14 +343,6 @@ Shell {
                 anchors.bottom: parent.bottom
                 source: window.modeSpec ? window.modeSpec.stageQml : ""
 
-                // OSD sits above the stage content, below the transport bar.
-                Osd {
-                    id: osdLayer
-                    anchors.fill: parent
-                    osdEnabled: window.osdEnabled()
-                    suppressed: settingsDialog.visible
-                }
-
                 // The mode's own bar, floating over the video (§B.4).
                 Loader {
                     id: transportLoader
@@ -429,6 +421,38 @@ Shell {
                 Behavior on anchors.bottomMargin {
                     NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
                 }
+            }
+
+            // ----------------------------------------------------------------
+            // OSD — a sibling of the docks at a higher z, NOT a child of Stage.
+            //
+            // It used to live inside Stage, which is a z:0 sibling of two z:10
+            // docks. z only orders siblings, so every pill — status, volume and
+            // the resume toast — was painted *underneath* the 300px playlist
+            // dock that shares its top-left origin, and was simply invisible in
+            // windowed mode with the queue open. It only ever looked correct in
+            // fullscreen, where both docks are forced shut.
+            //
+            // Anchored inside the docks rather than merely drawn over them: a
+            // pill floating on top of the glass would be legible but would sit
+            // on the wrong background. Both margins animate with the docks so
+            // the pill slides with them instead of jumping.
+            Osd {
+                id: osdLayer
+                anchors.fill: parent
+                // Both docks already animate their own width, and the transport
+                // inset animates with the chrome, so these margins inherit that
+                // motion. A Behavior here would animate an already-animating
+                // value and make the pill lag behind the dock edge.
+                anchors.leftMargin: panelHost.width
+                anchors.rightMargin: infoPanel.width
+                anchors.bottomMargin: body.transportInset
+                z: 20
+                osdEnabled: window.osdEnabled()
+                suppressed: settingsDialog.visible
+                // The clock, the seek bar and the toast all read time the same
+                // way — one formatter, not three (§4.1).
+                formatTime: window.formatTime
             }
         }
     }
@@ -573,30 +597,47 @@ Shell {
     }
 
     // ======================================================================
-    // RESUME TOAST — listens to the signal emitted by AppController.openPath
+    // RESUME TOAST — §P1.5.
+    //
+    // Purely a listener on the existing resumePrompted signal: openPath() has
+    // already applied the saved position by the time this fires, so the toast
+    // reports what happened rather than deciding it. Local-only, because the
+    // signal is only reachable through a mode that drives the shared player.
     // ======================================================================
     Connections {
         target: App
         function onResumePrompted(path, positionMs) {
-            // Only show in modes that support OSD (Local)
-            if (window.osdEnabled()) {
+            if (window.osdEnabled())
                 osdLayer.showResume(path, positionMs);
-            }
         }
     }
 
     Connections {
         target: osdLayer
+
         function onStartOverClicked(path) {
-            // Clear saved position
-            if (typeof Library !== "undefined" && Library.clear_position) {
-                Library.clear_position(path);
-            }
-            // Seek back to beginning
-            if (window.usesPlayer() && typeof Player !== "undefined" && Player) {
-                Player.seek(0);
-            }
+            if (!window.usesPlayer())
+                return;
+            // One call, not three steps here: App.startOver() cancels the
+            // engine's pending resume seek, clears the saved position and
+            // rewinds, in that order. Doing it in QML got the order wrong —
+            // the queued resume seek landed after the seek to 0 and dragged
+            // playback straight back to where the user asked to leave.
+            App.startOver(path);
         }
+    }
+
+    // A toast that outlives the media it describes is a trap: Start Over would
+    // rewind whatever is playing now. Retire it whenever the media changes.
+    //
+    // Safe against retiring the toast it belongs to: openPath() opens the media
+    // first and emits resumePrompted second, so the mediaChanged that carries
+    // this file has already been delivered by the time the toast appears. Any
+    // mediaChanged after that is genuinely a different file.
+    Connections {
+        target: (typeof Player !== "undefined" && Player) ? Player : null
+        enabled: target !== null
+        function onMediaChanged() { osdLayer.hideResume() }
     }
 
     // ======================================================================

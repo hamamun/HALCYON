@@ -245,6 +245,10 @@ class VlcEngine(QObject):
         self._current_mrl = ""
         self._releasing = False
         self._scrubbing = False
+        #: Set by open() when the media should start somewhere other than 0;
+        #: consumed by the poll on the first Playing tick. Zero means "nothing
+        #: pending", which is also what cancelling one leaves behind.
+        self._pending_resume_ms = 0
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -345,6 +349,15 @@ class VlcEngine(QObject):
             self._state = state
             self.stateChanged.emit(int(state))
 
+        # Apply a queued resume as soon as the media is genuinely playing.
+        # Cleared before the seek, not after: if seek() raises we must not
+        # retry on every one of the next five ticks a second.
+        if self._pending_resume_ms and state == State.Playing:
+            resume_ms = self._pending_resume_ms
+            self._pending_resume_ms = 0
+            log.debug("applying resume seek to %d ms", resume_ms)
+            self.seek(resume_ms)
+
         try:
             duration = _qt_milliseconds(player.get_length())
         except Exception:
@@ -427,8 +440,15 @@ class VlcEngine(QObject):
         self._current_mrl = mrl
         self.mediaChanged.emit(mrl)
         self._player.play()
-        if start_ms > 0:
-            QTimer.singleShot(300, lambda: self.seek(start_ms))
+
+        # Resume is applied on the first Playing tick, not on a fixed delay.
+        # A 300 ms singleShot is a race: a file that is still opening silently
+        # drops the seek (VLC ignores set_time before playback starts), so the
+        # UI announced "Resuming from 24:31" while playback sat at zero. The
+        # poll already runs 5x a second and already knows when the state turns
+        # Playing — hanging the seek off that makes it deterministic on a cold
+        # cache and on a slow disk alike.
+        self._pending_resume_ms = int(start_ms) if start_ms > 0 else 0
 
     @Slot()
     def play(self) -> None:
@@ -507,6 +527,7 @@ class VlcEngine(QObject):
                 pass
             self._media = None
         self._scrubbing = False
+        self._pending_resume_ms = 0   # nothing to resume into any more
         self._current_mrl = ""
         try:
             self.video_output.notify_video_stopped()
@@ -540,6 +561,22 @@ class VlcEngine(QObject):
         follows the pointer instead of fighting stale readings from VLC.
         """
         self._scrubbing = bool(active)
+        if self._scrubbing:
+            # The user has taken the timeline: a resume seek arriving mid-drag
+            # would yank it out from under them.
+            self.cancel_pending_resume()
+
+    @Slot()
+    def cancel_pending_resume(self) -> None:
+        """Drop a queued resume seek that has not been applied yet.
+
+        Called when the user overrides the resume — Start Over, or any manual
+        seek before the media reaches Playing. Without this the queued seek
+        lands afterwards and silently undoes what they asked for.
+        """
+        if self._pending_resume_ms:
+            log.debug("cancelled pending resume seek")
+        self._pending_resume_ms = 0
 
     @Slot(int)
     def seek(self, ms: int) -> None:
