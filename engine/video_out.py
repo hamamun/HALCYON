@@ -396,7 +396,11 @@ class VideoOutput:
 
         @vlc.CallbackDecorators.VideoLockCb
         def _lock(opaque, planes):
-            return self._on_lock(planes)
+            # ctypes callback trampolines require an integer for a c_void_p
+            # result, but _on_lock intentionally produces a c_void_p so the
+            # address is never narrowed before this final ABI conversion.
+            pointer = self._on_lock(planes)
+            return pointer.value if pointer is not None else 0
 
         @vlc.CallbackDecorators.VideoUnlockCb
         def _unlock(opaque, picture, planes):
@@ -561,7 +565,7 @@ class VideoOutput:
             except Exception:
                 log.exception("video_stopped handler failed")
 
-    def _on_lock(self, planes) -> int:
+    def _on_lock(self, planes) -> ctypes.c_void_p:
         """Hand VLC the next write slot. Hot path — keep it boring.
 
         Returning without filling ``planes`` is not an option: libVLC does not
@@ -575,11 +579,17 @@ class VideoOutput:
             fmt = self.ring.format
             if not base or fmt is None:
                 return self._fill_scratch(planes)
-            planes[0] = ctypes.c_void_p(base)
+            # Assign raw addresses. On Windows, assigning a Python int to the
+            # c_void_p array preserves the full LLP64 pointer width; wrapping
+            # the assignment can route it through a 32-bit conversion in some
+            # python-vlc callback builds.
+            planes[0] = base
             if fmt.is_planar:
-                planes[1] = ctypes.c_void_p(base + fmt.y_size)
-                planes[2] = ctypes.c_void_p(base + fmt.y_size + fmt.uv_size)
-            return base
+                planes[1] = base + fmt.y_size
+                planes[2] = base + fmt.y_size + fmt.uv_size
+            # Return an explicit pointer rather than an int so ctypes does not
+            # truncate the callback return address on 64-bit Windows.
+            return ctypes.c_void_p(base)
         except Exception:
             log.exception("lock callback failed")
             return self._fill_scratch(planes)
@@ -610,10 +620,10 @@ class VideoOutput:
                 return 0
             base = ctypes.addressof(scratch)
             stride = self._scratch_plane
-            planes[0] = ctypes.c_void_p(base)
-            planes[1] = ctypes.c_void_p(base + stride)
-            planes[2] = ctypes.c_void_p(base + 2 * stride)
-            return base
+            planes[0] = base
+            planes[1] = base + stride
+            planes[2] = base + 2 * stride
+            return ctypes.c_void_p(base)
         except Exception:
             return 0
 

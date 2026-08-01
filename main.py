@@ -45,9 +45,11 @@ if str(ROOT) not in sys.path:
 _KEEP_ALIVE: list = []
 
 
-def configure_logging() -> None:
+def configure_logging(argv: list[str] | None = None) -> None:
+    """Configure terminal logging, with explicit CLI/environment overrides."""
     log_level_env = os.environ.get("HALCYON_LOG_LEVEL", "").strip().upper()
-    debug_flag = "--debug" in sys.argv or os.environ.get("HALCYON_DEBUG", "1").strip().lower() in ("1", "true", "yes")
+    args = sys.argv if argv is None else argv
+    debug_flag = "--debug" in args or os.environ.get("HALCYON_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
     if log_level_env in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         level = getattr(logging, log_level_env)
     elif debug_flag:
@@ -65,7 +67,7 @@ def configure_logging() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
-    configure_logging()
+    configure_logging(argv)
     log = logging.getLogger("halcyon")
 
     # --- graphics API, before anything Qt exists ---------------------------
@@ -344,7 +346,7 @@ def _build_mode_context(spec, player, controller, settings):
     if spec.id == "local":
         from modes.local.playlist import PlaylistModel
 
-        playlist = PlaylistModel()
+        playlist = PlaylistModel(engine=player)
         playlist.playRequested.connect(lambda path, _row: controller.openPath(path))
 
         # Restore what the user left set, and — the half that was missing —

@@ -94,10 +94,14 @@ class _ProbeSignals(QObject):
 class _ProbeTask(QRunnable):
     """Ask libVLC how long a file is, off the UI thread."""
 
-    def __init__(self, path: str, signals: _ProbeSignals) -> None:
+    def __init__(self, path: str, signals: _ProbeSignals, instance) -> None:
         super().__init__()
         self._path = path
         self._signals = signals
+        # This is the application's long-lived libVLC instance. Creating (and
+        # later releasing) a second Instance from a pool thread can unload the
+        # plugin DLLs the active player is using on Windows.
+        self._instance = instance
         self.setAutoDelete(True)
 
     def run(self) -> None:
@@ -120,27 +124,28 @@ class _ProbeTask(QRunnable):
         if self._signals.cancelled:
             return
         duration = 0
-        instance = media = None
+        media = None
         try:
             import vlc
 
-            instance = vlc.Instance(["--quiet", "--no-video", "--intf=dummy"])
-            if instance is not None:
-                media = instance.media_new_path(self._path)
+            # Do not create a temporary vlc.Instance here. On Windows its
+            # release() can unload libVLC's shared plugin DLLs while the main
+            # player's decoder thread is still executing in one of them.
+            if self._instance is not None:
+                media = self._instance.media_new_path(self._path)
                 if media is not None:
                     media.parse_with_options(vlc.MediaParseFlag.local, 2000)
                     duration = max(0, int(media.get_duration()))
         except Exception:
             log.debug("probe failed for %s", self._path, exc_info=True)
         finally:
-            # Release in reverse order of creation, and never let a failed
-            # release strand the other handle.
-            for obj in (media, instance):
-                if obj is not None:
-                    try:
-                        obj.release()
-                    except Exception:
-                        pass
+            # Media is ours; the shared Instance is borrowed and must never be
+            # released by a QRunnable.
+            if media is not None:
+                try:
+                    media.release()
+                except Exception:
+                    pass
 
         # Re-check: the model may have been torn down during the parse above,
         # and emitting into a deleted QObject raises out of a pool thread.
@@ -167,8 +172,13 @@ class PlaylistModel(QAbstractListModel):
     shuffleChanged = Signal()
     playRequested = Signal(str, int)  # path, index
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, *, engine=None) -> None:
         super().__init__(parent)
+        # Keep only the libVLC instance needed by probe workers. The model does
+        # not otherwise depend on the player facade.
+        self._vlc_instance = (
+            getattr(engine, "raw_instance", None) if engine is not None else None
+        )
         self._tracks: list[Track] = []
         self._current = -1
         self._repeat = RepeatMode.Off
@@ -255,8 +265,11 @@ class PlaylistModel(QAbstractListModel):
         self.endInsertRows()
         self.countChanged.emit()
         self._rebuild_shuffle()
-        for track in incoming:
-            self._pool.start(_ProbeTask(track.path, self._probe_signals))
+        # Unit-test and non-player contexts deliberately have no instance; they
+        # still get a responsive queue, just without asynchronous durations.
+        if self._vlc_instance is not None:
+            for track in incoming:
+                self._pool.start(_ProbeTask(track.path, self._probe_signals, self._vlc_instance))
         return len(incoming)
 
     def _scan_folder(self, folder: Path) -> list[Track]:

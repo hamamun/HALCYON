@@ -293,8 +293,12 @@ def _get_media_tracks(media) -> list[dict]:
             vlc.libvlc_media_tracks_release(p_tracks, n)
 
         return tracks_data
-    except Exception:
-        # Fallback for mock objects in unit tests where vlc C structs aren't used
+    except ImportError:
+        # This path is only for headless tests, where python-vlc is not
+        # installed and these are ordinary Python mock objects rather than C
+        # MediaTrack pointers. A real libVLC media object must always take the
+        # raw C API path above; calling python-vlc's tracks_get() there is a
+        # use-after-free.
         try:
             raw_tracks = media.tracks_get() or []
         except Exception:
