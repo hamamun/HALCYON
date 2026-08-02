@@ -238,10 +238,11 @@ class PlaylistModel(QAbstractListModel):
                 elif suffix in MEDIA_EXTENSIONS:
                     incoming.append(Track(str(p), p.stem))
                 else:
-                    # Explicitly chosen through a dialog: the user knows what
-                    # they picked better than our extension list does.
-                    log.info("adding %s despite unknown extension", p.name)
-                    incoming.append(Track(str(p), p.stem))
+                    # The queue is the last line of defence: drag-and-drop and
+                    # Add Files may hand us a real file that is not playable
+                    # media (Excel, Markdown, Word). Ignore it rather than
+                    # queueing a dead row.
+                    log.info("ignoring non-media file in queue: %s", p.name)
             else:
                 log.warning("skipped, not found on disk: %s", text)
 

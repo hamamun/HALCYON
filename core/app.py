@@ -197,10 +197,24 @@ class AppController(QObject):
         # "queue this file". Split them out before the queue ever sees them: a
         # subtitle added as a track opens as media with no audio and no video,
         # which tears down the video pipeline mid-playback.
-        subtitles = [p for p in cleaned if _is_subtitle(p)]
-        media = [p for p in cleaned if not _is_subtitle(p)]
+        #
+        # Non-media files (Excel sheets, Markdown notes, Word documents) are
+        # not queueable either. Folders stay allowed because the playlist model
+        # scans them for media, but plain files must be recognised audio/video
+        # before they are offered to the queue.
+        subtitles: list[str] = []
+        queueable: list[str] = []
+        for path in cleaned:
+            if _is_subtitle(path):
+                subtitles.append(path)
+                continue
+            candidate = Path(path).expanduser()
+            if candidate.is_dir() or _is_media(path):
+                queueable.append(path)
+                continue
+            log.info("ignoring non-media file: %s", candidate.name or path)
 
-        if subtitles and not media:
+        if subtitles and not queueable:
             self._attach_subtitles(subtitles)
             return
         if subtitles:
@@ -208,7 +222,7 @@ class AppController(QObject):
             # the sidecar be picked up by the normal auto-load on open.
             log.info("ignoring %d subtitle file(s) alongside media", len(subtitles))
 
-        cleaned = media
+        cleaned = queueable
         if not cleaned:
             return
 
@@ -760,6 +774,14 @@ class AppController(QObject):
                 step()
             except Exception:
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
+
+
+#: Kept in step with modes.local.playlist.MEDIA_EXTENSIONS, imported lazily so
+#: core/ never depends on a mode package at import time (§A.1).
+def _is_media(path: str) -> bool:
+    from modes.local.playlist import MEDIA_EXTENSIONS
+
+    return Path(path).suffix.lower() in MEDIA_EXTENSIONS
 
 
 #: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily

@@ -5,18 +5,18 @@ The reported failure: drag a ``.srt`` onto the window, the player dies.
 What actually happened
 ----------------------
 ``DropArea`` routes every dropped URL through the one append path,
-``App.addPaths`` -> ``PlaylistModel.add_paths``. The model's extension check
-had an "unknown extension, trust the user" fallback, so a ``.srt`` was queued
-as a **playable track** (the log line ``adding ... .srt despite unknown
-extension`` is this happening).
+``App.addPaths`` -> ``PlaylistModel.add_paths``. The queue used to have an
+"unknown extension, trust the user" fallback, so a ``.srt`` was queued as a
+**playable track**.
 
 Because the drop also auto-started playback, libVLC was then asked to open a
 subtitle file as media. It opens fine — as a track with no video and no audio —
 which tears the video pipeline down mid-playback and leaves the UI holding a
 row that can never play.
 
-A subtitle is not media. Dropping one means "subtitle what is playing", so it
-is now split out before the queue ever sees it and routed to ``add_slave``.
+A subtitle is not media. Neither are Excel sheets, Markdown notes or Word
+files. Subtitle drops now route to ``add_slave``; plain non-media files are
+ignored before they ever reach the queue.
 """
 
 from __future__ import annotations
@@ -108,13 +108,13 @@ class TestPlaylistRejectsSubtitles:
         suffixes = {Path(model.path_at(i)).suffix for i in range(model.count)}
         assert suffixes == {".mkv", ".mp4"}
 
-    def test_unknown_extensions_are_still_trusted(self, qt_app, tmp_path):
-        # The "user picked it explicitly" fallback must survive — only
-        # subtitles are special-cased.
-        odd = tmp_path / "recording.m2v"
-        odd.write_bytes(b"v")
+    @pytest.mark.parametrize("name", ["notes.md", "budget.xlsx", "report.docx"])
+    def test_non_media_extensions_are_rejected(self, qt_app, tmp_path, name):
+        odd = tmp_path / name
+        odd.write_bytes(b"x")
         model = PlaylistModel()
-        assert model.add_paths([str(odd)]) == 1
+        assert model.add_paths([str(odd)]) == 0
+        assert model.count == 0
 
 
 class _FakeEngine:
@@ -191,6 +191,18 @@ class TestSubtitleRouting:
         controller.addPaths([str(media_file)])
 
         assert playlist.count == 1
+        assert engine.slaves == []
+
+    def test_dropping_non_media_is_ignored(self, qt_app, tmp_path):
+        engine = _FakeEngine()
+        playlist = PlaylistModel()
+        controller = self._controller(engine, playlist)
+        note = tmp_path / "readme.md"
+        note.write_text("hello", encoding="utf-8")
+
+        controller.addPaths([str(note)])
+
+        assert playlist.count == 0
         assert engine.slaves == []
 
     def test_file_url_form_is_handled(self, qt_app, subtitle_file):
