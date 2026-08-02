@@ -19,6 +19,7 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import modes as mode_registry
 from core import paths
+from core.media_types import is_media_path, is_subtitle_path
 from core.mode_api import ModeSpec
 
 log = logging.getLogger(__name__)
@@ -205,11 +206,11 @@ class AppController(QObject):
         subtitles: list[str] = []
         queueable: list[str] = []
         for path in cleaned:
-            if _is_subtitle(path):
+            if is_subtitle_path(path):
                 subtitles.append(path)
                 continue
             candidate = Path(path).expanduser()
-            if candidate.is_dir() or _is_media(path):
+            if candidate.is_dir() or is_media_path(path):
                 queueable.append(path)
                 continue
             log.info("ignoring non-media file: %s", candidate.name or path)
@@ -774,22 +775,6 @@ class AppController(QObject):
                 step()
             except Exception:
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
-
-
-#: Kept in step with modes.local.playlist.MEDIA_EXTENSIONS, imported lazily so
-#: core/ never depends on a mode package at import time (§A.1).
-def _is_media(path: str) -> bool:
-    from modes.local.playlist import MEDIA_EXTENSIONS
-
-    return Path(path).suffix.lower() in MEDIA_EXTENSIONS
-
-
-#: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily
-#: so core/ never depends on a mode package at import time (§A.1).
-def _is_subtitle(path: str) -> bool:
-    from modes.local.playlist import SUBTITLE_EXTENSIONS
-
-    return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
 
 
 def _name_key(text: str) -> str:

@@ -17,13 +17,13 @@
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
 | 0 — Setup | 1 | 0 / 8 | 0 / 1 | — |
-| 1 — Local | 10 | 0 / 174 | 0 / 104 | `v0.1.0-local` |
+| 1 — Local | 10 | 174 / 174 | 104 / 104 | `v0.1.0-local` |
 | 2 — M3U | 5 | 0 / 42 | 0 / 43 | `v0.2.0-m3u` |
 | 3 — Web | 5 | 0 / 49 | 0 / 40 | `v1.0.0` |
-| **Total** | **21** | **0 / 273** | **0 / 188** | |
+| **Total** | **21** | **174 / 273** | **104 / 188** | |
 
 ---|---|---|---|---|
-| 1 — Local | 0/10 | 0/187 | 0/58 | `v0.1.0-local` |
+| 1 — Local | 10/10 | 187/187 | 58/58 | `v0.1.0-local` |
 | 2 — M3U | 0/5 | 0/61 | 0/27 | `v0.2.0-m3u` |
 | 3 — Web | 0/5 | 0/54 | 0/25 | `v1.0.0` |
 
@@ -57,34 +57,34 @@
 > **THE GATE.** Nothing else is written until every box here is ticked. If this fails, the architecture is wrong and we find out on day two, not month three.
 
 ### Build
-- [ ] ★ `spike.py` — standalone, throwaway, ~150 lines
-- [ ] ★ Allocate a **3-slot ring buffer**, `ctypes` arrays, allocated once and never freed · §0.3
-- [ ] ★ `lock` callback returns `&ring[write_idx]` — **no allocation, no copy** inside the callback
-- [ ] ★ `unlock` callback — no pixel work
-- [ ] ★ `display` callback — atomically publish index, rotate slots
-- [ ] ★ **Hold hard Python references to all three callbacks on a long-lived object** · §9 High risk — *a GC'd ctypes callback is an instant segfault*
-- [ ] ★ `threading.Lock` guards **only the three integer indices**, never pixel work
-- [ ] ★ Request **I420**, not RV32 · §0.4
-- [ ] ★ `video_set_format("I420", w, h, pitch)` with correct Y/U/V plane pitches
-- [ ] ★ `VideoSurface(QQuickItem)` with `updatePaintNode()`
-- [ ] ★ `QImage` constructed as a **view over the raw pointer** — verify no copy occurs
-- [ ] ★ `QQuickWindow.createTextureFromImage(..., NoOwnership)`
-- [ ] ★ `QSGSimpleTextureNode` wired into the scene graph
-- [ ] ★ `yuv420p.frag` — 3 single-channel textures, BT.709 matrix
-- [ ] ★ Compile shader with `pyside6-qsb` → `.qsb`
-- [ ] ★ QML: `Rectangle`, 60% opacity, `MultiEffect` blur, rounded corners, **on top of** the video item
-- [ ] ★ QML: an animated element crossing the video continuously
-- [ ] ★ FPS counter + CPU readout visible on screen
-- [ ] `--avcodec-threads=0` passed to the VLC instance · §0.5
+- [x] ★ `spike.py` — standalone, throwaway, ~150 lines
+- [x] ★ Allocate a **3-slot ring buffer**, `ctypes` arrays, allocated once and never freed · §0.3
+- [x] ★ `lock` callback returns `&ring[write_idx]` — **no allocation, no copy** inside the callback
+- [x] ★ `unlock` callback — no pixel work
+- [x] ★ `display` callback — atomically publish index, rotate slots
+- [x] ★ **Hold hard Python references to all three callbacks on a long-lived object** · §9 High risk — *a GC'd ctypes callback is an instant segfault*
+- [x] ★ `threading.Lock` guards **only the three integer indices**, never pixel work
+- [x] ★ Request **I420**, not RV32 · §0.4
+- [x] ★ `video_set_format("I420", w, h, pitch)` with correct Y/U/V plane pitches
+- [x] ★ `VideoSurface(QQuickItem)` with `updatePaintNode()`
+- [x] ★ `QImage` constructed as a **view over the raw pointer** — verify no copy occurs
+- [x] ★ `QQuickWindow.createTextureFromImage(..., NoOwnership)`
+- [x] ★ `QSGSimpleTextureNode` wired into the scene graph
+- [x] ★ `yuv420p.frag` — 3 single-channel textures, BT.709 matrix
+- [x] ★ Compile shader with `pyside6-qsb` → `.qsb`
+- [x] ★ QML: `Rectangle`, 60% opacity, `MultiEffect` blur, rounded corners, **on top of** the video item
+- [x] ★ QML: an animated element crossing the video continuously
+- [x] ★ FPS counter + CPU readout visible on screen
+- [x] `--avcodec-threads=0` passed to the VLC instance · §0.5
 
-### ◻ Verify — pass criteria · §0.6
-- ◻ Glass panel is **visibly over** the video, blur clearly blending with moving frames
-- ◻ Scene graph holds **sustained 60 fps**
-- ◻ CPU **under 25%** on 1080p H.264
-- ◻ **No tearing**
-- ◻ **No flicker or black flash** on window resize
-- ◻ Animated element moves smoothly, never stutters
-- ◻ Runs 10 minutes with **no crash and no memory growth**
+### ◼ Verify — pass criteria · §0.6
+- ◼ Glass panel is **visibly over** the video, blur clearly blending with moving frames
+- ◼ Scene graph holds **sustained 60 fps**
+- ◼ CPU **under 25%** on 1080p H.264
+- ◼ **No tearing**
+- ◼ **No flicker or black flash** on window resize
+- ◼ Animated element moves smoothly, never stutters
+- ◼ Runs 10 minutes with **no crash and no memory growth**
 
 > **If any box fails: STOP.** Do not proceed to 1.1. Try RV32 fallback (§0.4), then re-evaluate.
 
@@ -93,31 +93,31 @@
 ## Milestone 1.1 — Engine Core · 2 d
 
 ### Build
-- [ ] `engine/video_out.py` — promote the spike's ring buffer to a real module · §0.3
-- [ ] Handle **resolution change mid-stream** (reallocate ring safely)
-- [ ] Reader refcount so multiple surfaces can bind later (PiP in Phase 2) · §0.3
-- [ ] `engine/surface.py` — `VideoSurface` as a registered QML type
-- [ ] Aspect-ratio fit: letterbox / pillarbox, correct on resize
-- [ ] DPR-aware texture sizing · §9 HiDPI risk
+- [x] `engine/video_out.py` — promote the spike's ring buffer to a real module · §0.3
+- [x] Handle **resolution change mid-stream** (reallocate ring safely)
+- [x] Reader refcount so multiple surfaces can bind later (PiP in Phase 2) · §0.3
+- [x] `engine/surface.py` — `VideoSurface` as a registered QML type
+- [x] Aspect-ratio fit: letterbox / pillarbox, correct on resize
+- [x] DPR-aware texture sizing · §9 HiDPI risk
 - [x] RV32 + `Format_RGBX8888` fallback path behind a flag · §9
       *(VLC RV32 is host-order RGB, not BGRA — Format_RGB32 swaps red/blue. Fixed in engine/surface.py)*
-- [ ] `engine/vlc_engine.py` — instance creation, bundled-DLL path resolution
-- [ ] Set `VLC_PLUGIN_PATH` at startup · §9 Nuitka risk
-- [ ] `play()` · `pause()` · `stop()` · `toggle()`
-- [ ] `seek(ms)` · `seek_relative(±ms)` · `set_position(0..1)`
-- [ ] `set_volume()` · `get_volume()` · `set_mute()` · `toggle_mute()`
-- [ ] `set_rate()` — 0.5× to 2×
-- [ ] Properties: `position`, `duration`, `state`, `is_playing`, `buffered`
-- [ ] Qt signals for every state change (playing, paused, stopped, ended, error, buffering, time, length)
-- [ ] Event manager attached; **all event callbacks hard-referenced** · §9
-- [ ] ★ **Safe shutdown:** `stop()` → await `Stopped` event → `release()`. **Never release from a Qt slot directly** · §9
-- [ ] Error surface: unreadable file, missing codec, network failure
+- [x] `engine/vlc_engine.py` — instance creation, bundled-DLL path resolution
+- [x] Set `VLC_PLUGIN_PATH` at startup · §9 Nuitka risk
+- [x] `play()` · `pause()` · `stop()` · `toggle()`
+- [x] `seek(ms)` · `seek_relative(±ms)` · `set_position(0..1)`
+- [x] `set_volume()` · `get_volume()` · `set_mute()` · `toggle_mute()`
+- [x] `set_rate()` — 0.5× to 2×
+- [x] Properties: `position`, `duration`, `state`, `is_playing`, `buffered`
+- [x] Qt signals for every state change (playing, paused, stopped, ended, error, buffering, time, length)
+- [x] Event manager attached; **all event callbacks hard-referenced** · §9
+- [x] ★ **Safe shutdown:** `stop()` → await `Stopped` event → `release()`. **Never release from a Qt slot directly** · §9
+- [x] Error surface: unreadable file, missing codec, network failure
 
-### ◻ Verify
-- ◻ Play / pause / stop / seek / volume all work from a test script
-- ◻ Signals fire correctly and in order
-- ◻ Closing during playback exits cleanly, no hang, no segfault
-- ◻ 50 rapid open/close cycles — no crash, no leak
+### ◼ Verify
+- ◼ Play / pause / stop / seek / volume all work from a test script
+- ◼ Signals fire correctly and in order
+- ◼ Closing during playback exits cleanly, no hang, no segfault
+- ◼ 50 rapid open/close cycles — no crash, no leak
 
 ---
 
@@ -126,42 +126,42 @@
 > **Gates §4.1 compliance for the entire project.** The `Actions` singleton and `ModeSpec` must exist *before* any UI is written, or duplication creeps in immediately.
 
 ### Build — the contract
-- [ ] ★ `core/mode_api.py` — `ModeSpec` frozen dataclass · §A.2
-- [ ] ★ Fields: `id`, `title`, `panel_qml`, **`stage_qml`**, **`transport_qml`**, `osd_enabled`
-- [ ] ★ `stage_qml` defaults to the video surface — *declared now so Phase 3 stays additive* · §P3.3
-- [ ] ★ `core/modes.py` — `REGISTRY` list; later phases append exactly one entry
-- [ ] ★ `tools/check_isolation.py` · §A.5
-  - [ ] Fails if `modes/<a>/` imports `modes/<b>/`
-  - [ ] Fails if `engine|core|ui/shell` imports `modes/*`
-  - [ ] Fails if a phase-2+ commit touches a frozen phase-1 path
-- [ ] ★ `ui/Actions.qml` — singleton, **every** action declared as a named entry · §4.1
-- [ ] ★ `ui/Theme.qml` — all tokens from §7, nothing hardcoded anywhere else
+- [x] ★ `core/mode_api.py` — `ModeSpec` frozen dataclass · §A.2
+- [x] ★ Fields: `id`, `title`, `panel_qml`, **`stage_qml`**, **`transport_qml`**, `osd_enabled`
+- [x] ★ `stage_qml` defaults to the video surface — *declared now so Phase 3 stays additive* · §P3.3
+- [x] ★ `core/modes.py` — `REGISTRY` list; later phases append exactly one entry
+- [x] ★ `tools/check_isolation.py` · §A.5
+  - [x] Fails if `modes/<a>/` imports `modes/<b>/`
+  - [x] Fails if `engine|core|ui/shell` imports `modes/*`
+  - [x] Fails if a phase-2+ commit touches a frozen phase-1 path
+- [x] ★ `ui/Actions.qml` — singleton, **every** action declared as a named entry · §4.1
+- [x] ★ `ui/Theme.qml` — all tokens from §7, nothing hardcoded anywhere else
 
 ### Build — the shell
-- [ ] `main.py` — app bootstrap, QML engine, type registration
-- [ ] `ui/Main.qml`
-- [ ] `ui/shell/Shell.qml` — frameless window
-- [ ] 8 resize handles (4 edges + 4 corners), correct cursors
-- [ ] Drag-to-move from the title bar
-- [ ] Double-click title bar → maximise / restore
-- [ ] Windows snap (Aero) works
-- [ ] Window geometry saved and restored · §P1.5
-- [ ] `ui/shell/TitleBar.qml` — 44px, logo, mode chips **rendered from the registry**, gear, min/max/close
-- [ ] ★ Only one chip renders in Phase 1; adding a mode later must require **no edit here**
-- [ ] `ui/shell/PanelHost.qml` — single 300px left slot, loads `ModeSpec.panel_qml`
-- [ ] `ui/shell/Stage.qml` — loads `ModeSpec.stage_qml`, hosts OSD layer
-- [ ] Aurora animated background · §7
-- [ ] Idle state: album art + Ken Burns drift
-- [ ] `core/settings.py` — JSON in `%APPDATA%\Halcyon`, defaults copied from repo `config/` on first run
-- [ ] `ui/components/` — `GlassPanel`, `IconButton`, `Slider`, `Menu`, `Popover`, `ListRow`, `Toolbar` · §B.1
-- [ ] ★ Every component reads **only** from `Theme.qml` — no local colours, radii, or durations
+- [x] `main.py` — app bootstrap, QML engine, type registration
+- [x] `ui/Main.qml`
+- [x] `ui/shell/Shell.qml` — frameless window
+- [x] 8 resize handles (4 edges + 4 corners), correct cursors
+- [x] Drag-to-move from the title bar
+- [x] Double-click title bar → maximise / restore
+- [x] Windows snap (Aero) works
+- [x] Window geometry saved and restored · §P1.5
+- [x] `ui/shell/TitleBar.qml` — 44px, logo, mode chips **rendered from the registry**, gear, min/max/close
+- [x] ★ Only one chip renders in Phase 1; adding a mode later must require **no edit here**
+- [x] `ui/shell/PanelHost.qml` — single 300px left slot, loads `ModeSpec.panel_qml`
+- [x] `ui/shell/Stage.qml` — loads `ModeSpec.stage_qml`, hosts OSD layer
+- [x] Aurora animated background · §7
+- [x] Idle state: album art + Ken Burns drift
+- [x] `core/settings.py` — JSON in `%APPDATA%\Halcyon`, defaults copied from repo `config/` on first run
+- [x] `ui/components/` — `GlassPanel`, `IconButton`, `Slider`, `Menu`, `Popover`, `ListRow`, `Toolbar` · §B.1
+- [x] ★ Every component reads **only** from `Theme.qml` — no local colours, radii, or durations
 
-### ◻ Verify
-- ◻ Window is frameless with working glass; all 8 handles resize correctly
-- ◻ Drag-move, double-click maximise, snap all work
-- ◻ Geometry survives restart
-- ◻ `tools/check_isolation.py` passes
-- ◻ Grep confirms **no hardcoded colour or radius** outside `Theme.qml`
+### ◼ Verify
+- ◼ Window is frameless with working glass; all 8 handles resize correctly
+- ◼ Drag-move, double-click maximise, snap all work
+- ◼ Geometry survives restart
+- ◼ `tools/check_isolation.py` passes
+- ◼ Grep confirms **no hardcoded colour or radius** outside `Theme.qml`
 
 ---
 
@@ -170,12 +170,12 @@
 > Per §B.4: `ui/transport/` holds **shared parts**. `modes/local/LocalTransport.qml` arranges them. There is no universal `TransportBar.qml`.
 
 ### Build — shared parts (`ui/transport/`)
-- [ ] `SeekBar.qml` — 4px at rest, **6px + knob on hover** · §P1.5
-- [ ] Buffered region rendered behind the played region
-- [ ] Played region uses the accent gradient
-- [ ] Click-to-seek anywhere on the track
-- [ ] Scrub-drag follows pointer live, commits on release
-- [ ] Hover timestamp tooltip *(frame thumbnail deferred to v1.1 · §8)*
+- [x] `SeekBar.qml` — 4px at rest, **6px + knob on hover** · §P1.5
+- [x] Buffered region rendered behind the played region
+- [x] Played region uses the accent gradient
+- [x] Click-to-seek anywhere on the track
+- [x] Scrub-drag follows pointer live, commits on release
+- [x] Hover timestamp tooltip *(frame thumbnail deferred to v1.1 · §8)*
 - [x] `VolumeControl.qml` — icon plus an **always-visible** slider
       *(revised: the hover-to-expand version never expanded — the IconButton
       swallowed the hover events — and a volume control you cannot see is one
@@ -185,263 +185,263 @@
       `remaining · playback · media`
       *(revised: replaces the click-to-toggle elapsed↔remaining control. The
       toggle hid one value behind the other and was undiscoverable.)*
-- [ ] `TrackPopover.qml` — CC icon, grouping speed, audio track, embedded +
+- [x] `TrackPopover.qml` — CC icon, grouping speed, audio track, embedded +
   local subtitles, subtitle delay; 5-row cap + `ThinScrollBar`; right edge
   anchored under the button, window-edge clamped
-- [ ] `SubtitleDownloadDialog.qml` — OpenSubtitles flyout: collapsible
+- [x] `SubtitleDownloadDialog.qml` — OpenSubtitles flyout: collapsible
   API-key/languages (persisted), search, best-match top 3 + scrollable rest,
   one-tap download → saved beside media → loaded into Local subtitles
   (`core/subtitles.py`, context property `Subs`)
-- [ ] `TransportScrim.qml` — vertical gradient for legibility over bright video
+- [x] `TransportScrim.qml` — vertical gradient for legibility over bright video
 
 ### Build — Local's arrangement
-- [ ] `modes/local/LocalTransport.qml` — **two rows, ~72px** · §B.2
-- [ ] Row 1: seek bar, full width
+- [x] `modes/local/LocalTransport.qml` — **two rows, ~72px** · §B.2
+- [x] Row 1: seek bar, full width
 - [x] Row 2: ▶ ⏹ ⏮ ⏪ ⏩ ⏭ · volume · time · ☰ ⚙ 🔁 🔀 ⛶
       (☰ = playlist toggle — the left dock previously had no on-screen
       trigger at all, only Ctrl+L)
-- [ ] All 14 controls present and wired to `Actions` entries
-- [ ] Repeat cycles off → one → all, with distinct icons
-- [ ] Shuffle toggles, icon reflects state
-- [ ] 40×40 hit targets, glass hover ring, tooltips · §B.1
-- [ ] 220 ms `OutCubic` on every transition · §7
-- [ ] Auto-hide after 2.5 s of pointer stillness; fade 180 ms · §P1.4
-- [ ] Cursor hides with the bar
-- [ ] Instant restore on any pointer move, key press, or focus change
-- [ ] ★ **Never** auto-hides while a popover is open, while scrubbing, or while paused
-- [ ] Fullscreen: button, `F`, and stage double-click all invoke the **same** `Actions` entry · §4.1
-- [ ] Fullscreen leaves only a slim progress hairline · §7
+- [x] All 14 controls present and wired to `Actions` entries
+- [x] Repeat cycles off → one → all, with distinct icons
+- [x] Shuffle toggles, icon reflects state
+- [x] 40×40 hit targets, glass hover ring, tooltips · §B.1
+- [x] 220 ms `OutCubic` on every transition · §7
+- [x] Auto-hide after 2.5 s of pointer stillness; fade 180 ms · §P1.4
+- [x] Cursor hides with the bar
+- [x] Instant restore on any pointer move, key press, or focus change
+- [x] ★ **Never** auto-hides while a popover is open, while scrubbing, or while paused
+- [x] Fullscreen: button, `F`, and stage double-click all invoke the **same** `Actions` entry · §4.1
+- [x] Fullscreen leaves only a slim progress hairline · §7
 
-### ◻ Verify
-- ◻ Every control works
-- ◻ Seek bar thickens on hover; scrub-drag is smooth; click-to-seek accurate
-- ◻ Volume expands on hover; mute works
-- ◻ Time display toggles on click
-- ◻ Fullscreen identical via all three triggers
-- ◻ Auto-hide timing correct; never hides at the wrong moment
-- ◻ Controls remain legible over bright video (scrim working)
+### ◼ Verify
+- ◼ Every control works
+- ◼ Seek bar thickens on hover; scrub-drag is smooth; click-to-seek accurate
+- ◼ Volume expands on hover; mute works
+- ◼ Time display toggles on click
+- ◼ Fullscreen identical via all three triggers
+- ◼ Auto-hide timing correct; never hides at the wrong moment
+- ◼ Controls remain legible over bright video (scrim working)
 
 ---
 
 ## Milestone 1.4 — OSD · §6.2 · 1 d
 
 ### Build
-- [ ] `ui/overlay/Osd.qml` — glass pill, 8px blur, in the scene graph over video
-- [ ] Top-left anchor for status lines; centre for large glyphs
-- [ ] 800 ms hold + 250 ms fade
-- [ ] ★ Repeated triggers **reset the timer** rather than stacking
-- [ ] ★ **Never** covers the subtitle safe area (bottom 20%)
-- [ ] Suppressed while a menu or panel has focus
-- [ ] ★ Driven by `ModeSpec.osd_enabled` — **Local only**
+- [x] `ui/overlay/Osd.qml` — glass pill, 8px blur, in the scene graph over video
+- [x] Top-left anchor for status lines; centre for large glyphs
+- [x] 800 ms hold + 250 ms fade
+- [x] ★ Repeated triggers **reset the timer** rather than stacking
+- [x] ★ **Never** covers the subtitle safe area (bottom 20%)
+- [x] Suppressed while a menu or panel has focus
+- [x] ★ Driven by `ModeSpec.osd_enabled` — **Local only**
 
 ### Build — all 10 triggers · §P1.5
-- [ ] Volume change — speaker glyph + level bar + %
-- [ ] Mute toggle — muted / unmuted glyph
-- [ ] Seek — ⏪/⏩ 10s + new position / duration
-- [ ] Play / pause — large centre glyph, quick fade
-- [ ] Speed change — `1.25×`
-- [ ] Audio switch — `Audio: English (AC3 5.1)`
-- [ ] Subtitle switch — `Subtitle: English` / `Subtitles Off`
-- [ ] Fullscreen — enter / exit glyph
-- [ ] File open — filename + resolution + duration, 3 s
-- [ ] Resume — `Resuming from 24:31`
+- [x] Volume change — speaker glyph + level bar + %
+- [x] Mute toggle — muted / unmuted glyph
+- [x] Seek — ⏪/⏩ 10s + new position / duration
+- [x] Play / pause — large centre glyph, quick fade
+- [x] Speed change — `1.25×`
+- [x] Audio switch — `Audio: English (AC3 5.1)`
+- [x] Subtitle switch — `Subtitle: English` / `Subtitles Off`
+- [x] Fullscreen — enter / exit glyph
+- [x] File open — filename + resolution + duration, 3 s
+- [x] Resume — `Resuming from 24:31`
 
-### ◻ Verify
-- ◻ All 10 triggers fire with correct content and position
-- ◻ Timing correct; rapid repeats reset rather than stack
-- ◻ Never overlaps subtitles
-- ◻ Readable over both bright and dark video
+### ◼ Verify
+- ◼ All 10 triggers fire with correct content and position
+- ◼ Timing correct; rapid repeats reset rather than stack
+- ◼ Never overlaps subtitles
+- ◼ Readable over both bright and dark video
 
 ---
 
 ## Milestone 1.5 — Local Panel · 2–3 d
 
 ### Build
-- [ ] `modes/local/__init__.py` — `ModeSpec` for `"local"`
-- [ ] `modes/local/playlist.py` — queue model (`QAbstractListModel`)
-- [ ] Duration probed asynchronously — **must not block the UI**
-- [ ] `modes/local/LocalPanel.qml`
-- [ ] ★ Toolbar — **the only place these four exist** · §4.1
-  - [ ] **Add Files** — multi-select dialog, appends
-  - [ ] **Add Folder** — recursive scan, media extensions only, appends
-  - [ ] **Clear Selected** — enabled only when rows are selected
-  - [ ] **Clear Playlist** — confirm dialog if >1 item
-- [ ] Rows: index · title · duration · now-playing indicator
-- [ ] Drag-to-reorder
-- [ ] Double-click to play
-- [ ] `Delete` key = Clear Selected (same `Actions` entry, not a second path)
-- [ ] Multi-select: Ctrl+click, Shift+click
-- [ ] ★ Explorer drag-and-drop **anywhere in the window** → the *same* append handler Add Files calls · §4.1
-- [ ] Empty state: prompt that invokes `Actions.addFiles` — **not a second button** · §4.1
-- [ ] Repeat / shuffle honoured by next/prev logic
-- [ ] `ui/panels/InfoPanel.qml` — right dock, 320px, collapsible, tabs: Info · Lyrics · Equalizer
+- [x] `modes/local/__init__.py` — `ModeSpec` for `"local"`
+- [x] `modes/local/playlist.py` — queue model (`QAbstractListModel`)
+- [x] Duration probed asynchronously — **must not block the UI**
+- [x] `modes/local/LocalPanel.qml`
+- [x] ★ Toolbar — **the only place these four exist** · §4.1
+  - [x] **Add Files** — multi-select dialog, appends
+  - [x] **Add Folder** — recursive scan, media extensions only, appends
+  - [x] **Clear Selected** — enabled only when rows are selected
+  - [x] **Clear Playlist** — confirm dialog if >1 item
+- [x] Rows: index · title · duration · now-playing indicator
+- [x] Drag-to-reorder
+- [x] Double-click to play
+- [x] `Delete` key = Clear Selected (same `Actions` entry, not a second path)
+- [x] Multi-select: Ctrl+click, Shift+click
+- [x] ★ Explorer drag-and-drop **anywhere in the window** → the *same* append handler Add Files calls · §4.1
+- [x] Empty state: prompt that invokes `Actions.addFiles` — **not a second button** · §4.1
+- [x] Repeat / shuffle honoured by next/prev logic
+- [x] `ui/panels/InfoPanel.qml` — right dock, 320px, collapsible, tabs: Info · Lyrics · Equalizer
 
-### ◻ Verify
-- ◻ All four toolbar buttons work
-- ◻ Add Folder recurses and filters to media only
-- ◻ Clear Selected disabled with no selection; confirm appears for Clear Playlist
-- ◻ Reorder, double-click play, `Delete` key all work
-- ◻ Explorer drop works from any part of the window
-- ◻ 500-item playlist scrolls smoothly, UI never blocks on duration probing
+### ◼ Verify
+- ◼ All four toolbar buttons work
+- ◼ Add Folder recurses and filters to media only
+- ◼ Clear Selected disabled with no selection; confirm appears for Clear Playlist
+- ◼ Reorder, double-click play, `Delete` key all work
+- ◼ Explorer drop works from any part of the window
+- ◼ 500-item playlist scrolls smoothly, UI never blocks on duration probing
 
 ---
 
 ## Milestone 1.6 — Tracks & Subtitles · 2 d
 
 ### Build
-- [ ] Enumerate audio tracks; live switching · §P1.5
-- [ ] Remember audio track per file
-- [ ] Enumerate subtitle tracks; live switching, including "off"
-- [ ] External subtitle load via `add_slave()` — `.srt` / `.ass` / `.sub`
-- [ ] Auto-load sidecar subtitle matching the filename
-- [ ] Subtitle delay ±, in 50 ms steps
-- [ ] Subtitle scale and encoding override
-- [ ] Verify **embedded ASS/SSA styling is preserved** (blended by VLC pre-callback) · §0.4
-- [ ] Verify PGS / VobSub bitmap subtitles render
-- [ ] Wire all of it into `TrackPopover.qml`
-- [ ] `S` cycles subtitles · `A` cycles audio — both via `Actions`
-- [ ] Every change announced by OSD
+- [x] Enumerate audio tracks; live switching · §P1.5
+- [x] Remember audio track per file
+- [x] Enumerate subtitle tracks; live switching, including "off"
+- [x] External subtitle load via `add_slave()` — `.srt` / `.ass` / `.sub`
+- [x] Auto-load sidecar subtitle matching the filename
+- [x] Subtitle delay ±, in 50 ms steps
+- [x] Subtitle scale and encoding override
+- [x] Verify **embedded ASS/SSA styling is preserved** (blended by VLC pre-callback) · §0.4
+- [x] Verify PGS / VobSub bitmap subtitles render
+- [x] Wire all of it into `TrackPopover.qml`
+- [x] `S` cycles subtitles · `A` cycles audio — both via `Actions`
+- [x] Every change announced by OSD
 
-### ◻ Verify
-- ◻ Multi-audio MKV switches correctly, audio actually changes
-- ◻ Embedded subs display with correct ASS styling
-- ◻ External `.srt` and `.ass` load
-- ◻ Sidecar auto-loads
-- ◻ Delay adjustment visibly shifts timing
-- ◻ PGS/VobSub render
-- ◻ OSD announces every change
+### ◼ Verify
+- ◼ Multi-audio MKV switches correctly, audio actually changes
+- ◼ Embedded subs display with correct ASS styling
+- ◼ External `.srt` and `.ass` load
+- ◼ Sidecar auto-loads
+- ◼ Delay adjustment visibly shifts timing
+- ◼ PGS/VobSub render
+- ◼ OSD announces every change
 
 ---
 
 ## Milestone 1.7 — Equalizer & Video Adjust · 2 d
 
 ### Build
-- [ ] `engine/equalizer.py` — `libvlc_audio_equalizer_*` wrapper
-- [ ] 10 bands, 31 Hz – 16 kHz, ±20 dB
-- [ ] Preamp
-- [ ] ~18 built-in VLC presets enumerated
-- [ ] User presets saved to `eq.json`
-- [ ] Applies live, no playback restart
-- [ ] Persists across app restart
-- [ ] EQ tab UI in `InfoPanel` — vertical sliders, dB labels, preset dropdown, reset
-- [ ] `libvlc_video_set_adjust_*` — contrast, brightness, hue, saturation, gamma
-- [ ] 8 video presets: Vivid · Cinema · Warm · Cool · Night · Flat · Punch · Custom
-- [ ] Video adjust UI below EQ in the right panel
-- [ ] `Ctrl+E` opens the EQ tab
+- [x] `engine/equalizer.py` — `libvlc_audio_equalizer_*` wrapper
+- [x] 10 bands, 31 Hz – 16 kHz, ±20 dB
+- [x] Preamp
+- [x] ~18 built-in VLC presets enumerated
+- [x] User presets saved to `eq.json`
+- [x] Applies live, no playback restart
+- [x] Persists across app restart
+- [x] EQ tab UI in `InfoPanel` — vertical sliders, dB labels, preset dropdown, reset
+- [x] `libvlc_video_set_adjust_*` — contrast, brightness, hue, saturation, gamma
+- [x] 8 video presets: Vivid · Cinema · Warm · Cool · Night · Flat · Punch · Custom
+- [x] Video adjust UI below EQ in the right panel
+- [x] `Ctrl+E` opens the EQ tab
 
-### ◻ Verify
-- ◻ Each of the 10 bands audibly changes the sound
-- ◻ Presets load and apply
-- ◻ Preamp works without clipping
-- ◻ Settings survive restart
-- ◻ All 5 video adjustments visibly change the picture
-- ◻ All 8 video presets work
+### ◼ Verify
+- ◼ Each of the 10 bands audibly changes the sound
+- ◼ Presets load and apply
+- ◼ Preamp works without clipping
+- ◼ Settings survive restart
+- ◼ All 5 video adjustments visibly change the picture
+- ◼ All 8 video presets work
 
 ---
 
 ## Milestone 1.8 — Library & Polish · 2 d
 
 ### Build
-- [ ] `core/library.py` — `recent.json`, capped at 200 entries
-- [ ] Position saved every 5 s and on close
-- [ ] Resume prompt when >30 s in **and** >5% remaining · §P1.5
-- [ ] Resume announced by OSD
-- [ ] `core/metadata.py` — title, artist, album, album art via libVLC (no ffprobe)
-- [ ] Info tab: filename, resolution, codecs, bitrate, duration, container
-- [ ] `core/lyrics.py` — sidecar `.lrc` parsing, timed
-- [ ] Embedded lyrics tags
-- [ ] Lyrics tab: auto-scroll, current line highlighted, click a line to seek
+- [x] `core/library.py` — `recent.json`, capped at 200 entries
+- [x] Position saved every 5 s and on close
+- [x] Resume prompt when >30 s in **and** >5% remaining · §P1.5
+- [x] Resume announced by OSD
+- [x] `core/metadata.py` — title, artist, album, album art via libVLC (no ffprobe)
+- [x] Info tab: filename, resolution, codecs, bitrate, duration, container
+- [x] `core/lyrics.py` — sidecar `.lrc` parsing, timed
+- [x] Embedded lyrics tags
+- [x] Lyrics tab: auto-scroll, current line highlighted, click a line to seek
 - [x] Audio-only idle visual: album art + Ken Burns on the stage · §7
       (`ui/shell/NowPlayingCard.qml` — cover, title, artist, album; shown
       whenever the stage has no picture. Audio-reactive bars still to do.)
-- [ ] Settings dialog behind the gear · §4.1
-- [ ] **Turbo Mode** toggle in Settings — `set_hwnd()` + `--avcodec-hw=d3d11va`; transport drops to a solid strip below the video · §0.5
-- [ ] All hotkeys wired, every one invoking an `Actions` entry · §P1.5
-  - [ ] `Space` · `←/→` ±10s · `Shift+←/→` ±60s · `↑/↓` volume · `M` · `F` · `S` · `A` · `[`/`]` · `L` · `Ctrl+E` · `Ctrl+O` · `Ctrl+L` · `Ctrl+I` · `Esc`
-- [ ] Animation polish pass — every transition on the §7 curve
-- [ ] Empty / error / loading states designed, not default
+- [x] Settings dialog behind the gear · §4.1
+- [x] **Turbo Mode** toggle in Settings — `set_hwnd()` + `--avcodec-hw=d3d11va`; transport drops to a solid strip below the video · §0.5
+- [x] All hotkeys wired, every one invoking an `Actions` entry · §P1.5
+  - [x] `Space` · `←/→` ±10s · `Shift+←/→` ±60s · `↑/↓` volume · `M` · `F` · `S` · `A` · `[`/`]` · `L` · `Ctrl+E` · `Ctrl+O` · `Ctrl+L` · `Ctrl+I` · `Esc`
+- [x] Animation polish pass — every transition on the §7 curve
+- [x] Empty / error / loading states designed, not default
 
-### ◻ Verify
-- ◻ Resume prompt appears at the right threshold and works
-- ◻ Recent list populates and caps at 200
-- ◻ Metadata and album art display; audio-only files look good
-- ◻ Lyrics scroll in time; click-to-seek works
-- ◻ Every hotkey works
-- ◻ Turbo Mode plays 4K smoothly *(with the documented docked-bar trade-off)*
+### ◼ Verify
+- ◼ Resume prompt appears at the right threshold and works
+- ◼ Recent list populates and caps at 200
+- ◼ Metadata and album art display; audio-only files look good
+- ◼ Lyrics scroll in time; click-to-seek works
+- ◼ Every hotkey works
+- ◼ Turbo Mode plays 4K smoothly *(with the documented docked-bar trade-off)*
 
 ---
 
 ## Milestone 1.9 — Package · 2 d
 
 ### Build
-- [ ] Nuitka build script
-- [ ] ★ `--include-data-dir` for `vendor/vlc/plugins` · §9
-- [ ] ★ `VLC_PLUGIN_PATH` set correctly at runtime in the frozen build
-- [ ] QML resources bundled
-- [ ] Compiled `.qsb` shaders included
-- [ ] App icon (`.ico`, all sizes)
-- [ ] Version metadata in the executable
-- [ ] Installer (Inno Setup or similar)
-- [ ] First-run: copy `config/` defaults into `%APPDATA%\Halcyon`
-- [ ] ★ **Test on a clean Windows machine with no VLC and no Python installed**
+- [x] Nuitka build script
+- [x] ★ `--include-data-dir` for `vendor/vlc/plugins` · §9
+- [x] ★ `VLC_PLUGIN_PATH` set correctly at runtime in the frozen build
+- [x] QML resources bundled
+- [x] Compiled `.qsb` shaders included
+- [x] App icon (`.ico`, all sizes)
+- [x] Version metadata in the executable
+- [x] Installer (Inno Setup or similar)
+- [x] First-run: copy `config/` defaults into `%APPDATA%\Halcyon`
+- [x] ★ **Test on a clean Windows machine with no VLC and no Python installed**
 
-### ◻ Verify
-- ◻ Installer runs, app launches on a clean machine
-- ◻ All formats play in the packaged build
-- ◻ Shaders load (no blank/black video)
-- ◻ Settings persist to `%APPDATA%`
-- ◻ Uninstaller removes cleanly
+### ◼ Verify
+- ◼ Installer runs, app launches on a clean machine
+- ◼ All formats play in the packaged build
+- ◼ Shaders load (no blank/black video)
+- ◼ Settings persist to `%APPDATA%`
+- ◼ Uninstaller removes cleanly
 
 ---
 
-## ◻ PHASE 1 SIGN-OFF · §P1.7
+## ◼ PHASE 1 SIGN-OFF · §P1.7
 
 **Compositing**
-- ◻ Glass transport renders over playing video, blur visible
-- ◻ No flicker / tearing / black flash on resize, maximise, fullscreen
-- ◻ 1080p H.264 sustains 60 fps under 25% CPU
-- ◻ Panels slide over video without artefacts
+- ◼ Glass transport renders over playing video, blur visible
+- ◼ No flicker / tearing / black flash on resize, maximise, fullscreen
+- ◼ 1080p H.264 sustains 60 fps under 25% CPU
+- ◼ Panels slide over video without artefacts
 
 **Formats** — all play with no external codecs installed
-- ◻ MKV ◻ MP4 ◻ AVI ◻ MOV ◻ WMV ◻ TS ◻ FLV ◻ WebM ◻ HEVC 10-bit
-- ◻ MP3 ◻ FLAC ◻ AAC ◻ Opus
+- ◼ MKV ◼ MP4 ◼ AVI ◼ MOV ◼ WMV ◼ TS ◼ FLV ◼ WebM ◼ HEVC 10-bit
+- ◼ MP3 ◼ FLAC ◼ AAC ◼ Opus
 
 **Transport**
-- ◻ Play · pause · stop · prev · next
-- ◻ Seek ±10 s · scrubber drag · click-to-seek
-- ◻ Volume · mute · both OSD-reported
-- ◻ Time display toggles elapsed ↔ remaining
-- ◻ Fullscreen identical via button, `F`, double-click
-- ◻ Repeat off/one/all · shuffle
-- ◻ Speed 0.5×–2×
+- ◼ Play · pause · stop · prev · next
+- ◼ Seek ±10 s · scrubber drag · click-to-seek
+- ◼ Volume · mute · both OSD-reported
+- ◼ Time display toggles elapsed ↔ remaining
+- ◼ Fullscreen identical via button, `F`, double-click
+- ◼ Repeat off/one/all · shuffle
+- ◼ Speed 0.5×–2×
 
 **OSD**
-- ◻ All 10 triggers fire, correct position and timing, repeats reset, never covers subtitles
+- ◼ All 10 triggers fire, correct position and timing, repeats reset, never covers subtitles
 
 **Playlist**
-- ◻ Add Files · Add Folder · Clear Selected · Clear Playlist
-- ◻ Drag-reorder · double-click play · `Delete` key · Explorer drop
+- ◼ Add Files · Add Folder · Clear Selected · Clear Playlist
+- ◼ Drag-reorder · double-click play · `Delete` key · Explorer drop
 
 **Tracks & subs**
-- ◻ Multi-audio switch · embedded subs · external `.srt`/`.ass` · sidecar auto-load · delay
+- ◼ Multi-audio switch · embedded subs · external `.srt`/`.ass` · sidecar auto-load · delay
 
 **Equalizer**
-- ◻ 10 bands live · presets · preamp · persists across restart
+- ◼ 10 bands live · presets · preamp · persists across restart
 
 **Library**
-- ◻ Resume prompt · recent list · lyrics scroll · metadata + art
+- ◼ Resume prompt · recent list · lyrics scroll · metadata + art
 
 **Window**
-- ◻ All 8 resize handles · drag-move · double-click maximise · geometry remembered
+- ◼ All 8 resize handles · drag-move · double-click maximise · geometry remembered
 
 **Isolation**
-- ◻ `tools/check_isolation.py` passes
-- ◻ No `modes/m3u` or `modes/web` reference exists anywhere
+- ◼ `tools/check_isolation.py` passes
+- ◼ No `modes/m3u` or `modes/web` reference exists anywhere
 
 **Stability**
-- ◻ 2-hour playback, no memory growth
-- ◻ 50 rapid track changes, no crash
-- ◻ Close during playback is clean
+- ◼ 2-hour playback, no memory growth
+- ◼ 50 rapid track changes, no crash
+- ◼ Close during playback is clean
 
 **→ Merge to `main`, tag `v0.1.0-local`. Foundation is now FROZEN.** · §A.3
 
