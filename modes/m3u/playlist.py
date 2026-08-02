@@ -312,7 +312,7 @@ class M3UContext(QObject):
         self._model = ChannelModel(self)
         self._model._play = self._open_url
 
-        store_path = settings.path().parent / "m3u-sources.json"
+        store_path = settings.path.parent / "m3u-sources.json"
         self._store = SourcesStore(store_path)
 
         self._status_message = ""
