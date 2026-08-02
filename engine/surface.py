@@ -334,11 +334,16 @@ class VideoSurface(QQuickItem):
     def _on_destroyed(self, *_args) -> None:
         """Drop the engine registration when the item is destroyed.
 
-        The PiP window is a QML Window destroyed mid-playback by its Loader.
-        Without this, its callbacks stay registered and the decoder thread
-        keeps calling ``frameArrived.emit()`` on a deleted object on every
-        frame. Only the engine bookkeeping is touched here — no Qt signals are
-        emitted from inside the destructor.
+        Best-effort only: PySide6 does not relay ``QObject.destroyed`` to
+        Python slots for objects the QML engine deletes (verified — a Loader
+        unloading the PiP Window destroys this item without this slot ever
+        running), so the engine additionally validates every reader's surface
+        at dispatch time and prunes a dead one before calling it
+        (``VideoOutput._callback_alive`` / ``_notify_readers``). When this
+        slot *does* run it removes the reader immediately; when it does not,
+        the engine self-heals on the next frame. Only the engine bookkeeping
+        is touched here — no Qt signals are emitted from inside the
+        destructor.
         """
         if self._vout is not None:
             self._vout.remove_reader(self._reader_token)
