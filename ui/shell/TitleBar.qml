@@ -202,7 +202,8 @@ Item {
         IconButton {
             glyph: root.Window.window && root.Window.window.visibility === Window.Maximized
                    ? Glyphs.restore : Glyphs.maximize
-            tooltip: "Maximise"
+            tooltip: root.Window.window && root.Window.window.visibility === Window.Maximized
+                     ? "Restore" : "Maximise"
             showRing: false
             onClicked: Actions.toggleMaximized()
         }

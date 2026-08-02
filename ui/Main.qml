@@ -107,8 +107,24 @@ Shell {
             osd((ms > 0 ? Glyphs.fastForward : Glyphs.rewind) + "  "
                 + formatTime(Player.time) + " / " + formatTime(Player.duration));
         }
-        function seekTo(ms)       { Player.seek(ms) }
-        function seekFraction(f)  { Player.set_position(f) }
+        // seekTo and seekFraction show the same position pill as keyboard
+        // seek (seekRelative above). Mouse scrubbing fires them repeatedly,
+        // and the OSD's restart-not-stack timer turns that into a live
+        // readout (§6.2) that holds for 800 ms after the drag ends.
+        function seekTo(ms) {
+            Player.seek(ms);
+            _osdSeekTarget(ms);
+        }
+        function seekFraction(f) {
+            Player.set_position(f);
+            _osdSeekTarget(f * Player.duration);
+        }
+        function _osdSeekTarget(targetMs) {
+            if (Player.duration <= 0)
+                return;                  // live stream / duration unknown
+            osd(formatTime(targetMs) + " / " + formatTime(Player.duration),
+                targetMs >= Player.time ? Glyphs.fastForward : Glyphs.rewind);
+        }
         function beginScrub()     { Player.set_scrubbing(true) }
         function endScrub()       { Player.set_scrubbing(false) }
         function setRate(rate) {
@@ -199,8 +215,21 @@ Shell {
         }
         function playIndex(i)      { App.playIndex(i) }
         function moveItem(f, t)    { App.moveItem(f, t) }
-        function cycleRepeat()     { App.cycleRepeat() }
-        function toggleShuffle()   { App.toggleShuffle() }
+        function cycleRepeat() {
+            App.cycleRepeat();
+            if (!window.modeContext)
+                return;                  // mode still resolving — stay silent
+            var m = window.modeContext.repeatMode;
+            osd(m === 0 ? "Repeat off" : m === 1 ? "Repeat one" : "Repeat all",
+                m === 1 ? Glyphs.repeatOne : Glyphs.repeatAll);
+        }
+        function toggleShuffle() {
+            App.toggleShuffle();
+            if (!window.modeContext)
+                return;
+            osd(window.modeContext.shuffle ? "Shuffle on" : "Shuffle off",
+                Glyphs.shuffle);
+        }
 
         // -------------------------------------------------------- view --
         function toggleFullscreen() {
@@ -645,6 +674,29 @@ Shell {
         function onResumePrompted(path, positionMs) {
             if (window.osdEnabled())
                 osdLayer.showResume(path, positionMs);
+        }
+    }
+
+    // ======================================================================
+    // NOW-PLAYING TOAST — one hook for every track change. The core emits
+    // mediaNameChanged from the single media-open path (app.py), so
+    // Next/Previous, double-clicking a queue row, auto-advance at end of
+    // track and the first open all report here — without next()/previous()
+    // growing OSD knowledge of their own.
+    Connections {
+        target: App
+        function onMediaNameChanged() {
+            var name = App.currentFileStem;
+            if (name.length === 0)
+                return;                  // stop / nothing playing
+            if (!window.osdEnabled())
+                return;
+            if (osdLayer.resumeShowing)
+                return;                  // the resume toast owns this open
+            if (name.length > 60)        // the status pill has no width cap
+                name = name.substring(0, 59) + "…";
+            osdLayer.show("Now Playing: " + name,
+                          App.hasVideo ? Glyphs.video : Glyphs.music);
         }
     }
 
