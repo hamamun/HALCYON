@@ -1,27 +1,61 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import Halcyon.Ui
 
-// Info tab — filename, resolution, codecs, bitrate, duration, container
-// (Milestone 1.8). Metadata comes from libVLC, so there is no ffprobe
-// dependency to ship.
+// The Info tab — grouped file, stream and music metadata.
+//
+// Metadata is read by core/metadata.py through libVLC.  This tab is deliberately
+// read-only: audio and subtitle selection remain in the existing transport
+// popover, while Lyrics and Equalizer remain in their own right-dock tabs.
+//
+// The outer InfoPanel owns the dock, tabs and animation.  This file owns only
+// the Info tab's content so changing the presentation cannot disturb the other
+// right-panel features.
 Flickable {
     id: root
 
     property var meta: typeof Metadata !== "undefined" ? Metadata : null
 
-    contentHeight: column.implicitHeight
+    // The guards keep this tab loadable in isolation and preserve compatibility
+    // with small fake Metadata objects used by QML tests.
+    readonly property var fileRows:
+        root.meta && ("fileDetails" in root.meta) ? root.meta.fileDetails : []
+    readonly property var generalRows:
+        root.meta && ("generalDetails" in root.meta) ? root.meta.generalDetails : []
+    readonly property var videoRows:
+        root.meta && ("videoDetails" in root.meta) ? root.meta.videoDetails : []
+    readonly property var audioRows:
+        root.meta && ("audioDetails" in root.meta) ? root.meta.audioDetails : []
+    readonly property var musicRows:
+        root.meta && ("musicDetails" in root.meta) ? root.meta.musicDetails : []
+
+    readonly property var sections: [
+        { title: "File",        rows: root.fileRows },
+        { title: "General",     rows: root.generalRows },
+        { title: "Video",       rows: root.videoRows },
+        { title: "Audio",       rows: root.audioRows },
+        { title: "Music tags",  rows: root.musicRows }
+    ]
+
+    contentWidth: width
+    contentHeight: column.implicitHeight + Theme.spaceMd
     clip: true
     boundsBehavior: Flickable.StopAtBounds
 
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; width: 6 }
+    ScrollBar.vertical: ScrollBar {
+        policy: ScrollBar.AsNeeded
+        width: 6
+    }
 
     Column {
         id: column
-        width: parent.width
-        spacing: Theme.spaceMd
+        width: root.width
+        spacing: Theme.spaceLg
 
-        // Album art, when the file has any.
+        // Keep the existing artwork behavior. It is not a metadata row and is
+        // not duplicated in General or Music tags.
         Rectangle {
             width: parent.width
             height: width
@@ -42,7 +76,8 @@ Flickable {
 
         Text {
             width: parent.width
-            text: root.meta && root.meta.title !== "" ? root.meta.title : "Nothing playing"
+            visible: root.fileRows.length === 0
+            text: "Nothing playing"
             wrapMode: Text.WordWrap
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeLarge
@@ -50,40 +85,62 @@ Flickable {
             color: Theme.text
         }
 
-        Text {
-            width: parent.width
-            visible: root.meta && root.meta.artist !== ""
-            text: root.meta ? root.meta.artist : ""
-            wrapMode: Text.WordWrap
-            font.family: Theme.fontFamily
-            font.pixelSize: Theme.fontSizeBody
-            color: Theme.textMuted
-        }
-
-        Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
-
         Repeater {
-            model: root.meta ? root.meta.details : []
+            model: root.sections
 
-            delegate: Row {
+            delegate: Column {
+                id: section
                 required property var modelData
-                width: column.width
+
+                width: root.width
                 spacing: Theme.spaceSm
+                visible: section.modelData.rows && section.modelData.rows.length > 0
+                height: visible ? implicitHeight : 0
 
                 Text {
-                    width: 90
-                    text: modelData.label
+                    width: parent.width
+                    text: section.modelData.title
                     font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.textFaint
+                    font.pixelSize: Theme.fontSizeBody
+                    font.weight: Theme.weightBold
+                    color: Theme.accent
                 }
-                Text {
-                    width: parent.width - 90 - Theme.spaceSm
-                    text: modelData.value
-                    elide: Text.ElideRight
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.text
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Theme.glassBorder
+                }
+
+                Repeater {
+                    model: section.modelData.rows
+
+                    delegate: Row {
+                        id: detailRow
+                        required property var modelData
+
+                        width: root.width
+                        spacing: Theme.spaceSm
+
+                        Text {
+                            id: detailLabel
+                            width: 96
+                            text: detailRow.modelData.label
+                            wrapMode: Text.WordWrap
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.textFaint
+                        }
+
+                        Text {
+                            width: Math.max(0, parent.width - detailLabel.width - Theme.spaceSm)
+                            text: detailRow.modelData.value
+                            wrapMode: Text.WrapAnywhere
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.text
+                        }
+                    }
                 }
             }
         }
