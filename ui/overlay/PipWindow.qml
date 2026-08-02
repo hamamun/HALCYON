@@ -28,6 +28,20 @@ Window {
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: Theme.base
 
+    // Deliberately NOT transient for the main window. QML auto-assigns
+    // `transientParent` to the window this one is declared inside, and the
+    // platform then minimises/hides the transient together with its parent —
+    // which is exactly the bug where minimising Halcyon also minimised the
+    // PiP. `transientParent: null` makes this a fully independent top-level
+    // window (Qt docs, Window.transientParent: "minimizing the parent window
+    // will also minimize the transient window ... Setting the transientParent
+    // to null will override this behavior"). The main window can therefore
+    // minimise while the PiP keeps playing (§P2.5 checklist). Qt.WindowStays-
+    // OnTopHint still keeps it above everything, and closing the main window
+    // still tears this window down, because the Loader that instantiates it
+    // lives inside the main window's scene (QML ownership, not OS ownership).
+    transientParent: null
+
     Component.onCompleted: {
         // Restore where the user last put it — after the defaults above, so a
         // stored geometry wins (§M2.5: position and size remembered).
