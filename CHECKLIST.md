@@ -22,9 +22,9 @@ file; both were replaced).*
 |---|---|---|---|---|
 | 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
-| 2 — M3U | 0 / 5 | 0 / 55 | 0 / 54 | `v0.2.0-m3u` |
+| 2 — M3U | 0 / 5 | 0 / 58 | 0 / 58 | `v0.2.0-m3u` |
 | 3 — Web | 0 / 5 | 0 / 62 | 0 / 40 | `v1.0.0` |
-| **Total** | **10 / 21** | **175 / 300** | **104 / 199** | |
+| **Total** | **10 / 21** | **175 / 303** | **104 / 203** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -462,6 +462,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [ ] `modes/m3u/parser.py` — `.m3u` and `.m3u8`
 - [ ] `#EXTINF` duration + title
 - [ ] `tvg-name`, `tvg-logo`, `tvg-id`, `group-title` attributes
+- [ ] `tvg-country` attribute — drives By-country grouping; missing → "Unknown" · §P2.4
 - [ ] `#EXTGRP`
 - [ ] Relative and absolute paths; local and remote entries
 - [ ] Remote playlist download over HTTP(S) — **standard library only, no new dependency** · §P2.4
@@ -512,29 +513,33 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [ ] Rows: channel name · group tag · `tvg-logo` thumbnail when present
 - [ ] Logo loading is async and cached; missing logos fall back gracefully
 - [ ] Filter/search box narrows the list
-- [ ] Optional group-by-category collapse
+- [ ] ★ Grouping selector: **By category** (default) / **By country** / **No group** — choice remembered · §P2.4
+- [ ] ★ **Playing channel always shows** — highlighted, and the list scrolls to keep it visible when zapping with prev/next · §P2.4
 - [ ] Single-click to play
 - [ ] No reorder — the file defines order
-- [ ] Right panel hidden by default; EQ still reachable via `Ctrl+I` (**same component**) · §P2.4
+- [ ] ★ **No right panel in M3U** — Ctrl+I inert, EQ not offered; Local's right dock untouched (owner decision 2026-08-02) · §P2.4
 
-◻ Channels list with logos and groups · ◻ Filter works · ◻ EQ reachable and applies
+◻ Channels list with logos and groups · ◻ Filter works
 ◻ Toolbar is exactly Playlists… + Clear Playlist · ◻ Manager caps at 7; add/edit/delete work
 ◻ Loading a source stops the stream · ◻ Last-used source restores · ◻ Dead sources fail with retry, no crash
+◻ Grouping: category / country / none — remembered · ◻ Playing channel stays visible when zapping
+◻ No right panel; Ctrl+I does nothing
 
 ---
 
 ## Milestone 2.4 — Transport · 1 d
 
-- [ ] `modes/m3u/M3UTransport.qml` — ★ **single row, ~52px, designed for six controls** · §B.2
+- [ ] `modes/m3u/M3UTransport.qml` — ★ **single row, ~52px, designed for seven controls** · §B.2
 - [ ] ★ **No reserved gaps, no ghost slots** — this is *not* Local's bar with the seek row deleted
 - [ ] Built from the **same shared `ui/transport/` parts** — same `IconButton`, same icons, same hover ring · §B.1
-- [ ] Play/pause · prev · next · volume+mute · PiP · fullscreen
+- [ ] ★ Exactly seven, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen** (owner decision 2026-08-02) · §P2.3
+- [ ] ★ **No seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed
 - [ ] Volume persists across mode switches
 - [ ] Buffering indicator for slow streams
 - [ ] Stream error state: clear message, no crash, no hang
 - [ ] Connection timeout handled with a retry affordance
 
-◻ Exactly six controls · ◻ Layout looks designed for six, balanced, no gaps · ◻ Buttons visually identical to Local's · ◻ Unreachable stream fails gracefully
+◻ Exactly seven controls, one row · ◻ Layout looks designed for seven, balanced, no gaps · ◻ Buttons visually identical to Local's · ◻ Unreachable stream fails gracefully
 
 ---
 
@@ -568,6 +573,8 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - ◻ `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
 - ◻ HLS streams play
 - ◻ Filter box narrows the list
+- ◻ Grouping: **By category** (default) / **By country** / **No group** — remembered
+- ◻ Playing channel highlighted and kept visible when zapping with prev/next
 - ◻ Toolbar holds exactly **Playlists…** and **Clear Playlist**, and both work
 - ◻ Malformed / unreachable entries fail gracefully with a message, no crash
 
@@ -580,12 +587,12 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - ◻ Panel drop opens the source via the same handler as Add File
 
 **Controls**
-- ◻ Exactly six render: play/pause, prev, next, volume+mute, PiP, fullscreen
-- ◻ No seek bar, time display, stop, repeat/shuffle, or track menu — **absent, not greyed**
+- ◻ Exactly seven render, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen**
+- ◻ No seek bar, time display, repeat/shuffle, or track menu — **absent, not greyed**
 - ◻ Volume and mute work; volume persists across a mode switch
 - ◻ No OSD fires in M3U mode
+- ◻ **No right panel in M3U** — Ctrl+I does nothing; EQ not offered
 - ◻ M3U bar is its own layout — single row, balanced, **no empty gaps** · §B.2
-- ◻ Equalizer reachable via the right panel and applies to the stream
 
 **PiP**
 - ◻ Opens, on top, resizes, snaps

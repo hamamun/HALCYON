@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v3.2** — 2 August 2026 |
+| **Version** | Plan **v3.3** — 2 August 2026 |
+| **Changes in v3.3** | **Owner decisions (2 Aug 2026):** M3U bar = **seven controls, one row** — stop joins, volume+mute retained. **M3U has no right panel** — Ctrl+I inert, EQ not offered in M3U (the §P1.5 EQ note is technically still true, but superseded: it's simply not exposed there). **Channel grouping selector:** By category (default) / By country / No group. **Playing channel stays highlighted and scrolled into view.** Chip label confirmed: **M3U.** |
 | **Changes in v3.2** | **Phase 1 tagged `v0.1.0-local`** — the frozen baseline; `tools/check_isolation.py --phase 2` now actually guards the foundation. **Owner decision: the M3U Playlists manager (§P2.4)** — up to 7 saved sources (URL or local file, add/edit/delete) in M3U's own dialog, opened from the M3U panel toolbar. The title-bar Open idea is dropped (the title bar is frozen, and source management belongs inside the mode). **Loading a source stops the current stream.** §P2.3 snippet corrected to the shipped `ModeSpec` (the `controls=[...]` field never shipped — §B.4 is the mechanism). |
 | **Changes in v3.1** | **Web mode now embeds inside the main window** — pywebview dropped for `QtWebEngineQuick`; the "separate window" limitation is gone. **M3U gains volume + mute.** Equalizer confirmed available in all playback modes. New §B: *One Machine, Three Channels* — shared component vocabulary, per-mode layout freedom. §A.1 corrected. |
 | **Changes in v3.0** | Restructured into **three independently shippable phases**. Added §A (phase contract & isolation rules), §P1/§P2/§P3 (per-phase scope, deliverables, acceptance tests), repo/branch strategy, and per-phase definition-of-done. |
@@ -141,7 +142,7 @@ A play button in M3U is **the same `IconButton` with the same icon, size, and ho
 **Each mode composes those shared parts into whatever layout fits its job.**
 
 - Control bar **height differs** — Local ~72px (two rows: seek bar above buttons), M3U ~52px (one row), Web has a nav bar instead.
-- Control bar **grouping and order differ** — M3U doesn't inherit Local's left/centre/right clusters. It's laid out for six controls, centred and balanced, as if designed for six from the start.
+- Control bar **grouping and order differ** — M3U doesn't inherit Local's left/centre/right clusters. It's laid out for its seven controls, centred and balanced, as if designed for seven from the start.
 - **No reserved gaps. No ghost slots. No "where the seek bar would have been."** M3U's bar is designed for M3U, not Local's bar with holes punched in it.
 - Panel toolbars differ — four buttons in Local, one in M3U, three in Web — each spaced properly for its own count.
 
@@ -472,7 +473,7 @@ Top-left for status lines, centre for large glyphs. Glass pill, 8px blur, 800 ms
 
 ### Features
 
-**Equalizer** — `libvlc_audio_equalizer_*`, 10 bands (31 Hz–16 kHz), ±20 dB, preamp, ~18 built-in presets + user presets in `eq.json`. Right panel. Live. *Applies to any libVLC playback, so it works in M3U too (Phase 2) — same component, reached the same way, not a copy.*
+**Equalizer** — `libvlc_audio_equalizer_*`, 10 bands (31 Hz–16 kHz), ±20 dB, preamp, ~18 built-in presets + user presets in `eq.json`. Right panel. Live. *Applies to any libVLC playback, so it works in M3U too (Phase 2) — same component, reached the same way, not a copy.* *(v3.3 note: still technically true, but superseded — the owner decided M3U has no right panel, so the EQ is not offered in M3U; see §P2.4.)*
 
 **Video adjust** — `libvlc_video_set_adjust_*`: contrast, brightness, hue, saturation, gamma. 8 presets. Right panel, below EQ.
 
@@ -590,11 +591,11 @@ SPEC = ModeSpec(
 
 > **Correction (v3.2):** earlier drafts showed a `controls=[...]` field on `ModeSpec`. The shipped, frozen `core/mode_api.py` has no such field — §B.4 replaced the idea: a mode ships *its own transport QML*, and the shell never filters control lists. The mechanism below is the law; the field was the mistake.
 
-**Six controls: play/pause, prev, next, volume+mute, PiP, fullscreen.**
+**Seven controls, one row: prev · play/pause · stop · next · volume+mute · PiP · fullscreen.** *(Seven, no more, no fewer — stop added and the volume pair retained by owner decision, 2026-08-02.)*
 
 Volume was missing from earlier drafts — an oversight, corrected before Phase 1 sign-off. Without it, changing volume in M3U would have meant reaching for the Windows mixer, which is unacceptable for a player.
 
-Per §B.2, `M3UTransport.qml` arranges these six in a **single-row layout designed for six** — roughly 52px tall, balanced and centred, built from the same `ui/transport/` component vocabulary. It is *not* Local's two-row bar with the seek row deleted and gaps left behind. The buffering indicator and the retry affordance live in this mode's own files — a flaky IPTV stream must never add special cases to shared code (§A.3). The `setup` hook means `main.py` does not gain a single line: it calls each registered mode's `setup` and publishes the result (§A.2).
+Per §B.2, `M3UTransport.qml` arranges these seven in a **single-row layout designed for seven** — roughly 52px tall, balanced and centred, built from the same `ui/transport/` component vocabulary. It is *not* Local's two-row bar with the seek row deleted and gaps left behind. There is **no seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed. The buffering indicator and the retry affordance live in this mode's own files — a flaky IPTV stream must never add special cases to shared code (§A.3). The `setup` hook means `main.py` does not gain a single line: it calls each registered mode's `setup` and publishes the result (§A.2).
 
 ## P2.4 Panel
 
@@ -626,9 +627,9 @@ A glass dialog (the same dialog pattern as Settings and the subtitle downloader 
 
 **Source indicator:** the current source's name sits above the channel list as **plain text** — information, not a second trigger.
 
-**Body:** parsed `#EXTINF` entries — channel name, `group-title`, `tvg-logo` thumbnail when present (loaded async, cached, graceful fallback). Filter box narrows the list. Single-click to play. No reorder (the file defines the order).
+**Body:** parsed `#EXTINF` entries — channel name, `group-title`, `tvg-logo` thumbnail when present (loaded async, cached, graceful fallback). Filter box narrows the list. **Grouping selector: By category (`group-title`, default) / By country (`tvg-country`, missing → "Unknown") / No group — the choice is remembered.** Single-click to play. No reorder (the file defines the order). **The playing channel always shows:** highlighted, and the list scrolls to keep it visible when zapping with prev/next.
 
-**Right panel:** hidden by default; EQ still reachable via `Ctrl+I` — the *same* component, not a copy.
+**Right panel:** **none in M3U** (owner decision, 2026-08-02). Ctrl+I is inert here; the equalizer stays Local-only and is simply not offered. Local's right dock is untouched — this changes nothing for Local.
 
 **OSD:** off.
 
@@ -654,6 +655,8 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 - [ ] `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
 - [ ] HLS streams play
 - [ ] Filter box narrows the list
+- [ ] **Grouping selector: By category (default) / By country / No group — remembered**
+- [ ] **Playing channel stays highlighted and scrolled into view**
 - [ ] Toolbar holds exactly two buttons — **Playlists…** and **Clear Playlist** — and both work
 - [ ] Malformed / unreachable entries fail gracefully with a message, no crash
 
@@ -667,12 +670,12 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 - [ ] Dropping an `.m3u` on the panel opens it via the same handler as Add File (§4.1)
 
 **Controls**
-- [ ] **Exactly six controls render:** play/pause, prev, next, volume+mute, PiP, fullscreen
-- [ ] **No seek bar, no time display, no stop, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed
+- [ ] **Exactly seven controls render, one row:** prev · play/pause · stop · next · volume+mute · PiP · fullscreen
+- [ ] **No seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed
 - [ ] Volume slider and mute both work; volume persists across a mode switch
 - [ ] **No OSD fires in M3U mode**
+- [ ] **No right panel in M3U — Ctrl+I does nothing; EQ not offered**
 - [ ] M3U bar is its own layout — single row, correctly balanced, **no empty gaps where Local's controls would be** (§B.2)
-- [ ] Equalizer reachable in M3U via the right panel and applies to the playing stream
 
 **PiP**
 - [ ] Opens, stays on top, resizes, snaps to corners
@@ -877,7 +880,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | Resume, lyrics, metadata | 1 | ✅ |
 | Repeat / shuffle | 1 | ✅ local only |
 | Frameless + 8 handles | 1 | ✅ |
-| **M3U: play/pause/prev/next/volume/fullscreen/PiP** | 2 | ✅ six controls |
+| **M3U: prev/play-pause/stop/next/volume/PiP/fullscreen** | 2 | ✅ seven controls, one row |
 | **M3U: own bar layout, not Local's with gaps** | 2 | ✅ §B.2 |
 | **M3U playlist: clear playlist only** | 2 | ✅ |
 | M3U / M3U8 / HLS | 2 | ✅ |
