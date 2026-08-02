@@ -85,6 +85,23 @@ the callback, the notification was left pointing at a dead object and *nobody*
 was told anything for the rest of the session. ``add_reader`` returning a token
 is what makes :meth:`VideoOutput.remove_reader` able to drop exactly one
 surface, leaving every other reader — and the legacy slot — untouched.
+
+Two further guarantees, both learned the hard way in §P2.5:
+
+* **A late-binding reader is told the current format.** libVLC fires the
+  format callback once per stream, so a PiP surface that binds after the video
+  started would never learn the format — its ``isPlanar`` flag stayed false
+  and the YUV shader never loaded (a permanently black PiP until the next
+  pause/play or media change re-fired the callback). :meth:`VideoOutput.add_reader`
+  therefore replays the ring's current format to the new reader.
+* **Dead readers are pruned at dispatch time.** Closing the PiP deletes its
+  ``VideoSurface`` C++ object, and PySide6 does *not* relay ``QObject.destroyed``
+  to Python slots for objects the QML engine destroys — so the surface's
+  unregister-on-destroy hook never runs. Without the
+  :meth:`VideoOutput._callback_alive` check, every frame after the close hit
+  the deleted surface and logged ``RuntimeError: Signal source has been
+  deleted`` for the rest of the session. The fan-out now drops such a reader
+  the first time it would be notified.
 """
 
 from __future__ import annotations
@@ -94,6 +111,14 @@ import logging
 import threading
 from dataclasses import dataclass
 from typing import Callable
+
+#: Used by :meth:`VideoOutput._callback_alive` to detect surfaces whose C++
+#: half has been deleted (a closed PiP window). Guarded so this module keeps
+#: importing in pure-Python contexts (the Qt-free engine tests).
+try:
+    import shiboken6
+except ImportError:  # pragma: no cover - PySide6 always ships shiboken6
+    shiboken6 = None
 
 log = logging.getLogger(__name__)
 
@@ -508,6 +533,14 @@ class VideoOutput:
         ``frame_ready``/``format_changed``/``video_stopped`` attributes stay
         independent and keep firing for simple callers).
 
+        **A reader that binds mid-playback is told the ring's current format
+        immediately.** libVLC fires the format callback once per stream, so a
+        surface that binds after the video started would otherwise never learn
+        the format — its ``isPlanar`` flag would stay false and the YUV
+        shader would never load (black PiP until the next format event).
+        Replaying the current format on registration gives every surface the
+        same starting state, whenever it attaches (§P2.5).
+
         Returns the reader token to hand to :meth:`remove_reader` when the
         surface goes away. With no callbacks (the original contract) this is
         a refcount-only registration and returns ``None``.
@@ -518,6 +551,16 @@ class VideoOutput:
         reader = _Reader(frame, format, stop)
         with self._listener_lock:
             self._listeners.append(reader)
+        # Replay the current format to *this* reader only — the other readers
+        # already know it. Runs on the caller's thread (the GUI thread for
+        # VideoSurface.bind), which is exactly the thread the surface's
+        # format callback expects for its bookkeeping.
+        current = self.ring.format
+        if current is not None and reader.format is not None:
+            try:
+                reader.format(current)
+            except Exception:
+                log.exception("format_changed handler failed")
         return reader
 
     def remove_reader(self, reader: _Reader | None = None) -> None:
@@ -550,6 +593,69 @@ class VideoOutput:
         """
         with self._listener_lock:
             return list(self._listeners)
+
+    @staticmethod
+    def _callback_alive(cb: Callable) -> bool:
+        """False when ``cb`` is a bound method of a QObject whose C++ half has
+        been deleted — i.e. a closed PiP window.
+
+        The engine cannot rely on surfaces unregistering themselves:
+        PySide6 does not relay ``QObject.destroyed`` to Python slots for
+        objects the QML engine deletes (verified: a Loader unloading the PiP
+        Window destroys the ``VideoSurface`` but the Python ``destroyed``
+        slot never runs). Without this check the fan-out would call
+        ``frameArrived.emit()`` on the dead surface on every frame and log
+        ``RuntimeError: Signal source has been deleted`` forever (§P2.5).
+
+        Plain callables (no ``__self__``) are always considered alive; only
+        shiboken-wrapped objects can be checked. A non-shiboken ``__self__``
+        is treated as alive too.
+        """
+        try:
+            self_obj = getattr(cb, "__self__", None)
+        except Exception:
+            # Cannot even read the bound instance — treat as dead.
+            return False
+        if self_obj is None or shiboken6 is None:
+            return True
+        try:
+            return shiboken6.isValid(self_obj)
+        except Exception:
+            return True
+
+    def _notify_readers(self, attr: str, label: str, *args: object) -> None:
+        """Fan a notification out to every registered reader (§P2.5).
+
+        ``attr`` is the reader callback to invoke (``frame``/``format``/
+        ``stop``) and ``label`` the log tag for failures. Each callback is
+        guarded individually so one broken handler can never stop the others
+        — or the C callback — from completing, and a reader whose surface
+        died (closed PiP window) is **pruned** here rather than left to raise
+        on every subsequent frame.
+        """
+        dead: list[_Reader] = []
+        for reader in self._listener_snapshot():
+            cb = getattr(reader, attr, None)
+            if cb is None:
+                continue
+            if not self._callback_alive(cb):
+                dead.append(reader)
+                continue
+            try:
+                cb(*args)
+            except Exception:
+                log.exception("%s handler failed", label)
+                # The surface may have died mid-call (teardown race). Drop it
+                # now so the next frame does not hit it again.
+                if not self._callback_alive(cb):
+                    dead.append(reader)
+        if dead:
+            with self._listener_lock:
+                for reader in dead:
+                    try:
+                        self._listeners.remove(reader)
+                    except ValueError:
+                        pass
 
     # ---------------------------------------------------------- callbacks ---
     def _on_format(self, chroma_ptr, width_ptr, height_ptr, pitches, lines) -> int:
@@ -628,13 +734,10 @@ class VideoOutput:
 
         # Fan out to every registered reader first, then the legacy slot.
         # Each is guarded separately so one broken handler can never stop the
-        # other surfaces — or the C callback — from completing (§P2.5).
-        for reader in self._listener_snapshot():
-            if reader.format is not None:
-                try:
-                    reader.format(fmt)
-                except Exception:  # never let Python raise into a C callback
-                    log.exception("format_changed handler failed")
+        # other surfaces — or the C callback — from completing, and a reader
+        # whose surface died (closed PiP window) is pruned on the spot
+        # (§P2.5).
+        self._notify_readers("format", "format_changed", fmt)
         if self.format_changed:
             try:
                 self.format_changed(fmt)
@@ -662,13 +765,7 @@ class VideoOutput:
         # Every reader must drop back to idle, not just the last one that
         # attached — a PiP window and the main Stage both have a `hasVideo`
         # flag to clear (§P2.5).
-        for reader in self._listener_snapshot():
-            cb = reader.stop
-            if cb is not None:
-                try:
-                    cb()
-                except Exception:
-                    log.exception("video_stopped handler failed")
+        self._notify_readers("stop", "video_stopped")
         cb = self.video_stopped
         if cb is not None:
             try:
@@ -739,14 +836,12 @@ class VideoOutput:
         # overwrote `frame_ready` and the main Stage stopped being told that
         # new pictures existed — black PiP or frozen main window, depending on
         # which surface won the slot. Each handler is guarded so one dead
-        # surface (a closed PiP window) can never starve the others.
-        for reader in self._listener_snapshot():
-            cb = reader.frame
-            if cb is not None:
-                try:
-                    cb()
-                except Exception:
-                    log.exception("frame_ready handler failed")
+        # surface (a closed PiP window) can never starve the others — and a
+        # surface that *died* (its C++ object deleted by the QML engine when
+        # the PiP closed) is pruned here, on the first frame after the close,
+        # instead of raising ``Signal source has been deleted`` on every
+        # frame for the rest of the session.
+        self._notify_readers("frame", "frame_ready")
         cb = self.frame_ready
         if cb is not None:
             try:
