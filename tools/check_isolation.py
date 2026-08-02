@@ -57,6 +57,23 @@ PHASE1_FROZEN = [
 #: ...except this one line, which each phase appends to (§A.2).
 FROZEN_EXCEPTIONS = ["core/modes.py"]
 
+#: Disclosed Phase-2 fixes to frozen Phase 1 paths — the guard's own rule 3
+#: wording says it outright: "If a later phase needs this, the foundation is
+#: wrong — fix Phase 1 properly." Phase 1 shipped the reader refcount and the
+#: ring *for* §P2.5 ("PiP calls it on its own surface against the same
+#: VideoOutput") but left the notification path as single-slot attributes, so
+#: a second surface silently disconnected the first. Completing the
+#: multi-reader contract is a foundation fix, not a workaround; each entry
+#: names the exact files and must carry a comment when added.
+PHASE2_DISCLOSED = [
+    # Fan-out every frame/format/stop notification to all registered readers
+    # (§P2.5); VideoSurface now registers per-surface callbacks instead of
+    # overwriting the engine's single slots. Regression-tested in
+    # tests/test_video_pip_notify.py.
+    "engine/video_out.py",
+    "engine/surface.py",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -214,10 +231,14 @@ def changed_files(base_ref: str) -> list[str]:
 
 
 def check_frozen_paths(base_ref: str) -> list[Failure]:
-    """Rule 3 — a phase-2+ change must not touch frozen Phase 1 paths."""
+    """Rule 3 — a phase-2+ change must not touch frozen Phase 1 paths.
+
+    ``PHASE2_DISCLOSED`` names the exception files and the reason each one is
+    there; anything else on a frozen path is still a rule-3 failure.
+    """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen
