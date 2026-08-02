@@ -33,29 +33,14 @@ from PySide6.QtCore import (
 )
 
 from core import paths as path_utils
+from core.media_types import (
+    AUDIO_EXTENSIONS,
+    MEDIA_EXTENSIONS,
+    SUBTITLE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+)
 
 log = logging.getLogger(__name__)
-
-#: Extensions Add Folder will pick up (§P1.5). Deliberately generous — libVLC
-#: plays far more than this, but a recursive scan should not hoover up .txt.
-VIDEO_EXTENSIONS = {
-    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mts", ".flv",
-    ".webm", ".mpg", ".mpeg", ".m4v", ".3gp", ".ogv", ".vob", ".divx", ".rmvb",
-}
-AUDIO_EXTENSIONS = {
-    ".mp3", ".flac", ".aac", ".opus", ".ogg", ".wav", ".m4a", ".wma", ".alac",
-    ".ape", ".aiff", ".dsf", ".mka", ".mpc",
-}
-MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
-
-#: Sidecar subtitle formats. These are **not** media and must never enter the
-#: queue: libVLC will happily "open" a .srt as a media item, produce a track
-#: with no video and no audio, tear the video pipeline down and leave the UI
-#: showing a track that can never play. Dropping one is a request to subtitle
-#: the *current* video — core.app routes them there instead (§P1.5).
-SUBTITLE_EXTENSIONS = {
-    ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup", ".smi", ".txt",
-}
 
 
 class RepeatMode(IntEnum):

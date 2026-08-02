@@ -25,8 +25,8 @@ This document is now organised as **three sequential chapters**. Each ends with 
 
 | Chapter | Ship | You test | Status |
 |---|---|---|---|
-| **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ⬜ Not started |
-| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ⬜ Blocked on P1 sign-off |
+| **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ✅ Complete / signed off |
+| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ⬜ Ready after Phase 1 sign-off |
 | **Phase 3** | `Halcyon Complete` — Web added, **in-window** | §P3.6 (plus P1+P2 regression) | ⬜ Blocked on P2 sign-off |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
@@ -509,22 +509,22 @@ Top-left for status lines, centre for large glyphs. Glass pill, 8px blur, 800 ms
 Tick every box before Phase 2 begins.
 
 **Compositing (the whole reason for §0)**
-- [ ] Glass transport bar renders **over** playing video, blur visible
-- [ ] No flicker, tearing, or black flash on resize / maximise / fullscreen
-- [ ] 1080p H.264 sustains 60 fps under 25% CPU
-- [ ] Panels slide over video without artefacts
+- [x] Glass transport bar renders **over** playing video, blur visible
+- [x] No flicker, tearing, or black flash on resize / maximise / fullscreen
+- [x] 1080p H.264 sustains 60 fps under 25% CPU
+- [x] Panels slide over video without artefacts
 
 **Formats** — MKV · MP4 · AVI · MOV · WMV · TS · FLV · WebM · HEVC 10-bit · MP3 · FLAC · AAC · Opus
-- [ ] All play without external codecs installed
+- [x] All play without external codecs installed
 
 **Transport** — every control in the P1.5 layout works
-- [ ] Play, pause, stop, prev, next
-- [ ] Seek ±10 s, scrubber drag, click-to-seek
-- [ ] Volume slider, mute, both OSD-reported
-- [ ] Time display toggles elapsed ↔ remaining on click
-- [ ] Fullscreen via button, `F`, and double-click — all identical
-- [ ] Repeat off/one/all; shuffle
-- [ ] Speed 0.5×–2×
+- [x] Play, pause, stop, prev, next
+- [x] Seek ±10 s, scrubber drag, click-to-seek
+- [x] Volume slider, mute, both OSD-reported
+- [x] Time display toggles elapsed ↔ remaining on click
+- [x] Fullscreen via button, `F`, and double-click — all identical
+- [x] Repeat off/one/all; shuffle
+- [x] Speed 0.5×–2×
 
 **OSD** — all 10 triggers fire, correct position, 800+250 ms timing, repeats reset, never covers subtitles
 
