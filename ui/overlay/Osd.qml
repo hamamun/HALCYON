@@ -69,6 +69,10 @@ Item {
     //: cannot make Start Over rewind the wrong file.
     property string resumePath: ""
 
+    // Lets the now-playing toast yield when an open also carries a resume:
+    // both pills live top-left, so firing both would draw them on each other.
+    readonly property bool resumeShowing: resumePill.opacity > 0
+
     //: How the position is rendered. Supplied by the shell so the toast uses
     //: the same formatter as the clock and the seek bar (§4.1) — the local
     //: version this replaced printed 1:14:27 as "74:27" and 0:42 as "42".
