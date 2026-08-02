@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v3.3** — 2 August 2026 |
+| **Version** | Plan **v3.4** — 2 August 2026 |
+| **Changes in v3.4** | **One-tuner rule (owner decision):** one engine plays one thing — switching the chip stops whatever is playing; there is never background audio. Entering M3U stops Local (playlist + position preserved; Local's resume prompt brings you back). Leaving M3U stops the stream (list and last channel intact; nothing auto-plays). Enforced from M3U's own `setup` hook — no Phase 1 file is edited. **Disclosed second shared edit:** `ui/Main.qml` gains two generic lines — the right dock and Ctrl+I now follow the active mode's `osd_enabled` flag (rich media chrome is Local's; this names no mode, and Phase 3's Web gets the same behaviour for free). |
 | **Changes in v3.3** | **Owner decisions (2 Aug 2026):** M3U bar = **seven controls, one row** — stop joins, volume+mute retained. **M3U has no right panel** — Ctrl+I inert, EQ not offered in M3U (the §P1.5 EQ note is technically still true, but superseded: it's simply not exposed there). **Channel grouping selector:** By category (default) / By country / No group. **Playing channel stays highlighted and scrolled into view.** Chip label confirmed: **M3U.** |
 | **Changes in v3.2** | **Phase 1 tagged `v0.1.0-local`** — the frozen baseline; `tools/check_isolation.py --phase 2` now actually guards the foundation. **Owner decision: the M3U Playlists manager (§P2.4)** — up to 7 saved sources (URL or local file, add/edit/delete) in M3U's own dialog, opened from the M3U panel toolbar. The title-bar Open idea is dropped (the title bar is frozen, and source management belongs inside the mode). **Loading a source stops the current stream.** §P2.3 snippet corrected to the shipped `ModeSpec` (the `controls=[...]` field never shipped — §B.4 is the mechanism). |
 | **Changes in v3.1** | **Web mode now embeds inside the main window** — pywebview dropped for `QtWebEngineQuick`; the "separate window" limitation is gone. **M3U gains volume + mute.** Equalizer confirmed available in all playback modes. New §B: *One Machine, Three Channels* — shared component vocabulary, per-mode layout freedom. §A.1 corrected. |
@@ -597,6 +598,10 @@ Volume was missing from earlier drafts — an oversight, corrected before Phase 
 
 Per §B.2, `M3UTransport.qml` arranges these seven in a **single-row layout designed for seven** — roughly 52px tall, balanced and centred, built from the same `ui/transport/` component vocabulary. It is *not* Local's two-row bar with the seek row deleted and gaps left behind. There is **no seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed. The buffering indicator and the retry affordance live in this mode's own files — a flaky IPTV stream must never add special cases to shared code (§A.3). The `setup` hook means `main.py` does not gain a single line: it calls each registered mode's `setup` and publishes the result (§A.2).
 
+**One-tuner rule (owner decision, v3.4):** Local and M3U share one engine, and one engine plays one thing. Switching the chip **stops whatever is playing** — there is never background audio. Entering M3U stops Local playback: the playlist and the position are preserved, and coming back, Local's ordinary resume prompt returns you to where you left. Leaving M3U stops the stream: the channel list and the last channel stay highlighted, and nothing auto-plays on entry — playback only ever starts from a click. Enforced from M3U's own `setup` hook by listening for mode changes — **no Phase 1 file is edited.** (Want the channel in the corner while you do something else? That is exactly what PiP is for, §P2.5.)
+
+**Right dock in M3U:** none (§P2.4). The shell implements this generically: the right dock and Ctrl+I follow the active mode's `osd_enabled` flag — rich media chrome is Local's, and Web (Phase 3) inherits the same behaviour with no further change. This two-line `ui/Main.qml` addition is Phase 2's only shared-file touch besides the registry line, and it names no mode.
+
 ## P2.4 Panel
 
 **Toolbar — exactly two buttons:**
@@ -688,6 +693,8 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 - [ ] Local ↔ M3U swaps panel and control set correctly
 - [ ] Local playlist survives a round-trip to M3U and back
 - [ ] The two playlists never contaminate each other
+- [ ] **One-tuner rule:** entering M3U stops Local; leaving M3U stops the stream — never background audio
+- [ ] Back in Local, the resume prompt returns you to where you left; back in M3U, list + last channel intact, nothing auto-plays
 
 ---
 
