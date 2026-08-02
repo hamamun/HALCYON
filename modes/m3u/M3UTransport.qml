@@ -4,10 +4,10 @@ import Halcyon.Transport
 
 // M3U's control bar — §B.4, §P2.3, owner decision 2026-08-02.
 //
-// ONE ROW, ~52px, designed for SEVEN controls — not Local's two-row bar with
+// ONE ROW, ~52px, designed for EIGHT controls — not Local's two-row bar with
 // holes punched in it (§B.2: no reserved gaps, no ghost slots):
 //
-//        ⏮   ▶/⏸   ⏹   ⏭   🔊━━━   PiP   ⛶
+//        ⏮   ▶/⏸   ⏹   ⏭   🔊━━━   ☰   PiP   ⛶
 //
 // Every control is a SHARED part from ui/transport/ or the shared IconButton —
 // same hit targets, same icons, same hover ring as Local (§B.1). There is no
@@ -24,6 +24,10 @@ Item {
     property real bufferingPercent: -1
 
     property bool pipOpen: false
+
+    //: Reflects the left dock's state so the playlist button can light up.
+    //: Bound by the shell in Main.qml — see bindTransport().
+    property bool playlistVisible: false
 
     implicitHeight: 52
     height: implicitHeight
@@ -97,6 +101,13 @@ Item {
         }
 
         Item { width: Theme.spaceXs; height: 1 }
+
+        IconButton {
+            glyph: Glyphs.playlist
+            tooltip: "Playlist (Ctrl+L)"
+            active: root.playlistVisible
+            onClicked: Actions.toggleLeftPanel()
+        }
 
         IconButton {
             glyph: Glyphs.pictureInPicture
