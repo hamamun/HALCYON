@@ -25,9 +25,11 @@ This document is now organised as **three sequential chapters**. Each ends with 
 
 | Chapter | Ship | You test | Status |
 |---|---|---|---|
-| **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ⬜ Not started |
-| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ⬜ Blocked on P1 sign-off |
+| **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ✅ Complete — owner-confirmed 2026-08-02 |
+| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | 🟡 Next — ready to begin |
 | **Phase 3** | `Halcyon Complete` — Web added, **in-window** | §P3.6 (plus P1+P2 regression) | ⬜ Blocked on P2 sign-off |
+
+> **Current status — 2026-08-02:** The project owner has confirmed that the Local player is complete. Work can now move to Phase 2 — M3U. The detailed acceptance checks remain recorded in `CHECKLIST.md` for the formal verification pass.
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
 
@@ -553,6 +555,8 @@ Tick every box before Phase 2 begins.
 
 **In:** `modes/m3u/` — parser, channel model, panel, reduced control profile, PiP window.
 **Out:** everything else. No changes to Local behaviour whatsoever.
+
+> **Repository check — 2026-08-02:** `modes/m3u/` is not present yet, and no M3U-specific source files have been started. The Phase 1 registry/shell extension point is ready, and the shared VLC engine already accepts network URLs. The first Phase 2 work is therefore the parser and channel model, followed by registration, the M3U panel, the six-control transport bar, and PiP.
 
 ## P2.2 What gets added
 

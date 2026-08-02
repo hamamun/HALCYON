@@ -10,6 +10,8 @@
 
 **Legend** — `[ ]` built · `◻` verified by you · **★** critical path, blocks everything downstream · `§` plan section
 
+> **Status — 2026-08-02:** ✅ Phase 1 — Local is marked complete by the project owner. Phase 2 — M3U is the next phase to work on. The detailed `[ ]` and `◻` boxes below remain the technical implementation and verification record; they are not bulk-ticked by this status update.
+
 ---
 
 ## Progress
@@ -47,6 +49,8 @@
 ---
 
 # PHASE 1 — Local Mode
+
+**Status:** ✅ Complete (owner-confirmed 2026-08-02) · Phase 2 is next.
 
 **Ship:** `v0.1.0-local` · **Est:** 15–18 days · **Branch:** `phase-1-local`
 
@@ -448,6 +452,10 @@
 ---
 
 # PHASE 2 — M3U Mode
+
+**Status:** 🟡 Next phase — ready to begin.
+
+**Repository check (2026-08-02):** No `modes/m3u/` directory or M3U-specific source exists yet. The mode registry and shell are prepared; Phase 2 starts with the parser/channel model, mode registration, panel, transport bar, and PiP window.
 
 **Ship:** `v0.2.0-m3u` · **Est:** 5–6 days · **Branch:** `phase-2-m3u`
 
