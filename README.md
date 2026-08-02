@@ -15,9 +15,12 @@ See [`HALCYON_PLAN.md`](HALCYON_PLAN.md) for the architecture and
 
 | Phase | Ship | State |
 |---|---|---|
-| **1 — Local** | `v0.1.0-local` | 🟡 in progress |
-| **2 — M3U** | `v0.2.0-m3u` | ⬜ blocked on P1 sign-off |
+| **1 — Local** | `v0.1.0-local` | ✅ complete / signed off — frozen at tag `v0.1.0-local` |
+| **2 — M3U** | `v0.2.0-m3u` | 🟡 in progress — additive on the frozen Phase 1 foundation |
 | **3 — Web** | `v1.0.0` | ⬜ blocked on P2 sign-off |
+
+Phase 2 guard: `python tools/check_isolation.py --phase 2` verifies that the new
+mode touches nothing frozen — it diffs against the `v0.1.0-local` tag.
 
 ---
 
@@ -54,10 +57,10 @@ pip install -r requirements-phase1.txt
 3. Verify:
 
    ```bash
-   python -m tools.check_vlc
+   python -c "import vlc; print(vlc.libvlc_get_version())"
    ```
 
-   It should print the libVLC version and the plugin path it resolved.
+   It should print the bundled libVLC version (3.0.21).
 
 Halcyon sets `VLC_PLUGIN_PATH` and pre-loads the bundled DLLs at startup, so a
 system-wide VLC installation is neither needed nor used.

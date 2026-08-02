@@ -1,0 +1,144 @@
+"""M3U/M3U8 parser tests — Milestone 2.1.
+
+Pure Python: parser.py is deliberately Qt-free so this module runs anywhere,
+including machines where PySide6 cannot import.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from modes.m3u.parser import (
+    decode_playlist,
+    looks_like_playlist_ref,
+    parse_m3u,
+)
+
+
+BASIC = """\
+#EXTM3U
+#EXTINF:-1 tvg-id="bbc1.uk" tvg-name="BBC One" tvg-logo="https://img/bbc1.png" tvg-country="UK" group-title="News",BBC One HD
+http://cdn.example.com/bbc1/playlist.m3u8
+#EXTINF:-1 group-title="Sports",Sky Sports
+http://cdn.example.com/sky/index.m3u8?token=abc
+"""
+
+MIXED = """\
+#EXTM3U
+#EXTINF:-1 group-title="Films",Local Movie
+videos/movie.mkv
+#EXTINF:-1,Broken Entry With No URL
+#EXTINF:abc group-title="Bad",Bad Duration
+http://example.com/stream/123
+not a comment line without extinf
+#EXTGRP:FallbackGroup
+#EXTINF:-1,Grouped By EXTGRP
+http://example.com/tv/55
+"""
+
+
+def test_basic_extinf_attributes() -> None:
+    result = parse_m3u(BASIC)
+    assert result.skipped == 0
+    assert len(result.channels) == 2
+
+    first = result.channels[0]
+    assert first.name == "BBC One HD"
+    assert first.group == "News"
+    assert first.logo == "https://img/bbc1.png"
+    assert first.country == "UK"
+    assert first.tvg_id == "bbc1.uk"
+    assert first.is_remote
+
+    # Query strings must survive intact.
+    assert result.channels[1].url.endswith("?token=abc")
+
+
+def test_malformed_lines_are_skipped_never_fatal() -> None:
+    result = parse_m3u(MIXED, base_dir=Path("/lists"))
+    names = [c.name for c in result.channels]
+
+    # EXTINF-with-no-URL, bad duration parsed as -1, bare entry, EXTGRP entry.
+    assert "Broken Entry With No URL" not in names
+    assert result.skipped >= 1
+
+    bare = next(c for c in result.channels
+                if c.url.endswith("not a comment line without extinf"))
+    assert bare.name  # something derived, never empty
+
+    grouped = next(c for c in result.channels if c.name == "Grouped By EXTGRP")
+    assert grouped.group == "FallbackGroup"
+
+
+def test_relative_path_resolves_against_playlist_folder() -> None:
+    result = parse_m3u(MIXED, base_dir=Path("/lists"))
+    local = next(c for c in result.channels if c.name == "Local Movie")
+    assert local.url == str(Path("/lists/videos/movie.mkv"))
+    assert not local.is_remote
+
+
+def test_title_fallbacks() -> None:
+    result = parse_m3u("#EXTM3U\nfilms/The Matrix.mkv\n")
+    assert result.channels[0].name == "The Matrix"
+
+    result = parse_m3u("http://example.com/live/channel1\n")
+    assert result.channels[0].name == "channel1"
+
+    result = parse_m3u("http://example.com:8080/\n")
+    assert result.channels[0].name  # host fallback, non-empty
+
+
+def test_nested_playlist_references_are_ignored() -> None:
+    """Nested skipping applies to LOCAL references — a remote .m3u8 URL is the
+    channel itself (HLS), which is what nearly every real IPTV entry looks like."""
+    text = (
+        "#EXTM3U\n"
+        "#EXTINF:-1,HLS channel (remote .m3u8 stays!)\n"
+        "http://example.com/master.m3u8\n"
+        "local/other.m3u\n"
+        "#EXTINF:-1,Real channel\n"
+        "http://example.com/ch/1\n"
+    )
+    result = parse_m3u(text, base_dir=Path("/lists"))
+    names = [c.name for c in result.channels]
+    assert names == ["HLS channel (remote .m3u8 stays!)", "Real channel"]
+    assert result.skipped == 1          # only the local .m3u chain was dropped
+
+
+def test_hls_master_playlist_yields_no_channels() -> None:
+    master = (
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=1280000\n"
+        "low/index.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=2560000\n"
+        "high/index.m3u8\n"
+    )
+    result = parse_m3u(master)
+    assert result.channels == []
+    assert result.skipped >= 2
+
+
+def test_encoding_bom_and_latin1() -> None:
+    text = "#EXTM3U\n#EXTINF:-1,Chaîne Française\nhttp://x.example/1\n"
+    bom = b"\xef\xbb\xbf" + text.encode("utf-8")
+    assert decode_playlist(bom).lstrip("\ufeff").startswith("#EXTM3U")
+
+    latin1 = text.encode("latin-1")
+    decoded = decode_playlist(latin1)
+    assert "Fran" in decoded  # decodes without raising; UTF-8 path fails over
+
+    result = parse_m3u(decode_playlist(latin1))
+    assert len(result.channels) == 1
+
+
+def test_empty_and_garbage_input() -> None:
+    assert parse_m3u("").channels == []
+    assert parse_m3u("\n\n\n").channels == []
+    assert parse_m3u("garbage without header").channels[0].name == "garbage without header"
+
+
+def test_looks_like_playlist_ref() -> None:
+    assert looks_like_playlist_ref("http://x/a.M3U8?token=1")
+    assert looks_like_playlist_ref("/lists/sub.m3u")
+    assert not looks_like_playlist_ref("http://x/stream/123")
+    assert not looks_like_playlist_ref("film.mkv")

@@ -10,6 +10,11 @@
 # --- Phase 1 Core (Local Mode) ---
 -r requirements-phase1.txt
 
+# --- Phase 2 (M3U Mode) ---
+# Nothing extra to install: the M3U/M3U8 parser, the remote playlist fetch
+# (HTTP over urllib), and the saved-sources store are built on the Python
+# standard library only (HALCYON_PLAN.md §P2.4). Verified 2026-08-02.
+
 # --- Phase 3 Additions (Web Mode) ---
 # QtWebEngineQuick is required for embedding Chromium inside the main window.
 PySide6-Addons==6.11.1

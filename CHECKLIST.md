@@ -14,18 +14,20 @@
 
 ## Progress
 
+*One table. Counts are real — regenerated from the boxes below on 2026-08-02
+(the two tables that used to sit here disagreed with each other and with the
+file; both were replaced).*
+
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
-| 0 — Setup | 1 | 0 / 8 | 0 / 1 | — |
-| 1 — Local | 10 | 174 / 174 | 104 / 104 | `v0.1.0-local` |
-| 2 — M3U | 5 | 0 / 42 | 0 / 43 | `v0.2.0-m3u` |
-| 3 — Web | 5 | 0 / 49 | 0 / 40 | `v1.0.0` |
-| **Total** | **21** | **174 / 273** | **104 / 188** | |
+| 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
+| 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
+| 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
+| 3 — Web | 0 / 5 | 0 / 62 | 0 / 40 | `v1.0.0` |
+| **Total** | — | **233 / 303** | **104 / 206** | |
 
----|---|---|---|---|
-| 1 — Local | 10/10 | 187/187 | 58/58 | `v0.1.0-local` |
-| 2 — M3U | 0/5 | 0/61 | 0/27 | `v0.2.0-m3u` |
-| 3 — Web | 0/5 | 0/54 | 0/25 | `v1.0.0` |
+\* Phase 0 was completed in the original dev environment; its boxes were simply
+never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
 
@@ -457,15 +459,17 @@
 
 ## Milestone 2.1 — Parser · 1 d
 
-- [ ] `modes/m3u/parser.py` — `.m3u` and `.m3u8`
-- [ ] `#EXTINF` duration + title
-- [ ] `tvg-name`, `tvg-logo`, `tvg-id`, `group-title` attributes
-- [ ] `#EXTGRP`
-- [ ] Relative and absolute paths; local and remote entries
-- [ ] Encoding detection (UTF-8, BOM, Latin-1 fallback)
-- [ ] Malformed lines skipped, not fatal
-- [ ] Nested / chained playlist references handled or explicitly ignored
-- [ ] `modes/m3u/playlist.py` — channel model
+- [x] `modes/m3u/parser.py` — `.m3u` and `.m3u8`
+- [x] `#EXTINF` duration + title
+- [x] `tvg-name`, `tvg-logo`, `tvg-id`, `group-title` attributes
+- [x] `tvg-country` attribute — drives By-country grouping; missing → "Unknown" · §P2.4
+- [x] `#EXTGRP`
+- [x] Relative and absolute paths; local and remote entries
+- [x] Remote playlist download over HTTP(S) — **standard library only, no new dependency** · §P2.4
+- [x] Encoding detection (UTF-8, BOM, Latin-1 fallback)
+- [x] Malformed lines skipped, not fatal
+- [x] Nested / chained playlist references handled or explicitly ignored
+- [x] `modes/m3u/playlist.py` — channel model
 
 ◻ Parses real-world IPTV playlists · ◻ Malformed files don't crash · ◻ Groups and logos extracted
 
@@ -473,60 +477,85 @@
 
 ## Milestone 2.2 — Mode Registration · 0.5 d
 
-- [ ] `modes/m3u/__init__.py` — `ModeSpec` for `"m3u"`
-- [ ] `controls=["playPause","prev","next","volume","pip","fullscreen"]` — **six** · §P2.3
-- [ ] `transport_qml="qrc:/modes/m3u/M3UTransport.qml"`
-- [ ] `osd_enabled=False`
-- [ ] ★ Append one entry to `core/modes.py` — **the only Phase 1 edit permitted**
-- [ ] Second chip appears in the title bar **with no `TitleBar.qml` edit** · §P1.4
+- [x] `modes/m3u/__init__.py` — `ModeSpec` for `"m3u"`, title chip `"M3U"` · §P2.3
+- [x] Real fields only (the `controls=[...]` draft never shipped): `panel_qml`, `transport_qml`, `osd_enabled=False`, `media_keys_enabled=True`, `uses_player=True` · §P2.3 v3.2/v3.3
+- [x] `setup` hook publishes the channel model as `modeContext_m3u` — **no `main.py` edit** · §A.2
+- [x] ★ **One-tuner rule** (owner decision, v3.4) — entering M3U stops Local playback
+      (playlist + position preserved); leaving M3U stops the stream; nothing
+      auto-plays on entry. Enforced from M3U's own setup hook — no Phase 1 edit · §P2.3
+- [x] ★ Append one entry to `core/modes.py` — **the only Phase 1 edit permitted**
+- [x] Second chip appears in the title bar **with no `TitleBar.qml` edit** · §P1.4
 
 ◻ Both chips render · ◻ Switching works · ◻ `git diff` shows exactly one Phase 1 line changed
 
 ---
 
-## Milestone 2.3 — Panel · 1 d
+## Milestone 2.3 — Panel & Playlists Manager · 1–1.5 d
 
-- [ ] `modes/m3u/M3UPanel.qml`
-- [ ] ★ Toolbar: **Clear Playlist only** · §P2.4
-- [ ] *Loading `.m3u` is the title-bar Open action — a playlist is a document you open, not an item you append*
-- [ ] Rows: channel name · group tag · `tvg-logo` thumbnail when present
-- [ ] Logo loading is async and cached; missing logos fall back gracefully
-- [ ] Filter/search box narrows the list
-- [ ] Optional group-by-category collapse
-- [ ] Single-click to play
-- [ ] No reorder — the file defines order
-- [ ] Right panel hidden by default; EQ still reachable via `Ctrl+I` (**same component**) · §P2.4
+- [x] `modes/m3u/M3UPanel.qml`
+- [x] ★ Toolbar — exactly two buttons: **Playlists…** + **Clear Playlist** · §P2.4
+      *(owner decision, 2026-08-02: replaces the "title-bar Open action" — the
+      title bar is frozen, and source management belongs inside the mode)*
+- [x] `modes/m3u/M3USourcesDialog.qml` — the one home for adding/loading sources (§4.1)
+- [x] Up to **7 saved sources**; rows: name + URL/path
+- [x] **Add URL…** (name + URL form) and **Add File…** (`.m3u` / `.m3u8` picker)
+- [x] **Edit** and **Delete** on the selected row; delete asks for confirmation
+- [x] At 7 saved, Add disables with *"Remove one to add another"* — never a silent cap
+- [x] Click a source → it loads, channels fill the panel, dialog closes
+- [x] ★ Loading a source **stops the current stream** — owner decision: the playing
+      channel is not in the new list, so it must not keep streaming
+- [x] `modes/m3u/sources.py` — JSON store under `%APPDATA%\Halcyon`, owned by M3U
+      alone; deleted with the mode (§A.1)
+- [x] **Last-used source reloads** when M3U is opened
+- [x] Current source name shown above the channel list — plain text, not a second trigger
+- [x] Remote fetch failure → clear message + **Retry**; moved local file → message + edit/remove
+- [x] Dropping `.m3u` / `.m3u8` on the panel → the *same* handler Add File calls
+      (§4.1 bind); not auto-saved to the seven
+- [x] Empty state prompt opens the same Playlists dialog — one dialog, one code path
+- [x] Rows: channel name · group tag · `tvg-logo` thumbnail when present
+- [x] Logo loading is async and cached; missing logos fall back gracefully
+- [x] Filter/search box narrows the list
+- [x] ★ Grouping selector: **By category** (default) / **By country** / **No group** — choice remembered · §P2.4
+- [x] ★ **Playing channel always shows** — highlighted, and the list scrolls to keep it visible when zapping with prev/next · §P2.4
+- [x] Single-click to play
+- [x] No reorder — the file defines order
+- [x] ★ **No right panel in M3U** — Ctrl+I inert, EQ not offered; Local's right dock untouched (owner decision 2026-08-02) · §P2.4
 
-◻ Channels list with logos and groups · ◻ Filter works · ◻ Clear Playlist is the only button · ◻ EQ reachable and applies
+◻ Channels list with logos and groups · ◻ Filter works
+◻ Toolbar is exactly Playlists… + Clear Playlist · ◻ Manager caps at 7; add/edit/delete work
+◻ Loading a source stops the stream · ◻ Last-used source restores · ◻ Dead sources fail with retry, no crash
+◻ Grouping: category / country / none — remembered · ◻ Playing channel stays visible when zapping
+◻ No right panel; Ctrl+I does nothing
 
 ---
 
 ## Milestone 2.4 — Transport · 1 d
 
-- [ ] `modes/m3u/M3UTransport.qml` — ★ **single row, ~52px, designed for six controls** · §B.2
-- [ ] ★ **No reserved gaps, no ghost slots** — this is *not* Local's bar with the seek row deleted
-- [ ] Built from the **same shared `ui/transport/` parts** — same `IconButton`, same icons, same hover ring · §B.1
-- [ ] Play/pause · prev · next · volume+mute · PiP · fullscreen
-- [ ] Volume persists across mode switches
-- [ ] Buffering indicator for slow streams
-- [ ] Stream error state: clear message, no crash, no hang
-- [ ] Connection timeout handled with a retry affordance
+- [x] `modes/m3u/M3UTransport.qml` — ★ **single row, ~52px, designed for seven controls** · §B.2
+- [x] ★ **No reserved gaps, no ghost slots** — this is *not* Local's bar with the seek row deleted
+- [x] Built from the **same shared `ui/transport/` parts** — same `IconButton`, same icons, same hover ring · §B.1
+- [x] ★ Exactly seven, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen** (owner decision 2026-08-02) · §P2.3
+- [x] ★ **No seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed
+- [x] Volume persists across mode switches
+- [x] Buffering indicator for slow streams
+- [x] Stream error state: clear message, no crash, no hang
+- [x] Connection timeout handled with a retry affordance
 
-◻ Exactly six controls · ◻ Layout looks designed for six, balanced, no gaps · ◻ Buttons visually identical to Local's · ◻ Unreachable stream fails gracefully
+◻ Exactly seven controls, one row · ◻ Layout looks designed for seven, balanced, no gaps · ◻ Buttons visually identical to Local's · ◻ Unreachable stream fails gracefully
 
 ---
 
 ## Milestone 2.5 — Picture-in-Picture · 1–2 d
 
-- [ ] `ui/overlay/PipWindow.qml` — borderless, always-on-top, default 480×270
-- [ ] ★ Binds **the same ring buffer** — no second decode, no second player · §0.3
-- [ ] ★ Reader refcount respected; main Stage never unbinds · §9
-- [ ] Resizable, aspect-locked
-- [ ] Snaps to screen corners
-- [ ] Main window can minimise while PiP keeps playing
-- [ ] Double-click PiP restores the main window
-- [ ] Minimal hover controls (play/pause, close) — from shared components
-- [ ] Position and size remembered
+- [x] `ui/overlay/PipWindow.qml` — borderless, always-on-top, default 480×270
+- [x] ★ Binds **the same ring buffer** — no second decode, no second player · §0.3
+- [x] ★ Reader refcount respected; main Stage never unbinds · §9
+- [x] Resizable, aspect-locked
+- [x] Snaps to screen corners
+- [x] Main window can minimise while PiP keeps playing
+- [x] Double-click PiP restores the main window
+- [x] Minimal hover controls (play/pause, close) — from shared components
+- [x] Position and size remembered
 
 ◻ Opens, stays on top, resizes, snaps · ◻ Main window minimises, PiP keeps playing · ◻ **CPU rise vs non-PiP is negligible** (proves shared buffer) · ◻ Double-click restores
 
@@ -542,19 +571,30 @@
 
 **M3U**
 - ◻ Loads `.m3u` and `.m3u8`, local and remote entries
+- ◻ Remote playlists load over HTTP(S) — no new dependency
 - ◻ `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
 - ◻ HLS streams play
 - ◻ Filter box narrows the list
-- ◻ Clear Playlist works and is the only toolbar button
+- ◻ Grouping: **By category** (default) / **By country** / **No group** — remembered
+- ◻ Playing channel highlighted and kept visible when zapping with prev/next
+- ◻ Toolbar holds exactly **Playlists…** and **Clear Playlist**, and both work
 - ◻ Malformed / unreachable entries fail gracefully with a message, no crash
 
+**Playlists manager** *(owner decision, 2026-08-02 — replaces the title-bar Open idea)*
+- ◻ Up to 7 saved sources: add by URL and by local file, edit, delete with confirm, cap hint at 7
+- ◻ Clicking a source loads it **and stops the current stream**
+- ◻ Last-used source reloads automatically when entering M3U
+- ◻ Current source name shown above the list as plain text
+- ◻ Dead URL → message + Retry · moved file → message + edit/remove · never a crash
+- ◻ Panel drop opens the source via the same handler as Add File
+
 **Controls**
-- ◻ Exactly six render: play/pause, prev, next, volume+mute, PiP, fullscreen
-- ◻ No seek bar, time display, stop, repeat/shuffle, or track menu — **absent, not greyed**
+- ◻ Exactly seven render, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen**
+- ◻ No seek bar, time display, repeat/shuffle, or track menu — **absent, not greyed**
 - ◻ Volume and mute work; volume persists across a mode switch
 - ◻ No OSD fires in M3U mode
+- ◻ **No right panel in M3U** — Ctrl+I does nothing; EQ not offered
 - ◻ M3U bar is its own layout — single row, balanced, **no empty gaps** · §B.2
-- ◻ Equalizer reachable via the right panel and applies to the stream
 
 **PiP**
 - ◻ Opens, on top, resizes, snaps
@@ -567,6 +607,9 @@
 - ◻ Local ↔ M3U swaps panel and control set correctly
 - ◻ Local playlist survives a round-trip to M3U and back
 - ◻ The two playlists never contaminate each other
+- ◻ **One-tuner rule:** switching modes stops playback — never background audio
+- ◻ Back in Local the resume prompt works; back in M3U the list + last channel are intact, nothing auto-plays
+- ◻ Right dock hidden in M3U: `ui/Main.qml` touched only in two generic lines (right dock + Ctrl+I follow `osd_enabled` — names no mode)
 
 **→ Merge to `main`, tag `v0.2.0-m3u`.**
 

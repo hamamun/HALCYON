@@ -242,10 +242,12 @@ Shell {
             Settings.set("window.leftPanelVisible", window.leftPanelOpen);
         }
         function toggleRightPanel() {
+            if (!window.rightDockAvailable()) return;   // M3U/Web: inert (§P2.4)
             window.rightPanelOpen = !window.rightPanelOpen;
             Settings.set("window.rightPanelVisible", window.rightPanelOpen);
         }
         function showEqualizer() {
+            if (!window.rightDockAvailable()) return;   // EQ is Local's (§P2.4)
             window.rightPanelOpen = true;
             infoPanel.currentTab = 2;
             Settings.set("window.rightPanelVisible", true);
@@ -254,6 +256,7 @@ Shell {
         // button when its lyrics dot is showing, so a single click delivers
         // the lyrics the dot promised instead of the default Info tab.
         function showLyrics() {
+            if (!window.rightDockAvailable()) return;
             window.rightPanelOpen = true;
             infoPanel.currentTab = 1;   // 0 Info, 1 Lyrics, 2 Equalizer
             Settings.set("window.rightPanelVisible", true);
@@ -279,6 +282,14 @@ Shell {
         return !!modeSpec && modeSpec.osdEnabled && Settings.get("ui.osdEnabled", true);
     }
     function osdGlyph(g)   { if (osdEnabled()) osdLayer.showGlyph(g) }
+
+    // The right dock (Info / Lyrics / Equalizer) is rich media chrome like the
+    // OSD, so it follows the same flag: available in Local, absent in modes
+    // that declare no OSD (M3U §P2.4/v3.3 — owner decision; Web §P3.4 gets the
+    // same for free). Names no mode; Phase 2's one disclosed shared-UI edit.
+    function rightDockAvailable() {
+        return !!modeSpec && modeSpec.osdEnabled;
+    }
 
     // Does the active mode drive the shared player? False while modeSpec is
     // still resolving, which is the safe answer.
@@ -479,7 +490,10 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
+                // Gated on the mode's rich-chrome flag: in M3U/Web the dock is
+                // simply absent — even if it was open when the chip flipped.
                 open: !window.fullscreen && window.rightPanelOpen
+                      && window.rightDockAvailable()
                 blurSource: stage
                 z: 10
 
