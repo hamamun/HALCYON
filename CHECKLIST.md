@@ -14,18 +14,20 @@
 
 ## Progress
 
+*One table. Counts are real — regenerated from the boxes below on 2026-08-02
+(the two tables that used to sit here disagreed with each other and with the
+file; both were replaced).*
+
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
-| 0 — Setup | 1 | 0 / 8 | 0 / 1 | — |
-| 1 — Local | 10 | 174 / 174 | 104 / 104 | `v0.1.0-local` |
-| 2 — M3U | 5 | 0 / 42 | 0 / 43 | `v0.2.0-m3u` |
-| 3 — Web | 5 | 0 / 49 | 0 / 40 | `v1.0.0` |
-| **Total** | **21** | **174 / 273** | **104 / 188** | |
+| 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
+| 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
+| 2 — M3U | 0 / 5 | 0 / 55 | 0 / 54 | `v0.2.0-m3u` |
+| 3 — Web | 0 / 5 | 0 / 62 | 0 / 40 | `v1.0.0` |
+| **Total** | **10 / 21** | **175 / 300** | **104 / 199** | |
 
----|---|---|---|---|
-| 1 — Local | 10/10 | 187/187 | 58/58 | `v0.1.0-local` |
-| 2 — M3U | 0/5 | 0/61 | 0/27 | `v0.2.0-m3u` |
-| 3 — Web | 0/5 | 0/54 | 0/25 | `v1.0.0` |
+\* Phase 0 was completed in the original dev environment; its boxes were simply
+never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
 
@@ -462,6 +464,7 @@
 - [ ] `tvg-name`, `tvg-logo`, `tvg-id`, `group-title` attributes
 - [ ] `#EXTGRP`
 - [ ] Relative and absolute paths; local and remote entries
+- [ ] Remote playlist download over HTTP(S) — **standard library only, no new dependency** · §P2.4
 - [ ] Encoding detection (UTF-8, BOM, Latin-1 fallback)
 - [ ] Malformed lines skipped, not fatal
 - [ ] Nested / chained playlist references handled or explicitly ignored
@@ -484,11 +487,28 @@
 
 ---
 
-## Milestone 2.3 — Panel · 1 d
+## Milestone 2.3 — Panel & Playlists Manager · 1–1.5 d
 
 - [ ] `modes/m3u/M3UPanel.qml`
-- [ ] ★ Toolbar: **Clear Playlist only** · §P2.4
-- [ ] *Loading `.m3u` is the title-bar Open action — a playlist is a document you open, not an item you append*
+- [ ] ★ Toolbar — exactly two buttons: **Playlists…** + **Clear Playlist** · §P2.4
+      *(owner decision, 2026-08-02: replaces the "title-bar Open action" — the
+      title bar is frozen, and source management belongs inside the mode)*
+- [ ] `modes/m3u/M3USourcesDialog.qml` — the one home for adding/loading sources (§4.1)
+- [ ] Up to **7 saved sources**; rows: name + URL/path
+- [ ] **Add URL…** (name + URL form) and **Add File…** (`.m3u` / `.m3u8` picker)
+- [ ] **Edit** and **Delete** on the selected row; delete asks for confirmation
+- [ ] At 7 saved, Add disables with *"Remove one to add another"* — never a silent cap
+- [ ] Click a source → it loads, channels fill the panel, dialog closes
+- [ ] ★ Loading a source **stops the current stream** — owner decision: the playing
+      channel is not in the new list, so it must not keep streaming
+- [ ] `modes/m3u/sources.py` — JSON store under `%APPDATA%\Halcyon`, owned by M3U
+      alone; deleted with the mode (§A.1)
+- [ ] **Last-used source reloads** when M3U is opened
+- [ ] Current source name shown above the channel list — plain text, not a second trigger
+- [ ] Remote fetch failure → clear message + **Retry**; moved local file → message + edit/remove
+- [ ] Dropping `.m3u` / `.m3u8` on the panel → the *same* handler Add File calls
+      (§4.1 bind); not auto-saved to the seven
+- [ ] Empty state prompt opens the same Playlists dialog — one dialog, one code path
 - [ ] Rows: channel name · group tag · `tvg-logo` thumbnail when present
 - [ ] Logo loading is async and cached; missing logos fall back gracefully
 - [ ] Filter/search box narrows the list
@@ -497,7 +517,9 @@
 - [ ] No reorder — the file defines order
 - [ ] Right panel hidden by default; EQ still reachable via `Ctrl+I` (**same component**) · §P2.4
 
-◻ Channels list with logos and groups · ◻ Filter works · ◻ Clear Playlist is the only button · ◻ EQ reachable and applies
+◻ Channels list with logos and groups · ◻ Filter works · ◻ EQ reachable and applies
+◻ Toolbar is exactly Playlists… + Clear Playlist · ◻ Manager caps at 7; add/edit/delete work
+◻ Loading a source stops the stream · ◻ Last-used source restores · ◻ Dead sources fail with retry, no crash
 
 ---
 
@@ -542,11 +564,20 @@
 
 **M3U**
 - ◻ Loads `.m3u` and `.m3u8`, local and remote entries
+- ◻ Remote playlists load over HTTP(S) — no new dependency
 - ◻ `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
 - ◻ HLS streams play
 - ◻ Filter box narrows the list
-- ◻ Clear Playlist works and is the only toolbar button
+- ◻ Toolbar holds exactly **Playlists…** and **Clear Playlist**, and both work
 - ◻ Malformed / unreachable entries fail gracefully with a message, no crash
+
+**Playlists manager** *(owner decision, 2026-08-02 — replaces the title-bar Open idea)*
+- ◻ Up to 7 saved sources: add by URL and by local file, edit, delete with confirm, cap hint at 7
+- ◻ Clicking a source loads it **and stops the current stream**
+- ◻ Last-used source reloads automatically when entering M3U
+- ◻ Current source name shown above the list as plain text
+- ◻ Dead URL → message + Retry · moved file → message + edit/remove · never a crash
+- ◻ Panel drop opens the source via the same handler as Add File
 
 **Controls**
 - ◻ Exactly six render: play/pause, prev, next, volume+mute, PiP, fullscreen

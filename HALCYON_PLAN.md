@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v3.1** — 26 July 2026 |
+| **Version** | Plan **v3.2** — 2 August 2026 |
+| **Changes in v3.2** | **Phase 1 tagged `v0.1.0-local`** — the frozen baseline; `tools/check_isolation.py --phase 2` now actually guards the foundation. **Owner decision: the M3U Playlists manager (§P2.4)** — up to 7 saved sources (URL or local file, add/edit/delete) in M3U's own dialog, opened from the M3U panel toolbar. The title-bar Open idea is dropped (the title bar is frozen, and source management belongs inside the mode). **Loading a source stops the current stream.** §P2.3 snippet corrected to the shipped `ModeSpec` (the `controls=[...]` field never shipped — §B.4 is the mechanism). |
 | **Changes in v3.1** | **Web mode now embeds inside the main window** — pywebview dropped for `QtWebEngineQuick`; the "separate window" limitation is gone. **M3U gains volume + mute.** Equalizer confirmed available in all playback modes. New §B: *One Machine, Three Channels* — shared component vocabulary, per-mode layout freedom. §A.1 corrected. |
 | **Changes in v3.0** | Restructured into **three independently shippable phases**. Added §A (phase contract & isolation rules), §P1/§P2/§P3 (per-phase scope, deliverables, acceptance tests), repo/branch strategy, and per-phase definition-of-done. |
 | **Supersedes** | `AETHER_PLAN.md`, `MPHP_PLAN.md` (both discarded) |
@@ -26,7 +27,7 @@ This document is now organised as **three sequential chapters**. Each ends with 
 | Chapter | Ship | You test | Status |
 |---|---|---|---|
 | **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ✅ Complete / signed off |
-| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ⬜ Ready after Phase 1 sign-off |
+| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | 🟡 In progress — kicked off 2 Aug 2026 (foundation frozen at tag `v0.1.0-local`) |
 | **Phase 3** | `Halcyon Complete` — Web added, **in-window** | §P3.6 (plus P1+P2 regression) | ⬜ Blocked on P2 sign-off |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
@@ -558,11 +559,13 @@ Tick every box before Phase 2 begins.
 
 ```
 modes/m3u/
-├── __init__.py        # ModeSpec for "m3u"
-├── parser.py          # .m3u / .m3u8, #EXTINF, tvg-* attributes
-├── playlist.py        # channel model
-├── M3UPanel.qml       # left dock panel
-└── M3UTransport.qml   # ★ single-row bar, arranged for six controls (§B.4)
+├── __init__.py            # ModeSpec for "m3u"
+├── parser.py              # .m3u / .m3u8, #EXTINF, tvg-* attributes (+ remote fetch, stdlib only)
+├── playlist.py            # channel model
+├── sources.py             # ★ saved-sources store — max 7, owned by M3U alone (§P2.4, v3.2)
+├── M3UPanel.qml           # left dock panel
+├── M3USourcesDialog.qml   # ★ the playlists manager (§P2.4, v3.2)
+└── M3UTransport.qml       # ★ single-row bar, arranged for six controls (§B.4)
 ui/overlay/PipWindow.qml   # new shared component (Phase 2 owns it)
 ```
 
@@ -578,30 +581,58 @@ SPEC = ModeSpec(
     id="m3u", title="M3U",
     panel_qml="qrc:/modes/m3u/M3UPanel.qml",
     transport_qml="qrc:/modes/m3u/M3UTransport.qml",
-    controls=["playPause", "prev", "next", "volume", "pip", "fullscreen"],
-    osd_enabled=False,
+    osd_enabled=False,        # the OSD is Local's, and only Local's (§6.2)
+    media_keys_enabled=True,  # space/volume stay useful; seek keys no-op on live
+    uses_player=True,
+    setup=build_m3u_context,  # exposes the channel model to QML as modeContext_m3u
 )
 ```
 
+> **Correction (v3.2):** earlier drafts showed a `controls=[...]` field on `ModeSpec`. The shipped, frozen `core/mode_api.py` has no such field — §B.4 replaced the idea: a mode ships *its own transport QML*, and the shell never filters control lists. The mechanism below is the law; the field was the mistake.
+
 **Six controls: play/pause, prev, next, volume+mute, PiP, fullscreen.**
 
-Volume was missing from earlier drafts — an oversight, now corrected. Without it, changing volume in M3U would have meant reaching for the Windows mixer, which is unacceptable for a player.
+Volume was missing from earlier drafts — an oversight, corrected before Phase 1 sign-off. Without it, changing volume in M3U would have meant reaching for the Windows mixer, which is unacceptable for a player.
 
-Per §B.2, `M3UTransport.qml` arranges these six in a **single-row layout designed for six** — roughly 52px tall, balanced and centred. It is *not* Local's two-row bar with the seek row deleted and gaps left behind.
+Per §B.2, `M3UTransport.qml` arranges these six in a **single-row layout designed for six** — roughly 52px tall, balanced and centred, built from the same `ui/transport/` component vocabulary. It is *not* Local's two-row bar with the seek row deleted and gaps left behind. The buffering indicator and the retry affordance live in this mode's own files — a flaky IPTV stream must never add special cases to shared code (§A.3). The `setup` hook means `main.py` does not gain a single line: it calls each registered mode's `setup` and publishes the result (§A.2).
 
 ## P2.4 Panel
 
-**Toolbar: Clear Playlist only.**
+**Toolbar — exactly two buttons:**
 
-*Loading an `.m3u`/`.m3u8` happens via the title-bar Open action, not a panel button — a playlist file is a **document you open**, not an item you append. This is why the Local panel has Add buttons and this one doesn't.*
+| Button | Behaviour |
+|---|---|
+| **Playlists…** | Opens the Playlists manager (below) — the one home for every way a source enters M3U |
+| **Clear Playlist** | Empties the channel list; confirm if >1 item |
 
-**Body:** parsed `#EXTINF` entries — channel name, `group-title`, `tvg-logo` thumbnail when present. Filter box. Single-click to play. No reorder (the file defines the order).
+> **Owner decision, 2026-08-02 — replaces the earlier "title-bar Open action" idea.** `TitleBar.qml` is frozen at Phase 1 sign-off, and the owner wants source management inside the mode: insert a stream URL *or* load a locally saved `.m3u`/`.m3u8`, with up to **seven saved sources** and add/edit/delete. Everything below lives in `modes/m3u/` — the additive rule (§A.3) is untouched, and nothing appears in the title bar.
+
+### The Playlists manager — one dialog, one home (§4.1)
+
+A glass dialog (the same dialog pattern as Settings and the subtitle downloader — same look, same motion) listing **up to 7 saved sources**. Each source is a **name + either a remote URL or a local `.m3u`/`.m3u8` file**.
+
+- **Add URL…** — name + URL form (the "insert M3U URL" path)
+- **Add File…** — file picker for a `.m3u` / `.m3u8` on disk
+- **Edit / Delete** — act on the selected row; delete asks for confirmation
+- **Cap of 7:** at seven, the Add buttons disable with the hint *"Remove one to add another"* — never a silent cap
+- **Click a source row → it loads**, its channels fill the panel, the dialog closes
+- ★ **Loading a source stops the current stream.** The playing channel is not in the new list, so it must not keep streaming (owner decision, 2026-08-02)
+- **The panel's empty state** opens this same dialog — reached two ways, implemented once (§4.1)
+- **Dropping an `.m3u`/`.m3u8` onto the M3U panel** opens it through the *same* handler Add File calls — a bind, not a second implementation (§4.1). It is not auto-saved to the seven; saving is a choice made inside the dialog.
+
+**Store:** `sources.json` under `%APPDATA%\Halcyon`, owned by `modes/m3u/` alone (§A.1 — deleting the mode deletes its store, nothing else notices). The **last-used source reloads automatically** when M3U is opened.
+
+**Fetch:** remote playlists are downloaded over HTTP(S) with the **standard library only — no new dependency**, parsed once, cached for the session. Failure → the panel shows *"Couldn't reach this playlist"* with **Retry**; a local file that has moved shows *"File not found"* with edit/remove. Never a crash, never a silent empty list — and the handling lives in M3U's own files, not in shared code.
+
+**Source indicator:** the current source's name sits above the channel list as **plain text** — information, not a second trigger.
+
+**Body:** parsed `#EXTINF` entries — channel name, `group-title`, `tvg-logo` thumbnail when present (loaded async, cached, graceful fallback). Filter box narrows the list. Single-click to play. No reorder (the file defines the order).
 
 **Right panel:** hidden by default; EQ still reachable via `Ctrl+I` — the *same* component, not a copy.
 
 **OSD:** off.
 
-> **On seeking:** M3U entries are frequently live streams where seeking is meaningless, hence no seek bar. If you later want scrubbing for VOD-heavy playlists, add `"seekBar","time"` to the `controls` list above. One line — the UI already supports it.
+> **On seeking:** M3U entries are frequently live streams where seeking is meaningless, hence no seek bar. If you later want scrubbing for VOD-heavy playlists, build a seek row into `M3UTransport.qml` from the shared `SeekBar` part — the vocabulary already supports it (§B.4).
 
 ## P2.5 Picture-in-Picture
 
@@ -619,11 +650,21 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 
 **M3U**
 - [ ] Loads `.m3u` and `.m3u8`, local and remote entries
+- [ ] Remote playlists load over HTTP(S) — standard library only, no new dependency
 - [ ] `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
 - [ ] HLS streams play
 - [ ] Filter box narrows the list
-- [ ] Clear Playlist works; it is the *only* toolbar button
+- [ ] Toolbar holds exactly two buttons — **Playlists…** and **Clear Playlist** — and both work
 - [ ] Malformed / unreachable entries fail gracefully with a message, no crash
+
+**Playlists manager (owner decision, §P2.4)**
+- [ ] Up to 7 saved sources; at 7, Add disables with the hint — never a silent cap
+- [ ] Add by URL and add by local file both work; edit and delete work; delete confirms
+- [ ] Clicking a source loads it **and stops the current stream**
+- [ ] Last-used source reloads automatically when entering M3U
+- [ ] Current source name shows above the channel list — as text, not a second trigger
+- [ ] Dead URL → clear message + Retry; moved local file → message + edit/remove
+- [ ] Dropping an `.m3u` on the panel opens it via the same handler as Add File (§4.1)
 
 **Controls**
 - [ ] **Exactly six controls render:** play/pause, prev, next, volume+mute, PiP, fullscreen
