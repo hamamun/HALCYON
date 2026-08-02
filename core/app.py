@@ -19,6 +19,7 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import modes as mode_registry
 from core import paths
+from core.media_types import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS
 from core.mode_api import ModeSpec
 
 log = logging.getLogger(__name__)
@@ -776,19 +777,11 @@ class AppController(QObject):
                 log.exception("shutdown step %s failed", getattr(step, "__name__", step))
 
 
-#: Kept in step with modes.local.playlist.MEDIA_EXTENSIONS, imported lazily so
-#: core/ never depends on a mode package at import time (§A.1).
 def _is_media(path: str) -> bool:
-    from modes.local.playlist import MEDIA_EXTENSIONS
-
     return Path(path).suffix.lower() in MEDIA_EXTENSIONS
 
 
-#: Kept in step with modes.local.playlist.SUBTITLE_EXTENSIONS, imported lazily
-#: so core/ never depends on a mode package at import time (§A.1).
 def _is_subtitle(path: str) -> bool:
-    from modes.local.playlist import SUBTITLE_EXTENSIONS
-
     return Path(path).suffix.lower() in SUBTITLE_EXTENSIONS
 
 
