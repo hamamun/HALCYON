@@ -22,9 +22,9 @@ file; both were replaced).*
 |---|---|---|---|---|
 | 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
-| 2 — M3U | 0 / 5 | 0 / 58 | 0 / 58 | `v0.2.0-m3u` |
+| 2 — M3U | 0 / 5 | 0 / 57 | 0 / 58 | `v0.2.0-m3u` |
 | 3 — Web | 0 / 5 | 0 / 62 | 0 / 40 | `v1.0.0` |
-| **Total** | **10 / 21** | **175 / 303** | **104 / 203** | |
+| **Total** | **10 / 21** | **175 / 302** | **104 / 203** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -477,10 +477,9 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 2.2 — Mode Registration · 0.5 d
 
-- [ ] `modes/m3u/__init__.py` — `ModeSpec` for `"m3u"`
-- [ ] `controls=["playPause","prev","next","volume","pip","fullscreen"]` — **six** · §P2.3
-- [ ] `transport_qml="qrc:/modes/m3u/M3UTransport.qml"`
-- [ ] `osd_enabled=False`
+- [ ] `modes/m3u/__init__.py` — `ModeSpec` for `"m3u"`, title chip `"M3U"` · §P2.3
+- [ ] Real fields only (the `controls=[...]` draft never shipped): `panel_qml`, `transport_qml`, `osd_enabled=False`, `media_keys_enabled=True`, `uses_player=True` · §P2.3 v3.2/v3.3
+- [ ] `setup` hook publishes the channel model as `modeContext_m3u` — **no `main.py` edit** · §A.2
 - [ ] ★ Append one entry to `core/modes.py` — **the only Phase 1 edit permitted**
 - [ ] Second chip appears in the title bar **with no `TitleBar.qml` edit** · §P1.4
 

@@ -566,7 +566,7 @@ modes/m3u/
 ├── sources.py             # ★ saved-sources store — max 7, owned by M3U alone (§P2.4, v3.2)
 ├── M3UPanel.qml           # left dock panel
 ├── M3USourcesDialog.qml   # ★ the playlists manager (§P2.4, v3.2)
-└── M3UTransport.qml       # ★ single-row bar, arranged for six controls (§B.4)
+└── M3UTransport.qml       # ★ single-row bar, arranged for seven controls (§B.4, v3.3)
 ui/overlay/PipWindow.qml   # new shared component (Phase 2 owns it)
 ```
 
