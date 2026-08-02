@@ -262,6 +262,11 @@ class VideoSurface(QQuickItem):
         #: Set when the video pipeline goes away; consumed by the next
         #: updatePaintNode, which then discards the node holding the last frame.
         self._clear_pending = False
+        #: Token for the engine's reader registration (§P2.5). ``None`` until
+        #: bind(); passed back to VideoOutput.remove_reader() on unbind or
+        #: destruction so a closed PiP window can never leave the decoder
+        #: thread calling into a dead surface.
+        self._reader_token = None
 
         # RV32 path: this item draws the picture itself.
         self._texture: QSGTexture | None = None
@@ -291,27 +296,54 @@ class VideoSurface(QQuickItem):
         self.videoStopped.connect(
             self._on_video_stopped_gui, Qt.ConnectionType.QueuedConnection
         )
+        # A PiP window can be destroyed mid-playback (its Loader unloads the
+        # QML). Unregister from the engine then, or the decoder thread keeps
+        # calling into a deleted object on every frame (§P2.5).
+        self.destroyed.connect(self._on_destroyed)
 
     # ------------------------------------------------------------ binding ---
     def bind(self, vout: VideoOutput) -> None:
         """Attach to a video output. Safe to call once; PiP calls it on its own
-        surface against the *same* VideoOutput (§P2.5)."""
+        surface against the *same* VideoOutput (§P2.5).
+
+        Registers **this** surface's callbacks with the engine rather than
+        writing them into the engine's single slots: the engine fans every
+        notification out to all registered readers, so the main Stage keeps
+        receiving frames after the PiP binds instead of being silently
+        disconnected (§P2.5 — see engine/video_out.py)."""
         if self._vout is vout:
             return
         if self._vout is not None:
-            self._vout.remove_reader()
+            self._vout.remove_reader(self._reader_token)
+            self._reader_token = None
         self._vout = vout
-        vout.add_reader()
-        vout.frame_ready = self._on_frame_threadsafe
-        vout.format_changed = self._on_format_threadsafe
-        vout.video_stopped = self._on_video_stopped_threadsafe
+        self._reader_token = vout.add_reader(
+            frame=self._on_frame_threadsafe,
+            format=self._on_format_threadsafe,
+            stop=self._on_video_stopped_threadsafe,
+        )
         self._ensure_planes()
 
     def unbind(self) -> None:
         if self._vout is not None:
-            self._vout.remove_reader()
+            self._vout.remove_reader(self._reader_token)
+            self._reader_token = None
             self._vout = None
         self._set_has_video(False)
+
+    def _on_destroyed(self, *_args) -> None:
+        """Drop the engine registration when the item is destroyed.
+
+        The PiP window is a QML Window destroyed mid-playback by its Loader.
+        Without this, its callbacks stay registered and the decoder thread
+        keeps calling ``frameArrived.emit()`` on a deleted object on every
+        frame. Only the engine bookkeeping is touched here — no Qt signals are
+        emitted from inside the destructor.
+        """
+        if self._vout is not None:
+            self._vout.remove_reader(self._reader_token)
+            self._reader_token = None
+            self._vout = None
 
     @Slot(QObject)
     def setSource(self, source: QObject) -> None:  # noqa: N802 - QML-facing

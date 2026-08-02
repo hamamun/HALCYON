@@ -60,6 +60,31 @@ Lifetime rules (learned the hard way — §9, the High-severity row)
 * The frame memory is allocated once per format and only freed when no reader
   holds it (``_readers`` refcount) — a Phase 2 PiP window binds to the same ring
   with no second decode (§P2.5).
+
+One engine, many surfaces (§P2.5)
+---------------------------------
+The engine exists to be watched by **more than one** surface: the main Stage
+(which never unbinds, §9) and Phase 2's PiP window, both bound to the same
+``VideoOutput``. Frames are shared through the ring, and *notifications* are
+shared through :meth:`VideoOutput.add_reader` — every reader registers its own
+``frame``/``format``/``stop`` callbacks and every one of them is called when a
+frame lands, the format changes, or the pipeline tears down.
+
+The original single-slot attributes (``frame_ready`` / ``format_changed`` /
+``video_stopped``) are kept for simple callers — they behave exactly as before
+and are what the callback-robustness tests exercise. The two paths are
+independent: a reader registered via :meth:`add_reader` is notified *in
+addition to* the legacy slot, never instead of it, and removing a reader never
+silences the legacy slot.
+
+**Why the fan-out matters.** Before it, a second surface's ``bind()`` simply
+overwrote ``frame_ready`` with its own handler — the main Stage stopped being
+told that new pictures existed the moment the PiP opened (frozen picture while
+audio kept playing), and if the PiP was destroyed without anything restoring
+the callback, the notification was left pointing at a dead object and *nobody*
+was told anything for the rest of the session. ``add_reader`` returning a token
+is what makes :meth:`VideoOutput.remove_reader` able to drop exactly one
+surface, leaving every other reader — and the legacy slot — untouched.
 """
 
 from __future__ import annotations
@@ -107,6 +132,21 @@ _FormatCbProto = ctypes.CFUNCTYPE(
 class Chroma:
     I420 = "I420"
     RV32 = "RV32"
+
+
+@dataclass(frozen=True, slots=True)
+class _Reader:
+    """One surface's notification callbacks (§P2.5).
+
+    Created by :meth:`VideoOutput.add_reader` and handed back as the token for
+    :meth:`VideoOutput.remove_reader`. All three callbacks run on VLC's
+    decoder thread — the same thread rule as the legacy single-slot
+    attributes: do nothing there but marshal.
+    """
+
+    frame: Callable[[], None] | None
+    format: Callable[[FrameFormat], None] | None
+    stop: Callable[[], None] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +376,10 @@ class VideoOutput:
     def __init__(self, chroma: str = Chroma.I420) -> None:
         self.ring = FrameRing()
         self.chroma = chroma
+        #: Legacy single-slot notifications. A simple caller that sets one of
+        #: these gets exactly the old behaviour; surfaces registered through
+        #: :meth:`add_reader` are notified *in addition to* these, never
+        #: instead of them (§P2.5).
         self.frame_ready: Callable[[], None] | None = None
         self.format_changed: Callable[[FrameFormat], None] | None = None
         #: Fired when VLC tears the video pipeline down (end of a video track,
@@ -347,6 +391,11 @@ class VideoOutput:
         self._player = None
         self._attached = False
         self._readers = 0
+        #: Multi-reader fan-out (§P2.5): every surface's callbacks. Guarded by
+        #: ``_listener_lock`` because the list is mutated on the GUI thread
+        #: (bind/unbind) while the decoder thread iterates a snapshot of it.
+        self._listeners: list[_Reader] = []
+        self._listener_lock = threading.Lock()
 
         # ------------------------------------------------------------------
         # HARD REFERENCES. Do not "tidy" these into locals. §9, High severity:
@@ -443,17 +492,64 @@ class VideoOutput:
         self.ring.free()
 
     # ------------------------------------------------ reader bookkeeping ---
-    def add_reader(self) -> None:
-        """Register a surface. Phase 2's PiP binds a second one to the same ring
-        — no second decode, no second player (§P2.5)."""
-        self._readers += 1
+    def add_reader(
+        self,
+        *,
+        frame: Callable[[], None] | None = None,
+        format: Callable[[FrameFormat], None] | None = None,
+        stop: Callable[[], None] | None = None,
+    ) -> _Reader | None:
+        """Register a surface (§P2.5).
 
-    def remove_reader(self) -> None:
+        Phase 2's PiP binds a second reader to the same ring — no second
+        decode, no second player. Pass the surface's callbacks and the engine
+        fans every notification out to **all** readers, so the main Stage
+        keeps receiving frames after the PiP binds (the single-slot
+        ``frame_ready``/``format_changed``/``video_stopped`` attributes stay
+        independent and keep firing for simple callers).
+
+        Returns the reader token to hand to :meth:`remove_reader` when the
+        surface goes away. With no callbacks (the original contract) this is
+        a refcount-only registration and returns ``None``.
+        """
+        self._readers += 1
+        if frame is None and format is None and stop is None:
+            return None
+        reader = _Reader(frame, format, stop)
+        with self._listener_lock:
+            self._listeners.append(reader)
+        return reader
+
+    def remove_reader(self, reader: _Reader | None = None) -> None:
+        """Unregister a surface.
+
+        ``reader`` is the token :meth:`add_reader` returned. Passing the
+        right token drops exactly that surface — every other reader and the
+        legacy single-slot attributes are untouched, which is what lets the
+        main Stage keep playing after the PiP window closes (§P2.5).
+        """
         self._readers = max(0, self._readers - 1)
+        if reader is not None:
+            with self._listener_lock:
+                try:
+                    self._listeners.remove(reader)
+                except ValueError:
+                    pass
 
     @property
     def readers(self) -> int:
         return self._readers
+
+    def _listener_snapshot(self) -> list[_Reader]:
+        """Copy of the reader list for decoder-thread dispatch.
+
+        The list is mutated on the GUI thread (bind/unbind); the callbacks run
+        on VLC's decoder thread. Iterating a snapshot under the lock keeps the
+        two from racing on the list itself — the same GIL-atomic discipline as
+        the rest of the ring's bookkeeping.
+        """
+        with self._listener_lock:
+            return list(self._listeners)
 
     # ---------------------------------------------------------- callbacks ---
     def _on_format(self, chroma_ptr, width_ptr, height_ptr, pitches, lines) -> int:
@@ -530,6 +626,15 @@ class VideoOutput:
             log.exception("video format setup failed")
             return 0
 
+        # Fan out to every registered reader first, then the legacy slot.
+        # Each is guarded separately so one broken handler can never stop the
+        # other surfaces — or the C callback — from completing (§P2.5).
+        for reader in self._listener_snapshot():
+            if reader.format is not None:
+                try:
+                    reader.format(fmt)
+                except Exception:  # never let Python raise into a C callback
+                    log.exception("format_changed handler failed")
         if self.format_changed:
             try:
                 self.format_changed(fmt)
@@ -554,6 +659,16 @@ class VideoOutput:
         suppressed the Now Playing card.
         """
         self.ring.mark_stopped()
+        # Every reader must drop back to idle, not just the last one that
+        # attached — a PiP window and the main Stage both have a `hasVideo`
+        # flag to clear (§P2.5).
+        for reader in self._listener_snapshot():
+            cb = reader.stop
+            if cb is not None:
+                try:
+                    cb()
+                except Exception:
+                    log.exception("video_stopped handler failed")
         cb = self.video_stopped
         if cb is not None:
             try:
@@ -619,6 +734,19 @@ class VideoOutput:
 
     def _on_display(self) -> None:
         self.ring.publish()
+        # Fan out to every registered reader, not just the last one that
+        # attached (§P2.5). Before the fan-out, a second surface's bind()
+        # overwrote `frame_ready` and the main Stage stopped being told that
+        # new pictures existed — black PiP or frozen main window, depending on
+        # which surface won the slot. Each handler is guarded so one dead
+        # surface (a closed PiP window) can never starve the others.
+        for reader in self._listener_snapshot():
+            cb = reader.frame
+            if cb is not None:
+                try:
+                    cb()
+                except Exception:
+                    log.exception("frame_ready handler failed")
         cb = self.frame_ready
         if cb is not None:
             try:

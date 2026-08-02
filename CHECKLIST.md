@@ -566,7 +566,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 **Regression first**
 - ◻ **Entire Phase 1 sign-off list re-run and passing**
 - ◻ Deleting `modes/m3u/` still leaves a working Local build
-- ◻ `git diff phase-1..phase-2` touches no Phase 1 file except the one `core/modes.py` line
+- ◻ `git diff phase-1..phase-2` touches no Phase 1 file except the one `core/modes.py` line and the **disclosed engine fix** for §P2.5 (multi-reader notification fan-out in `engine/video_out.py` + `engine/surface.py` — the Phase 1 foundation promised PiP support but shipped single-slot notifications; see `PHASE2_DISCLOSED` in `tools/check_isolation.py` and `tests/test_video_pip_notify.py`)
 - ◻ `tools/check_isolation.py` passes
 
 **M3U**
