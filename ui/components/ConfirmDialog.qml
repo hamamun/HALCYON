@@ -8,6 +8,10 @@ Dialog {
     id: root
 
     property string message: ""
+    // Label of the confirming button. Defaults to "Clear" (the first user was
+    // Clear Playlist, §P1.5); destructive flows like deleting a saved
+    // playlist pass their own verb so the button names the action it takes.
+    property string confirmText: "Clear"
 
     signal confirmed()
 
@@ -54,7 +58,7 @@ Dialog {
                 onClicked: root.close()
             }
             TextButton {
-                text: "Clear"
+                text: root.confirmText
                 primary: true
                 onClicked: { root.confirmed(); root.close(); }
             }

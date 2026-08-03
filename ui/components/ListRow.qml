@@ -41,14 +41,14 @@ Rectangle {
         }
     }
 
-    default property alias content: contentArea.data
-    Item {
-        id: contentArea
-        anchors.fill: parent
-        anchors.leftMargin: Theme.spaceMd
-        anchors.rightMargin: Theme.spaceSm
-    }
-
+    // The row-wide click/hover floor. It is declared BEFORE the content slot
+    // so it stacks *beneath* whatever the caller puts inside the row: text and
+    // plain Items do not accept mouse events, so row clicks fall through to
+    // this area exactly as before — but nested controls (an Edit/Delete
+    // IconButton, as in the M3U sources dialog) are above it and receive
+    // their clicks. Declaring it after the content instead made every nested
+    // button inert: this area consumed every press first, and the row merely
+    // selected.
     MouseArea {
         id: hoverArea
         anchors.fill: parent
@@ -61,5 +61,13 @@ Rectangle {
                 root.clicked(mouse);
         }
         onDoubleClicked: function(mouse) { root.doubleClicked(mouse) }
+    }
+
+    default property alias content: contentArea.data
+    Item {
+        id: contentArea
+        anchors.fill: parent
+        anchors.leftMargin: Theme.spaceMd
+        anchors.rightMargin: Theme.spaceSm
     }
 }
