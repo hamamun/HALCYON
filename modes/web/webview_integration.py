@@ -63,38 +63,11 @@ def check_webview2_available() -> tuple[bool, str]:
     if not WEBVIEW2_AVAILABLE:
         return False, "WebView2 package not installed. Run: pip install webview2-Microsoft.Web.WebView2.Core"
 
-    # Check Windows version (WebView2 requires Windows 10 1809+)
-    try:
-        import ctypes
-        kernel = ctypes.windll.kernel32
-        version = kernel.GetVersion()
-        major = version & 0xFF
-        
-        if major < 10:
-            return False, "WebView2 requires Windows 10 or later."
-    except Exception:
-        pass
-
-    # Check registry for WebView2 installation
-    try:
-        import winreg
-        keys = [
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-        ]
-        for root, subkey in keys:
-            try:
-                with winreg.OpenKey(root, subkey) as key:
-                    value, _ = winreg.QueryValueEx(key, "pv")
-                    if value:
-                        return True, f"Microsoft Edge WebView2 Runtime {value} detected."
-            except OSError:
-                continue
-    except ImportError:
-        pass
-
-    return False, "Microsoft Edge WebView2 Runtime not found. It should be included with Windows 11 or available via Windows Update on Windows 10."
+    # Importing the WinRT projection is the reliable availability signal.  The
+    # runtime may be installed per-user, system-wide, or bundled with an app,
+    # none of which is represented reliably by a single EdgeUpdate registry
+    # key.  Controller creation will report any runtime initialization failure.
+    return True, "WebView2 package detected."
 
 
 class WebViewBase(ABC):
