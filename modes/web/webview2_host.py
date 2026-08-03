@@ -23,6 +23,7 @@ from core import paths
 from modes.web.bookmarks import BookmarkModel, clean_title, normalise_url
 from modes.web.tabs import MANAGER_URL, MAX_TABS, TabModel, display_url
 from modes.web import webview_integration
+from modes.web.webview_integration import check_webview2_available
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -442,12 +443,8 @@ class RuntimeStatus:
 
 
 def _runtime_status() -> RuntimeStatus:
-    if sys.platform != "win32":
-        return RuntimeStatus(False, "WebView2 browsing is available on Windows builds.")
-    version = _webview2_version()
-    if version:
-        return RuntimeStatus(True, f"Microsoft Edge WebView2 Runtime {version} detected.")
-    return RuntimeStatus(False, "Microsoft Edge WebView2 Runtime is not installed.")
+    available, message = check_webview2_available()
+    return RuntimeStatus(available, message)
 
 
 def _webview2_version() -> str:
