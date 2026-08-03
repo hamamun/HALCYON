@@ -19,6 +19,10 @@
 # QtWebEngineQuick is required for embedding Chromium inside the main window.
 PySide6-Addons==6.11.1
 
+# Windows WebView2 Runtime access - uses Windows' built-in Edge WebView2
+# No separate installation needed on Windows 10/11
+webview2-Microsoft.Web.WebView2.Core>=1.0.0
+
 # --- Testing & Quality ---
 pytest>=8.0
 
