@@ -1,15 +1,4 @@
-"""Web mode context and WebView2 host boundary (§P3).
-
-This file deliberately keeps the native browser boundary behind a tiny QObject.
-The tab/bookmark UI can be developed and tested on every platform, while the
-Windows runtime check and future WebView2 controller attachment live here.
-
-WebView2 Integration:
-- Uses Windows' built-in WebView2 Runtime (no separate installation needed)
-- Creates WebView2 control attached to Qt widget HWND
-- Connects to existing TabModel for navigation control
-"""
-
+"""Web-mode controller: QML chrome plus native WebView2 child surfaces."""
 from __future__ import annotations
 
 import logging
@@ -24,405 +13,260 @@ from modes.web import webview_integration
 from modes.web.webview_integration import check_webview2_available
 
 if TYPE_CHECKING:
-    from PySide6.QtWidgets import QWidget
+    from PySide6.QtQuick import QQuickWindow
 
 log = logging.getLogger(__name__)
 
 
 class WebContext(QObject):
-    """The one Web-mode object exposed to QML as ``WebPlaylist``.
+    """QML-facing browser state and owner of native tab controllers.
 
-    The name comes from the existing generic context-property convention
-    (``<mode>.capitalize() + 'Playlist'``).  It is a browser context, not a media
-    playlist.
-    
-    Integrates with WebView2 for actual web browsing on Windows.
+    The QML stage remains HALCYON's existing UI.  Its browser rectangle reports
+    geometry here; the active native WebView2 child is positioned over exactly
+    that rectangle.
     """
-
     activeChanged = Signal()
     toastRequested = Signal(str)
     runtimeChanged = Signal()
-    
-    # Signal emitted when WebView2 container widget is ready
-    webviewContainerReady = Signal("QWidget")
+    nativeVisibilityChanged = Signal()
 
     def __init__(self, settings=None, parent=None) -> None:
         super().__init__(parent)
         self._settings = settings
         self._tabs = TabModel(self)
         self._bookmarks = BookmarkModel(parent=self)
-        self._runtime_status = _runtime_status()
-        self._webviews: dict[int, "webview_integration.WebViewBase | None"] = {}
-        self._container_widget = None
-        self._webview_initialized = False
-        
-        # Connect TabModel signals
-        self._tabs.activeChanged.connect(self._on_tab_active_changed)
-        self._tabs.limitReached.connect(
-            lambda: self.toastRequested.emit(f"Maximum {MAX_TABS} tabs reached.")
-        )
-        self._tabs.changed.connect(self._on_tabs_changed)
+        available, message = check_webview2_available()
+        self._runtime_available, self._runtime_message = available, message
+        self._window: QQuickWindow | None = None
+        self._window_hwnd = 0
+        self._bounds = (0, 0, 0, 0)
+        self._stage_visible = False
+        self._popup_open = False
+        # Keys are id(Tab), not list indexes: indexes change when a tab closes.
+        self._webviews: dict[int, webview_integration.WebViewBase | None] = {}
+
+        self._tabs.activeChanged.connect(self._sync_webviews)
+        self._tabs.changed.connect(self._sync_webviews)
+        self._tabs.limitReached.connect(lambda: self.toastRequested.emit(f"Maximum {MAX_TABS} tabs reached."))
         self._bookmarks.changed.connect(self.activeChanged)
-        
-        # Initialize WebView2
-        self._init_webview2()
 
     @Property(QObject, constant=True)
-    def tabs(self) -> QObject:
-        return self._tabs
-
+    def tabs(self) -> QObject: return self._tabs
     @Property(QObject, constant=True)
-    def bookmarks(self) -> QObject:
-        return self._bookmarks
-
+    def bookmarks(self) -> QObject: return self._bookmarks
     @Property(str, notify=activeChanged)
-    def activeUrl(self) -> str:  # noqa: N802
-        return self._tabs.activeUrl
-
+    def activeUrl(self) -> str: return self._tabs.activeUrl
     @Property(str, notify=activeChanged)
-    def activeDisplayUrl(self) -> str:  # noqa: N802
-        return display_url(self._tabs.activeUrl)
-
+    def activeDisplayUrl(self) -> str: return display_url(self._tabs.activeUrl)
     @Property(str, notify=activeChanged)
-    def activeTitle(self) -> str:  # noqa: N802
-        return self._tabs.activeTitle
-
+    def activeTitle(self) -> str: return self._tabs.activeTitle
     @Property(bool, notify=activeChanged)
-    def hasActiveTab(self) -> bool:  # noqa: N802
-        return self._tabs.hasActiveTab
-
+    def hasActiveTab(self) -> bool: return self._tabs.hasActiveTab
     @Property(bool, notify=activeChanged)
-    def activeIsManager(self) -> bool:  # noqa: N802
-        return self._tabs.activeIsManager
-
+    def activeIsManager(self) -> bool: return self._tabs.activeIsManager
     @Property(bool, notify=activeChanged)
-    def activeBookmarked(self) -> bool:  # noqa: N802
-        return self.current_bookmark_index() >= 0
-
+    def activeBookmarked(self) -> bool: return self.current_bookmark_index() >= 0
     @Property(int, notify=activeChanged)
-    def currentBookmarkIndex(self) -> int:  # noqa: N802
-        return self.current_bookmark_index()
-
+    def currentBookmarkIndex(self) -> int: return self.current_bookmark_index()
     @Property(bool, notify=activeChanged)
-    def canGoBack(self) -> bool:  # noqa: N802
-        return self._tabs.canGoBack
-
+    def canGoBack(self) -> bool: # noqa: N802
+        view = self._active_webview()
+        return view.can_go_back if view else self._tabs.canGoBack
     @Property(bool, notify=activeChanged)
-    def canGoForward(self) -> bool:  # noqa: N802
-        return self._tabs.canGoForward
-
+    def canGoForward(self) -> bool: # noqa: N802
+        view = self._active_webview()
+        return view.can_go_forward if view else self._tabs.canGoForward
     @Property(bool, notify=runtimeChanged)
-    def webView2Available(self) -> bool:  # noqa: N802
-        return self._runtime_status.available
-
+    def webView2Available(self) -> bool: return self._runtime_available
     @Property(str, notify=runtimeChanged)
-    def webView2Status(self) -> str:  # noqa: N802
-        return self._runtime_status.message
+    def webView2Status(self) -> str: return self._runtime_message
+    @Property(bool, notify=nativeVisibilityChanged)
+    def nativeBrowserVisible(self) -> bool: # noqa: N802
+        return self._native_should_be_visible()
 
-    # ---------------------------------------------------------------- tabs --
+    # QML bridge -------------------------------------------------------------
+    @Slot(QObject)
+    def attachWindow(self, window: QObject) -> None: # noqa: N802
+        """Receive the QQuickWindow that owns the QML scene and its HWND."""
+        if self._window is window:
+            return
+        self._window = window  # keep the Python wrapper alive
+        try:
+            self._window_hwnd = int(window.winId())
+            log.info("WebView2 will use HALCYON QML window HWND %s", self._window_hwnd)
+        except Exception as exc:
+            self._set_runtime_error(f"Could not get the HALCYON window handle: {exc}")
+            return
+        try:
+            window.visibleChanged.connect(lambda *_: self._sync_webviews())
+        except Exception:
+            pass
+        self._sync_webviews()
+
+    @Slot(float, float, float, float, bool)
+    def setBrowserRect(self, x: float, y: float, width: float, height: float, visible: bool) -> None: # noqa: N802
+        """Set QML browserRect bounds in QQuickWindow client coordinates."""
+        # WebView2 consumes native pixels; QML uses device-independent pixels.
+        dpr = float(getattr(self._window, "devicePixelRatio", lambda: 1.0)()) if self._window else 1.0
+        self._bounds = tuple(round(v * dpr) for v in (x, y, width, height))
+        self._stage_visible = bool(visible)
+        self._sync_webviews()
+
+    @Slot(bool)
+    def setOverlayOpen(self, open_: bool) -> None: # noqa: N802
+        """Hide the native child while a QML overlay occupies browserRect."""
+        self._popup_open = bool(open_)
+        self._sync_webviews()
+
+    # tabs -------------------------------------------------------------------
     @Slot()
-    def newTab(self) -> None:  # noqa: N802
-        self._tabs.newBlankTab()
-
+    def newTab(self) -> None: self._tabs.newBlankTab()
     @Slot(str)
-    def openNewTab(self, url: str) -> None:  # noqa: N802
-        self._tabs.openUrl(url)
-
+    def openNewTab(self, url: str) -> None: self._tabs.openUrl(url)
     @Slot()
-    def openBookmarkManager(self) -> None:  # noqa: N802
-        self._tabs.openManager()
-
+    def openBookmarkManager(self) -> None: self._tabs.openManager()
     @Slot(int)
-    def activateTab(self, index: int) -> None:  # noqa: N802
-        self._tabs.activate(index)
-
+    def activateTab(self, index: int) -> None: self._tabs.activate(index)
     @Slot(int)
-    def closeTab(self, index: int) -> None:  # noqa: N802
-        self._tabs.close(index)
-
+    def closeTab(self, index: int) -> None: self._tabs.close(index)
     @Slot(int)
-    def openBookmark(self, source_index: int) -> None:  # noqa: N802
+    def openBookmark(self, source_index: int) -> None:
         item = self._bookmarks.get(source_index)
-        url = item.get("url", "") if isinstance(item, dict) else ""
-        if url:
-            self._tabs.navigateActive(url)
+        if isinstance(item, dict) and item.get("url"):
+            self.navigate(str(item["url"]))
 
-    # ------------------------------------------------------------- bookmarks --
-    @Slot(str, str, result=bool)
-    def saveBookmark(self, title: str, url: str) -> bool:  # noqa: N802
-        ok = self._bookmarks.addBookmark(title, url)
-        if ok:
-            self.toastRequested.emit("Bookmark saved.")
-            self.activeChanged.emit()
-        return ok
-
-    @Slot(str, result=bool)
-    def saveCurrentBookmark(self, title: str = "") -> bool:  # noqa: N802
-        url = self._tabs.activeUrl
-        if not url or url in ("about:blank", MANAGER_URL):
-            return False
-        return self.saveBookmark(title or self._tabs.activeTitle, url)
-
-    @Slot(str, str, result=bool)
-    def updateCurrentBookmark(self, title: str, url: str) -> bool:  # noqa: N802
-        idx = self.current_bookmark_index()
-        if idx < 0:
-            return self.saveBookmark(title, url)
-        ok = self._bookmarks.updateBookmark(idx, clean_title(title, url), normalise_url(url))
-        if ok:
-            self.toastRequested.emit("Bookmark updated.")
-            self.activeChanged.emit()
-        return ok
-
-    @Slot(result=bool)
-    def removeCurrentBookmark(self) -> bool:  # noqa: N802
-        idx = self.current_bookmark_index()
-        if idx < 0:
-            return False
-        ok = self._bookmarks.deleteBookmark(idx)
-        if ok:
-            self.toastRequested.emit("Bookmark removed.")
-            self.activeChanged.emit()
-        return ok
-
-    @Slot(int, str, str, result=bool)
-    def updateBookmark(self, source_index: int, title: str, url: str) -> bool:  # noqa: N802
-        ok = self._bookmarks.updateBookmark(source_index, title, url)
-        if ok:
-            self.toastRequested.emit("Bookmark updated.")
-            self.activeChanged.emit()
-        return ok
-
-    @Slot(int, result=bool)
-    def deleteBookmark(self, source_index: int) -> bool:  # noqa: N802
-        ok = self._bookmarks.deleteBookmark(source_index)
-        if ok:
-            self.toastRequested.emit("Bookmark deleted.")
-            self.activeChanged.emit()
-        return ok
-
-    @Slot(int, int, result=bool)
-    def moveBookmark(self, source_index: int, target_index: int) -> bool:  # noqa: N802
-        return self._bookmarks.moveBookmark(source_index, target_index)
-
-    @Slot(int, result="QVariant")
-    def bookmark(self, source_index: int):
-        return self._bookmarks.get(source_index)
-
-    def current_bookmark_index(self) -> int:
-        url = self._tabs.activeUrl
-        if not url or url in ("about:blank", MANAGER_URL):
-            return -1
-        return self._bookmarks.index_of_url(url)
-
-    # ------------------------------------------------------------ WebView2 ---
-    
-    def _init_webview2(self) -> None:
-        """Initialize WebView2 and create container widget."""
-        if not self._runtime_status.available:
-            log.info("WebView2 not available - browsing will be disabled")
-            return
-        
-        # Create container widget for WebView2
-        self._create_container_widget()
-    
-    def _create_container_widget(self) -> None:
-        """Create Qt widget to host WebView2."""
-        try:
-            from PySide6.QtWidgets import QWidget
-            from PySide6.QtCore import QSize
-            
-            # Create a hidden container widget
-            container = QWidget()
-            container.setFixedSize(QSize(1, 1))  # Minimal size until shown
-            container.setVisible(False)
-            container.setParent(None)
-            
-            self._container_widget = container
-            log.info("WebView2 container widget created")
-            
-            # Emit signal so QML can position it
-            self.webviewContainerReady.emit(container)
-            
-        except Exception as e:
-            log.error("Failed to create WebView2 container: %s", e)
-    
-    def _on_tabs_changed(self) -> None:
-        """Handle tab changes - create/destroy WebViews as needed."""
-        self._sync_webviews_with_tabs()
-    
-    def _on_tab_active_changed(self) -> None:
-        """Handle active tab change - show correct WebView."""
-        self._sync_webviews_with_tabs()
-        self.activeChanged.emit()
-    
-    def _sync_webviews_with_tabs(self) -> None:
-        """Sync WebView instances with tab model."""
-        # Ensure we have a WebView for each tab
-        for i in range(self._tabs.count):
-            if i not in self._webviews:
-                self._create_webview_for_tab(i)
-        
-        # Clean up WebViews for closed tabs
-        removed = [i for i in self._webviews if i >= self._tabs.count]
-        for i in removed:
-            webview = self._webviews.pop(i, None)
-            if webview:
-                webview.close()
-    
-    def _create_webview_for_tab(self, index: int) -> None:
-        """Create WebView instance for a tab."""
-        if not self._container_widget or not self._runtime_status.available:
-            self._webviews[index] = None
-            return
-        
-        tab = self._tabs._tabs[index] if index < len(self._tabs._tabs) else None
-        if not tab:
-            self._webviews[index] = None
-            return
-        
-        try:
-            webview = webview_integration.create_webview(
-                widget=self._container_widget,
-                initial_url=tab.url,
-                on_title_changed=lambda title, i=index: self._on_webview_title_changed(i, title),
-                on_url_changed=lambda url, i=index: self._on_webview_url_changed(i, url),
-                on_loading_changed=lambda loading, i=index: self._on_webview_loading_changed(i, loading),
-                on_navigation_completed=lambda success, i=index: self._on_webview_navigation_completed(i, success),
-            )
-            self._webviews[index] = webview
-            log.debug("Created WebView for tab %d", index)
-        except Exception as e:
-            log.error("Failed to create WebView for tab %d: %s", index, e)
-            self._webviews[index] = None
-    
-    def _on_webview_title_changed(self, index: int, title: str) -> None:
-        """Handle WebView title change."""
-        if index == self._tabs.activeIndex:
-            self.activeChanged.emit()
-    
-    def _on_webview_url_changed(self, index: int, url: str) -> None:
-        """Handle WebView URL change - sync with TabModel."""
-        if index == self._tabs.activeIndex:
-            # Update TabModel with actual URL from WebView2
-            # This handles redirects and URL normalization
-            self.activeChanged.emit()
-    
-    def _on_webview_loading_changed(self, index: int, is_loading: bool) -> None:
-        """Handle WebView loading state change."""
-        log.debug("Tab %d loading: %s", index, is_loading)
-    
-    def _on_webview_navigation_completed(self, index: int, success: bool) -> None:
-        """Handle WebView navigation completed."""
-        log.debug("Tab %d navigation completed: %s", index, success)
-    
-    def _get_active_webview(self):
-        """Get WebView for currently active tab."""
-        if self._tabs.activeIndex < 0:
-            return None
-        return self._webviews.get(self._tabs.activeIndex)
-    
-    # Override navigation methods to use WebView2
     @Slot(str)
     def navigate(self, text: str) -> None:
-        """Navigate to URL - uses WebView2 on Windows."""
-        if not self._runtime_status.available:
-            self.toastRequested.emit("Web browsing is not available on this platform.")
-            return
-        
         url = normalise_url(text)
         if not url:
             return
-        
-        # Update TabModel first
-        self._tabs.navigateActive(text)
-        
-        # Then navigate WebView
-        webview = self._get_active_webview()
-        if webview:
-            webview.navigate(url)
-    
+        self._tabs.navigateActive(url)
+        self._sync_webviews()
+        view = self._active_webview()
+        if view:
+            view.navigate(url)
+
     @Slot()
-    def goBack(self) -> None:  # noqa: N802
-        """Go back - uses WebView2 on Windows."""
-        if not self._runtime_status.available:
-            return
-        
-        self._tabs.back()
-        
-        webview = self._get_active_webview()
-        if webview:
-            webview.go_back()
-    
+    def goBack(self) -> None: # noqa: N802
+        view = self._active_webview()
+        if view: view.go_back()
+        else: self._tabs.back()
     @Slot()
-    def goForward(self) -> None:  # noqa: N802
-        """Go forward - uses WebView2 on Windows."""
-        if not self._runtime_status.available:
-            return
-        
-        self._tabs.forward()
-        
-        webview = self._get_active_webview()
-        if webview:
-            webview.go_forward()
-    
+    def goForward(self) -> None: # noqa: N802
+        view = self._active_webview()
+        if view: view.go_forward()
+        else: self._tabs.forward()
     @Slot()
     def reload(self) -> None:
-        """Reload - uses WebView2 on Windows."""
-        if not self._runtime_status.available:
-            return
-        
-        webview = self._get_active_webview()
-        if webview:
-            webview.reload()
-    
+        view = self._active_webview()
+        if view: view.reload()
     @Slot()
     def stop(self) -> None:
-        """Stop loading - uses WebView2 on Windows."""
-        if not self._runtime_status.available:
-            return
-        
-        webview = self._get_active_webview()
-        if webview:
-            webview.stop()
-    
+        view = self._active_webview()
+        if view: view.stop()
     @Slot()
-    def home(self) -> None:
-        """Go home - navigates to default home page."""
-        self._tabs.home()
-        
-        if self._runtime_status.available:
-            webview = self._get_active_webview()
-            if webview:
-                webview.navigate("https://www.bing.com")
-    
+    def home(self) -> None: self.navigate("https://www.bing.com")
+
+    # bookmarks --------------------------------------------------------------
+    @Slot(str, str, result=bool)
+    def saveBookmark(self, title: str, url: str) -> bool: # noqa: N802
+        ok = self._bookmarks.addBookmark(title, url)
+        if ok: self.toastRequested.emit("Bookmark saved.")
+        return ok
+    @Slot(str, result=bool)
+    def saveCurrentBookmark(self, title: str = "") -> bool: # noqa: N802
+        url = self._tabs.activeUrl
+        return bool(url and url not in ("about:blank", MANAGER_URL) and self.saveBookmark(title or self._tabs.activeTitle, url))
+    @Slot(str, str, result=bool)
+    def updateCurrentBookmark(self, title: str, url: str) -> bool: # noqa: N802
+        idx = self.current_bookmark_index()
+        return self.saveBookmark(title, url) if idx < 0 else self._bookmarks.updateBookmark(idx, clean_title(title, url), normalise_url(url))
+    @Slot(result=bool)
+    def removeCurrentBookmark(self) -> bool: # noqa: N802
+        idx = self.current_bookmark_index()
+        return idx >= 0 and self._bookmarks.deleteBookmark(idx)
+    @Slot(int, str, str, result=bool)
+    def updateBookmark(self, index: int, title: str, url: str) -> bool: return self._bookmarks.updateBookmark(index, title, url)
+    @Slot(int, result=bool)
+    def deleteBookmark(self, index: int) -> bool: return self._bookmarks.deleteBookmark(index)
+    @Slot(int, int, result=bool)
+    def moveBookmark(self, source: int, target: int) -> bool: return self._bookmarks.moveBookmark(source, target)
+    @Slot(int, result="QVariant")
+    def bookmark(self, index: int): return self._bookmarks.get(index)
+    def current_bookmark_index(self) -> int:
+        url = self._tabs.activeUrl
+        return -1 if not url or url in ("about:blank", MANAGER_URL) else self._bookmarks.index_of_url(url)
+
+    # native host lifecycle --------------------------------------------------
+    def _sync_webviews(self) -> None:
+        live_ids = {id(tab) for tab in self._tabs._tabs if not tab.is_manager}
+        for key in list(self._webviews):
+            if key not in live_ids:
+                view = self._webviews.pop(key)
+                if view: view.close()
+        if self._window_hwnd:
+            for tab in self._tabs._tabs:
+                if not tab.is_manager and id(tab) not in self._webviews:
+                    self._create_webview(tab)
+        active = self._tabs.active_tab()
+        active_key = id(active) if active and not active.is_manager else None
+        visible = self._native_should_be_visible()
+        for key, view in self._webviews.items():
+            if view:
+                view.update_bounds(*self._bounds)
+                view.set_visible(visible and key == active_key)
+        self.activeChanged.emit()
+        self.nativeVisibilityChanged.emit()
+
+    def _create_webview(self, tab) -> None:
+        key = id(tab)
+        self._webviews[key] = webview_integration.create_webview(
+            self._window_hwnd, tab.url,
+            on_title_changed=lambda title, k=key: self._on_webview_title(k, title),
+            on_url_changed=lambda url, k=key: self._on_webview_url(k, url),
+            on_loading_changed=lambda loading, k=key: self._on_webview_loading(k, loading),
+            on_navigation_completed=lambda success, k=key: self._on_webview_completed(k, success),
+        )
+
+    def _tab_for_key(self, key: int):
+        return next((tab for tab in self._tabs._tabs if id(tab) == key), None)
+    def _active_webview(self):
+        tab = self._tabs.active_tab()
+        return self._webviews.get(id(tab)) if tab and not tab.is_manager else None
+    def _native_should_be_visible(self) -> bool:
+        return bool(self._runtime_available and self._stage_visible and not self._popup_open and
+                    self._tabs.hasActiveTab and not self._tabs.activeIsManager and self._window_hwnd)
+    def _on_webview_title(self, key: int, title: str) -> None:
+        tab = self._tab_for_key(key)
+        if tab: self._tabs.set_web_state(tab, title=title)
+    def _on_webview_url(self, key: int, url: str) -> None:
+        tab = self._tab_for_key(key)
+        if tab: self._tabs.set_web_state(tab, url=url)
+    def _on_webview_loading(self, key: int, loading: bool) -> None:
+        tab = self._tab_for_key(key)
+        if tab: self._tabs.set_web_state(tab, loading=loading)
+    def _on_webview_completed(self, key: int, _success: bool) -> None:
+        self._on_webview_loading(key, False)
+    def _set_runtime_error(self, message: str) -> None:
+        self._runtime_available, self._runtime_message = False, message
+        self.runtimeChanged.emit()
+
     def shutdown(self) -> None:
-        """Clean up WebView2 instances."""
-        # Close all WebViews
-        for webview in self._webviews.values():
-            if webview:
-                webview.close()
+        for view in self._webviews.values():
+            if view: view.close()
         self._webviews.clear()
-        
-        # Close container widget
-        if self._container_widget:
-            self._container_widget.deleteLater()
-            self._container_widget = None
 
 
 class RuntimeStatus:
     def __init__(self, available: bool, message: str) -> None:
-        self.available = available
-        self.message = message
+        self.available, self.message = available, message
 
 
 def _runtime_status() -> RuntimeStatus:
-    available, message = check_webview2_available()
-    return RuntimeStatus(available, message)
+    return RuntimeStatus(*check_webview2_available())
 
 
 def build_web_context(engine=None, controller=None, settings=None):
-    """ModeSpec setup hook."""
     profile = paths.data_dir() / "web"
     profile.mkdir(parents=True, exist_ok=True)
     return WebContext(settings=settings)

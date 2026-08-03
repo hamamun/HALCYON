@@ -1,385 +1,231 @@
-"""Windows WebView2 implementation for Qt widgets.
+"""Native Windows WebView2 surface used by HALCYON's QML Web mode.
 
-This module provides WebView2 browser integration that can be embedded
-inside a Qt widget by parenting WebView2 to the widget's HWND.
+WebView2 is a windowed WinRT control.  QML supplies the rectangle it should
+occupy; this class parents the native controller to HALCYON's QQuickWindow HWND
+and keeps that controller clipped to the supplied rectangle.
 """
-
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
-from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
-if TYPE_CHECKING:
-    from PySide6.QtWidgets import QWidget
-    from PySide6.QtCore import QObject
-
+from core import paths
 from modes.web.webview_integration import WebViewBase
 
 log = logging.getLogger(__name__)
-
 IS_WINDOWS = sys.platform == "win32"
-
-# Try to import WebView2
 WEBVIEW2_AVAILABLE = False
-_CoreWebView2Environment = None
-_CoreWebView2Controller = None
 
 if IS_WINDOWS:
     try:
         from webview2.microsoft.web.webview2.core import (  # type: ignore[import-not-found]
-            CoreWebView2Controller,
+            CoreWebView2ControllerWindowReference,
             CoreWebView2Environment,
         )
-
-        _CoreWebView2Environment = CoreWebView2Environment
-        _CoreWebView2Controller = CoreWebView2Controller
         WEBVIEW2_AVAILABLE = True
-    except ImportError as e:
-        log.info("webview2-Microsoft.Web.WebView2.Core not available: %s", e)
-    except Exception as e:
-        log.warning("Failed to import WebView2: %s", e)
+    except ImportError as exc:
+        log.info("WebView2 projection is unavailable: %s", exc)
+    except Exception as exc:
+        log.warning("Could not load the WebView2 projection: %s", exc)
 
 
 class WebView(WebViewBase):
-    """WebView2 wrapper for Qt widgets.
-    
-    This class creates a WebView2 control and parents it to a Qt widget's
-    native window handle (HWND), allowing it to be embedded in a Qt UI.
-    
-    Usage:
-        # Create a container widget in QML or Python
-        widget = QWindow.fromWinId(hwnd)  # For QML
-        # Or use a QWidget and get its winId()
-        
-        webview = WebView(widget=my_widget)
-        webview.navigate("https://example.com")
-        webview.go_back()
-    """
+    """One native WebView2 controller, parented to HALCYON's QML window."""
+
+    # One WebView2 environment/profile for all HALCYON tabs.  Creating an
+    # environment per tab races the profile lock and creates needless browser
+    # processes.
+    _environment = None
 
     def __init__(
         self,
-        widget: "QWidget | None" = None,
+        parent_hwnd: int,
         initial_url: str = "about:blank",
         on_title_changed: Callable[[str], None] | None = None,
         on_url_changed: Callable[[str], None] | None = None,
         on_loading_changed: Callable[[bool], None] | None = None,
         on_navigation_completed: Callable[[bool], None] | None = None,
     ) -> None:
-        self._widget = widget
-        self._on_title_changed = on_title_changed
-        self._on_url_changed = on_url_changed
-        self._on_loading_changed = on_loading_changed
-        self._on_navigation_completed = on_navigation_completed
+        self._hwnd = int(parent_hwnd)
         self._initial_url = initial_url
-        
-        self._controller: "CoreWebView2Controller | None" = None
-        self._webview: "CoreWebView2Environment | None" = None
+        self._on_title_changed_cb = on_title_changed
+        self._on_url_changed_cb = on_url_changed
+        self._on_loading_changed_cb = on_loading_changed
+        self._on_navigation_completed_cb = on_navigation_completed
+        self._controller = None
+        self._webview = None
         self._initialized = False
-        
-        # Get HWND from widget if provided
-        self._hwnd = None
-        if widget is not None:
-            try:
-                # Qt widget's native window handle
-                self._hwnd = int(widget.winId())
-            except Exception as e:
-                log.warning("Failed to get widget HWND: %s", e)
+        self._closed = False
+        self._bounds = (0, 0, 0, 0)
+        self._visible = False
+        self._event_tokens: list[tuple[object, str, object]] = []
 
-        if not IS_WINDOWS:
-            log.error("WebView2 is only available on Windows")
+        if not IS_WINDOWS or not WEBVIEW2_AVAILABLE or not self._hwnd:
             return
+        self._run_initialization()
 
-        if not WEBVIEW2_AVAILABLE:
-            log.error("WebView2 package not available")
-            return
+    def _run_initialization(self) -> None:
+        """Run WinRT initialisation on Qt's GUI thread.
 
-        # Initialize WebView2
-        self._schedule_init()
-
-    def _schedule_init(self) -> None:
-        """Schedule initialization from Qt event loop."""
+        Qt owns the GUI thread and its COM apartment.  We deliberately do not
+        move this work to a worker thread: WebView2 controllers must belong to
+        their parent window's UI thread.
+        """
         try:
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, self._async_init)
-        except Exception:
-            # Fallback to immediate init
-            self._async_init()
-
-    def _async_init(self) -> None:
-        """Initialize WebView2 asynchronously."""
-        if not WEBVIEW2_AVAILABLE or not self._hwnd:
-            return
-
-        try:
-            import asyncio
-
-            # If an asyncio loop is already running (e.g. pytest-asyncio),
-            # schedule the init coroutine on it — fire-and-forget is fine
-            # because _init_async logs its own errors and queued navigations
-            # are applied on the next navigate() call.
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                # No running loop — asyncio.run() is safe: it creates a
-                # fresh loop, runs the coroutine to completion, and closes
-                # the loop.  This blocks the Qt event loop briefly, which
-                # is acceptable for one-time startup init.
                 asyncio.run(self._init_async())
             else:
                 loop.create_task(self._init_async())
-
-        except Exception as e:
-            log.error("WebView2 async init failed: %s", e)
+        except Exception as exc:
+            log.exception("WebView2 initialisation could not start: %s", exc)
 
     async def _init_async(self) -> None:
-        """Async initialization of WebView2."""
         try:
-            # Create user data directory
-            data_dir = Path.home() / ".halcyon" / "webview2"
-            data_dir.mkdir(parents=True, exist_ok=True)
+            if WebView._environment is None:
+                data_dir = paths.data_dir() / "webview2" / "profile"
+                data_dir.mkdir(parents=True, exist_ok=True)
+                # This is the WinRT API, not the similarly named .NET API:
+                # create_async() has *zero* parameters.  A custom data folder
+                # belongs to create_with_options_async().
+                WebView._environment = await CoreWebView2Environment.create_with_options_async(
+                    "", str(data_dir), None
+                )
 
-            # WinRT CreateAsync has three overloads:
-            #   0 args → CreateAsync()
-            #   2 args → CreateAsync(browserExecutableFolder, userDataFolder)
-            #   3 args → CreateAsync(browserExecutableFolder, userDataFolder, options)
-            # There is NO 1-arg overload — passing a single positional raises
-            # "Invalid parameter count".  Pass None for the first param and the
-            # user-data folder as the second so the 2-arg overload matches.
-            env = await CoreWebView2Environment.create_async(None, str(data_dir))
-            self._webview = env
-
-            # Create controller with our HWND
-            controller = await env.create_core_webview2_controller_async(self._hwnd)
-            self._controller = controller
-
-            # Configure the controller
-            self._setup_controller()
-
+            parent = CoreWebView2ControllerWindowReference.create_from_window_handle(self._hwnd)
+            self._controller = await WebView._environment.create_core_webview2_controller_async(parent)
+            self._webview = self._controller.core_webview2
+            self._controller.default_background_color = (0xFF, 0x0E, 0x11, 0x18)
+            self._controller.bounds = self._bounds
+            self._controller.is_visible = self._visible
+            self._install_events()
             self._initialized = True
-            log.info("WebView2 initialized successfully on HWND: %s", self._hwnd)
-
-            # Navigate to initial URL
             if self._initial_url and self._initial_url != "about:blank":
                 self.navigate(self._initial_url)
             else:
-                # Navigate to blank with our background color
                 self.navigate_to_blank()
-
+            log.info("WebView2 controller created for HALCYON window %s", self._hwnd)
         except FileNotFoundError:
-            log.error("WebView2 Runtime not found. Please install Microsoft Edge WebView2 Runtime.")
-        except Exception as e:
-            log.error("WebView2 initialization failed: %s", e)
+            log.error("WebView2 Runtime is not installed.")
+        except Exception as exc:
+            log.exception("WebView2 controller initialisation failed: %s", exc)
 
-    def _setup_controller(self) -> None:
-        """Set up WebView2 controller properties and event handlers."""
-        if not self._controller:
+    def _install_events(self) -> None:
+        if not self._webview:
             return
+        # PyWinRT events use add_* methods; assigning callbacks to event names
+        # silently does not subscribe in this projection.
+        for add_name, remove_name, callback in (
+            ("add_navigation_started", "remove_navigation_started", self._on_navigation_started),
+            ("add_navigation_completed", "remove_navigation_completed", self._on_navigation_completed),
+            ("add_source_changed", "remove_source_changed", self._on_source_changed),
+            ("add_document_title_changed", "remove_document_title_changed", self._on_document_title_changed),
+        ):
+            try:
+                token = getattr(self._webview, add_name)(callback)
+                self._event_tokens.append((self._webview, remove_name, token))
+            except Exception as exc:
+                log.warning("Could not subscribe to WebView2 event %s: %s", add_name, exc)
 
-        try:
-            # DefaultBackgroundColor is a Windows.UI.Color struct (A,R,G,B).
-            # PyWinRT accepts a plain tuple in place of a projected struct.
-            self._controller.default_background_color = (
-                0xFF, 0x0E, 0x11, 0x18,
-            )  # fully opaque Theme.base
+    def set_bounds(self, x: int, y: int, width: int, height: int, visible: bool) -> None:
+        self._bounds = (max(0, x), max(0, y), max(0, width), max(0, height))
+        self._visible = bool(visible and width > 0 and height > 0)
+        if self._controller:
+            try:
+                self._controller.bounds = self._bounds
+                self._controller.is_visible = self._visible
+            except Exception as exc:
+                log.warning("Could not update WebView2 bounds: %s", exc)
 
-            # Set size to match parent
-            if self._widget:
-                size = self._widget.size()
-                self._controller.bounds = (0, 0, size.width(), size.height())
+    def set_visible(self, visible: bool) -> None:
+        self.set_bounds(*self._bounds, visible)
 
-            # Get CoreWebView for event handling
-            webview = self._controller.core_web_view
-            if webview:
-                # Set up navigation event handlers
-                self._setup_event_handlers(webview)
+    def _on_navigation_started(self, _sender, _args) -> None:
+        if self._on_loading_changed_cb:
+            self._on_loading_changed_cb(True)
 
-        except Exception as e:
-            log.warning("Failed to setup controller: %s", e)
+    def _on_navigation_completed(self, _sender, args) -> None:
+        if self._on_loading_changed_cb:
+            self._on_loading_changed_cb(False)
+        if self._on_navigation_completed_cb:
+            self._on_navigation_completed_cb(bool(args.is_success))
 
-    def _setup_event_handlers(self, webview) -> None:
-        """Set up WebView2 event handlers."""
-        try:
-            # Navigation events
-            webview.navigation_started = self._on_navigation_started
-            webview.navigation_completed = self._on_navigation_completed
-            webview.source_changed = self._on_source_changed
-            
-            # Other events
-            webview.document_title_changed = self._on_document_title_changed
-            
-            log.debug("WebView2 event handlers configured")
-        except Exception as e:
-            log.warning("Failed to setup event handlers: %s", e)
+    def _on_source_changed(self, sender, _args) -> None:
+        if self._on_url_changed_cb:
+            self._on_url_changed_cb(str(sender.source))
 
-    def _on_navigation_started(self, sender, args) -> None:
-        """Handle navigation started."""
-        log.debug("Navigation started")
-        if self._on_loading_changed:
-            self._on_loading_changed(True)
-
-    def _on_navigation_completed(self, sender, args) -> None:
-        """Handle navigation completed."""
-        log.debug("Navigation completed")
-        if self._on_loading_changed:
-            self._on_loading_changed(False)
-        if self._on_navigation_completed:
-            self._on_navigation_completed(args.is_success)
-
-    def _on_source_changed(self, sender, args) -> None:
-        """Handle URL/source changed."""
-        try:
-            url = sender.source
-            log.debug("Source changed: %s", url)
-            if self._on_url_changed:
-                self._on_url_changed(url)
-        except Exception as e:
-            log.warning("Failed to get source: %s", e)
-
-    def _on_document_title_changed(self, sender, args) -> None:
-        """Handle document title changed."""
-        try:
-            title = sender.document_title
-            log.debug("Title changed: %s", title)
-            if self._on_title_changed:
-                self._on_title_changed(title)
-        except Exception as e:
-            log.warning("Failed to get title: %s", e)
+    def _on_document_title_changed(self, sender, _args) -> None:
+        if self._on_title_changed_cb:
+            self._on_title_changed_cb(str(sender.document_title))
 
     def navigate(self, url: str) -> None:
-        """Navigate to URL."""
         if not url:
             return
-
-        if not self._initialized:
-            log.debug("Navigate queued: %s", url)
-            self._initial_url = url
+        self._initial_url = url
+        if not self._initialized or not self._webview:
             return
-
         try:
             if url == "about:blank":
                 self.navigate_to_blank()
             else:
-                webview = self._controller.core_web_view
-                if webview:
-                    webview.navigate(url)
-            log.debug("Navigating to: %s", url)
-        except Exception as e:
-            log.error("Navigation failed for %s: %s", url, e)
+                self._webview.navigate(url)
+        except Exception as exc:
+            log.error("WebView2 navigation failed for %s: %s", url, exc)
 
     def navigate_to_blank(self) -> None:
-        """Navigate to blank page with app theme background."""
-        if not self._initialized:
-            return
-        try:
-            html = "<html><body style='background-color:#0E1118;margin:0;'></body></html>"
-            webview = self._controller.core_web_view
-            if webview:
-                webview.navigate_to_string(html)
-        except Exception as e:
-            log.warning("Navigate to blank failed: %s", e)
+        if self._initialized and self._webview:
+            self._webview.navigate_to_string("<html><body style='margin:0;background:#0E1118'></body></html>")
 
     def go_back(self) -> None:
-        """Go to previous page in history."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                if webview and webview.can_go_back:
-                    webview.go_back()
-            except Exception as e:
-                log.warning("Go back failed: %s", e)
+        if self._webview and self._webview.can_go_back:
+            self._webview.go_back()
 
     def go_forward(self) -> None:
-        """Go to next page in history."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                if webview and webview.can_go_forward:
-                    webview.go_forward()
-            except Exception as e:
-                log.warning("Go forward failed: %s", e)
+        if self._webview and self._webview.can_go_forward:
+            self._webview.go_forward()
 
     def reload(self) -> None:
-        """Reload current page."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                if webview:
-                    webview.reload()
-            except Exception as e:
-                log.warning("Reload failed: %s", e)
+        if self._webview:
+            self._webview.reload()
 
     def stop(self) -> None:
-        """Stop current loading."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                if webview:
-                    webview.stop()
-            except Exception:
-                pass
+        if self._webview:
+            self._webview.stop()
 
     @property
     def can_go_back(self) -> bool:
-        """Check if back navigation is available."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                return webview.can_go_back if webview else False
-            except Exception:
-                pass
-        return False
+        return bool(self._webview and self._webview.can_go_back)
 
     @property
     def can_go_forward(self) -> bool:
-        """Check if forward navigation is available."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                return webview.can_go_forward if webview else False
-            except Exception:
-                pass
-        return False
+        return bool(self._webview and self._webview.can_go_forward)
 
     @property
     def current_url(self) -> str:
-        """Get current URL."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                return webview.source if webview else ""
-            except Exception:
-                pass
-        return ""
+        return str(self._webview.source) if self._webview else self._initial_url
 
     @property
     def current_title(self) -> str:
-        """Get current page title."""
-        if self._controller:
-            try:
-                webview = self._controller.core_web_view
-                return webview.document_title if webview else ""
-            except Exception:
-                pass
-        return ""
+        return str(self._webview.document_title) if self._webview else ""
 
     def update_bounds(self, x: int, y: int, width: int, height: int) -> None:
-        """Update WebView2 bounds."""
-        if self._controller:
-            try:
-                self._controller.bounds = (x, y, width, height)
-            except Exception as e:
-                log.warning("Failed to update bounds: %s", e)
+        self.set_bounds(x, y, width, height, self._visible)
 
     def close(self) -> None:
-        """Close and cleanup the web view."""
-        self._initialized = False
+        self._closed = True
+        for source, remove_name, token in self._event_tokens:
+            try:
+                getattr(source, remove_name)(token)
+            except Exception:
+                pass
+        self._event_tokens.clear()
         if self._controller:
             try:
                 self._controller.close()
             except Exception:
                 pass
-        self._controller = None
-        self._webview = None
-        log.debug("WebView2 closed")
+        self._controller = self._webview = None
+        self._initialized = False

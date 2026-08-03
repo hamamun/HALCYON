@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls.Basic
 import Halcyon.Ui
 
@@ -12,6 +13,34 @@ Item {
             return;
         root.ctx.navigate(addressField.text);
         addressField.selectAll();
+    }
+
+    // WebView2 is a native child window. Keep its native-pixel bounds aligned
+    // with this unchanged QML browser rectangle.
+    function syncBrowserRect() {
+        if (!root.ctx || !browserRect)
+            return;
+        var p = browserRect.mapToItem(null, 0, 0);
+        root.ctx.setBrowserRect(p.x, p.y, browserRect.width, browserRect.height,
+                                root.visible && browserRect.visible);
+    }
+
+    Component.onCompleted: {
+        if (root.ctx && root.Window.window)
+            root.ctx.attachWindow(root.Window.window);
+        Qt.callLater(root.syncBrowserRect);
+    }
+    onVisibleChanged: syncBrowserRect()
+    onWindowChanged: {
+        if (root.ctx && root.Window.window)
+            root.ctx.attachWindow(root.Window.window);
+        syncBrowserRect();
+    }
+    Component.onDestruction: {
+        if (root.ctx) {
+            root.ctx.setOverlayOpen(false);
+            root.ctx.setBrowserRect(0, 0, 0, 0, false);
+        }
     }
 
     Rectangle {
@@ -229,6 +258,11 @@ Item {
         color: "#0E1118"
         border.width: 1
         border.color: Theme.glassBorder
+        onXChanged: root.syncBrowserRect()
+        onYChanged: root.syncBrowserRect()
+        onWidthChanged: root.syncBrowserRect()
+        onHeightChanged: root.syncBrowserRect()
+        onVisibleChanged: root.syncBrowserRect()
 
         BookmarkManager {
             anchors.fill: parent
@@ -265,6 +299,7 @@ Item {
             width: Math.min(parent.width - Theme.spaceXl * 2, 720)
             spacing: Theme.spaceMd
             visible: root.ctx && root.ctx.hasActiveTab && !root.ctx.activeIsManager
+                     && !root.ctx.nativeBrowserVisible
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -314,6 +349,8 @@ Item {
         y: tabsBar.height + addressBar.height - Theme.spaceXs
         onBookmarkPicked: function(sourceIndex) { if (root.ctx) root.ctx.openBookmark(sourceIndex) }
         onManageRequested: if (root.ctx) root.ctx.openBookmarkManager()
+        onOpened: if (root.ctx) root.ctx.setOverlayOpen(true)
+        onClosed: if (root.ctx) root.ctx.setOverlayOpen(false)
     }
 
     Popover {
@@ -322,6 +359,8 @@ Item {
         height: root.ctx && root.ctx.activeBookmarked ? 190 : 150
         x: Math.max(Theme.spaceMd, root.width - width - Theme.spaceXl)
         y: tabsBar.height + addressBar.height - Theme.spaceXs
+        onOpened: if (root.ctx) root.ctx.setOverlayOpen(true)
+        onClosed: if (root.ctx) root.ctx.setOverlayOpen(false)
 
         Column {
             anchors.fill: parent
