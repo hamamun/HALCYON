@@ -70,7 +70,7 @@ QtObject {
 
     // ------------------------------------------------------------- metrics --
     readonly property real titleBarHeight:   44
-    readonly property real leftPanelWidth:   300
+    readonly property real leftPanelWidth:   340
     readonly property real rightPanelWidth:  320
     readonly property real rightPanelExpandedWidth: 560
     readonly property real hitTarget:        40      // §B.1 — every icon button

@@ -170,21 +170,56 @@ Item {
         // selector above turns them off entirely with "No group".
         section.property: root.ctx && root.ctx.channels.grouping !== "none" ? "groupKey" : ""
         section.criteria: ViewSection.FullString
-        section.delegate: Item {
+        section.labelPositioning: ViewSection.CurrentLabelAtStart | ViewSection.InlineLabels
+        section.delegate: Rectangle {
+            id: sectionHeader
             width: list.width
-            height: 26
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
+            height: 28
+            color: headerArea.containsMouse ? Theme.glassFillHover : Theme.glassFill
+            radius: Theme.radiusSmall
+
+            readonly property bool isExpanded: root.ctx && root.ctx.channels.expandedGroup === section
+            readonly property string displayName: section.length > 0 ? section
+                  : (root.ctx && (root.ctx.channels.grouping === "country"
+                                  || root.ctx.channels.grouping === "language")
+                     ? "Unknown" : "Ungrouped")
+            readonly property int count: root.ctx ? root.ctx.channels.groupCount(section) : 0
+
+            Row {
                 anchors.left: parent.left
-                anchors.leftMargin: Theme.spaceXs
-                text: section.length > 0 ? section
-                      : (root.ctx && (root.ctx.channels.grouping === "country"
-                                      || root.ctx.channels.grouping === "language")
-                         ? "Unknown" : "Ungrouped")
-                font.family: Theme.fontFamily
-                font.pixelSize: Theme.fontSizeTiny
-                font.weight: Theme.weightBold
-                color: Theme.textFaint
+                anchors.leftMargin: Theme.spaceSm
+                anchors.right: parent.right
+                anchors.rightMargin: Theme.spaceSm
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Theme.spaceSm
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: sectionHeader.isExpanded ? Glyphs.chevronDown : Glyphs.chevronRight
+                    font.family: Theme.fontFamilyIcons
+                    font.pixelSize: 12
+                    color: sectionHeader.isExpanded ? Theme.accent : Theme.textMuted
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: sectionHeader.count > 0
+                          ? sectionHeader.displayName + " (" + sectionHeader.count + ")"
+                          : sectionHeader.displayName
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeTiny
+                    font.weight: Theme.weightBold
+                    color: sectionHeader.isExpanded ? Theme.text : Theme.textMuted
+                }
+            }
+
+            MouseArea {
+                id: headerArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (root.ctx) root.ctx.channels.toggleGroup(section)
             }
         }
 
@@ -200,8 +235,11 @@ Item {
             required property string group
             required property string logo
             required property bool isCurrent
+            required property bool isGroupExpanded
 
             width: ListView.view.width
+            height: isGroupExpanded ? Theme.listRowHeight : 0
+            visible: isGroupExpanded
             current: isCurrent
 
             onClicked: if (root.ctx) root.ctx.play_index(index)
@@ -239,7 +277,7 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - 34 - groupTag.width - Theme.spaceSm * 3
+                    width: parent.width - 34 - (groupTag.visible ? groupTag.width : 0) - Theme.spaceSm * (groupTag.visible ? 3 : 2)
                     text: row.name
                     elide: Text.ElideRight
                     font.family: Theme.fontFamily
@@ -249,6 +287,7 @@ Item {
                 Text {
                     id: groupTag
                     anchors.verticalCenter: parent.verticalCenter
+                    visible: root.ctx && root.ctx.channels.grouping === "none"
                     text: row.group
                     elide: Text.ElideRight
                     maximumLineCount: 1

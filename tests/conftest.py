@@ -86,7 +86,7 @@ def gui_app(qt_application):
     return qt_application
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _drain_probe_threadpool():
     """Let the global QThreadPool finish before the interpreter tears down.
 
@@ -104,6 +104,6 @@ def _drain_probe_threadpool():
     try:
         from PySide6.QtCore import QThreadPool
 
-        QThreadPool.globalInstance().waitForDone(2000)
+        QThreadPool.globalInstance().waitForDone(1000)
     except Exception:
         pass
