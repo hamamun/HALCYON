@@ -13,8 +13,6 @@ WebView2 Integration:
 from __future__ import annotations
 
 import logging
-import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
@@ -445,30 +443,6 @@ class RuntimeStatus:
 def _runtime_status() -> RuntimeStatus:
     available, message = check_webview2_available()
     return RuntimeStatus(available, message)
-
-
-def _webview2_version() -> str:
-    if sys.platform != "win32":
-        return ""
-    try:
-        import winreg
-    except Exception:
-        return ""
-
-    keys = [
-        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F1E7A9BD-E883-4C4D-93C0-6F7E1B0C136A}"),
-    ]
-    for root, subkey in keys:
-        try:
-            with winreg.OpenKey(root, subkey) as key:
-                value, _ = winreg.QueryValueEx(key, "pv")
-                if value:
-                    return str(value)
-        except OSError:
-            continue
-    return ""
 
 
 def build_web_context(engine=None, controller=None, settings=None):
