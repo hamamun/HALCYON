@@ -150,8 +150,8 @@ Dialog {
                         spacing: Theme.spaceXs
 
                         IconButton {
-                            glyph: Glyphs.settings
-                            tooltip: "Edit"
+                            glyph: Glyphs.edit
+                            tooltip: "Edit playlist"
                             onClicked: root.editSource(sourceRow.modelData)
                         }
                         IconButton {
@@ -189,10 +189,10 @@ Dialog {
                 color: Theme.textFaint
                 lineHeight: 1.35
             }
-            TextButton {
+            IconButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Add URL…"
-                glyph: Glyphs.globe
+                glyph: Glyphs.link
+                tooltip: "Add URL…"
                 onClicked: addUrlDialog.open()
             }
         }
@@ -218,23 +218,23 @@ Dialog {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.spaceSm
 
-            TextButton {
-                text: "Add URL…"
-                glyph: Glyphs.globe
+            IconButton {
+                glyph: Glyphs.link
+                tooltip: "Add URL…"
                 enabled: root.ctx && !root.ctx.sourcesFull
                 onClicked: addUrlDialog.open()
             }
-            TextButton {
-                text: "Add File…"
+            IconButton {
                 glyph: Glyphs.openFile
+                tooltip: "Add File…"
                 enabled: root.ctx && !root.ctx.sourcesFull
                 onClicked: fileDialog.open()
             }
-            TextButton {
-                // Row-level Edit exists; this is for keyboard-first users who
-                // select a row — same function, not a copy (§4.1).
-                text: "Load"
-                primary: true
+            IconButton {
+                // A selected row reaches the same load function as a
+                // double-click (§4.1), now through the shared icon vocabulary.
+                glyph: Glyphs.load
+                tooltip: "Load playlist"
                 enabled: sourceList.currentIndex >= 0
                 onClicked: {
                     var entry = sourceList.model[sourceList.currentIndex];
@@ -403,8 +403,16 @@ Dialog {
                 anchors.right: parent.right
                 spacing: Theme.spaceSm
 
-                TextButton { text: "Cancel"; onClicked: editDialog.close() }
-                TextButton { text: "Save"; primary: true; onClicked: editDialog.save() }
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    onClicked: editDialog.close()
+                }
+                IconButton {
+                    glyph: Glyphs.save
+                    tooltip: "Save playlist"
+                    onClicked: editDialog.save()
+                }
             }
         }
 

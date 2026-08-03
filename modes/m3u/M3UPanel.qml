@@ -84,16 +84,20 @@ Item {
 
         Repeater {
             model: [
-                { "key": "category", "label": "Category" },
-                { "key": "country",  "label": "Country" },
-                { "key": "language", "label": "Language" },
-                { "key": "none",     "label": "No group" }
+                { "key": "category", "glyph": Glyphs.category,
+                  "tooltip": "Group by category" },
+                { "key": "country",  "glyph": Glyphs.country,
+                  "tooltip": "Group by country" },
+                { "key": "language", "glyph": Glyphs.language,
+                  "tooltip": "Group by language" },
+                { "key": "none",     "glyph": Glyphs.noGroup,
+                  "tooltip": "No grouping" }
             ]
-            delegate: TextButton {
+            delegate: IconButton {
                 anchors.verticalCenter: parent.verticalCenter
-                text: modelData.label
-                primary: root.ctx && root.ctx.channels.grouping === modelData.key
-                implicitHeight: 28
+                glyph: modelData.glyph
+                tooltip: modelData.tooltip
+                active: root.ctx && root.ctx.channels.grouping === modelData.key
                 onClicked: if (root.ctx) root.ctx.persistGrouping(modelData.key)
             }
         }
