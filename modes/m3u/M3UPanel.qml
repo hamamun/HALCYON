@@ -162,7 +162,7 @@ Item {
         anchors.topMargin: Theme.spaceSm
         clip: true
         model: root.ctx ? root.ctx.channels : null
-        spacing: 1
+        spacing: 0
         visible: root.ctx && root.ctx.channels.count > 0
         boundsBehavior: Flickable.StopAtBounds
 
@@ -195,9 +195,10 @@ Item {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: sectionHeader.isExpanded ? Glyphs.chevronDown : Glyphs.chevronRight
-                    font.family: Theme.fontFamilyIcons
-                    font.pixelSize: 12
+                    text: sectionHeader.isExpanded ? Glyphs.chevronDown : "\u203A"
+                    font.family: sectionHeader.isExpanded ? Theme.fontFamilyIcons : Theme.fontFamily
+                    font.pixelSize: sectionHeader.isExpanded ? 12 : 16
+                    font.weight: Font.Bold
                     color: sectionHeader.isExpanded ? Theme.accent : Theme.textMuted
                 }
 
@@ -212,6 +213,18 @@ Item {
                     font.weight: Theme.weightBold
                     color: sectionHeader.isExpanded ? Theme.text : Theme.textMuted
                 }
+            }
+
+            // 1px bottom separator so headers stay visually distinct when
+            // collapsed (no ListView.spacing to do it for us).
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.leftMargin: Theme.spaceSm
+                anchors.right: parent.right
+                anchors.rightMargin: Theme.spaceSm
+                height: 1
+                color: Theme.glassBorder
             }
 
             MouseArea {
