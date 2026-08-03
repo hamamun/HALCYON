@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -30,14 +31,22 @@ IS_WINDOWS = sys.platform == "win32"
 WEBVIEW2_AVAILABLE = False
 _webview2_core = None
 
+PACKAGE_NAME = "webview2-Microsoft.Web.WebView2.Core"
+
+# The distribution ``webview2-Microsoft.Web.WebView2.Core`` installs the
+# lowercase namespace package ``webview2.microsoft.web.webview2.core``.
+WEBVIEW2_MODULE = "webview2.microsoft.web.webview2.core"
+
 if IS_WINDOWS:
     try:
-        import webview2_Microsoft.Web.WebView2.Core as _webview2_core
+        import importlib
+
+        _webview2_core = importlib.import_module(WEBVIEW2_MODULE)
         WEBVIEW2_AVAILABLE = True
-        log.debug("webview2-Microsoft.Web.WebView2.Core imported successfully")
+        log.debug("%s imported successfully", WEBVIEW2_MODULE)
     except ImportError as e:
-        log.info("webview2-Microsoft.Web.WebView2.Core not installed: %s", e)
-        log.info("Install with: pip install webview2-Microsoft.Web.WebView2.Core")
+        log.info("%s not installed: %s", PACKAGE_NAME, e)
+        log.info("Install with: pip install %s", PACKAGE_NAME)
     except Exception as e:
         log.warning("Failed to import WebView2: %s", e)
 
@@ -88,6 +97,64 @@ def check_webview2_available() -> tuple[bool, str]:
     return False, "Microsoft Edge WebView2 Runtime not found. It should be included with Windows 11 or available via Windows Update on Windows 10."
 
 
+class WebViewBase(ABC):
+    """Platform-agnostic contract for an embedded web view.
+
+    ``modes.web.webview2_windows.WebView`` is the Windows/WebView2 implementation.
+    Other backends (or test doubles) only need to satisfy this surface for
+    :class:`modes.web.webview2_host.WebContext` to drive them.
+    """
+
+    @abstractmethod
+    def navigate(self, url: str) -> None:
+        """Navigate to ``url``."""
+
+    @abstractmethod
+    def go_back(self) -> None:
+        """Go to the previous page in history."""
+
+    @abstractmethod
+    def go_forward(self) -> None:
+        """Go to the next page in history."""
+
+    @abstractmethod
+    def reload(self) -> None:
+        """Reload the current page."""
+
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop the current load."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Tear down the view and release native resources."""
+
+    # --- Optional surface: sensible defaults so partial backends still work ---
+
+    def navigate_to_blank(self) -> None:
+        """Show an empty themed page."""
+        self.navigate("about:blank")
+
+    def update_bounds(self, x: int, y: int, width: int, height: int) -> None:
+        """Reposition/resize the native view. No-op for backends without bounds."""
+
+    @property
+    def can_go_back(self) -> bool:
+        return False
+
+    @property
+    def can_go_forward(self) -> bool:
+        return False
+
+    @property
+    def current_url(self) -> str:
+        return ""
+
+    @property
+    def current_title(self) -> str:
+        return ""
+
+
 def create_webview(
     widget: "QWidget | None" = None,
     initial_url: str = "about:blank",
@@ -95,7 +162,7 @@ def create_webview(
     on_url_changed: Callable[[str], None] | None = None,
     on_loading_changed: Callable[[bool], None] | None = None,
     on_navigation_completed: Callable[[bool], None] | None = None,
-) -> "WebView | None":
+) -> "WebViewBase | None":
     """Create a WebView2 instance attached to a Qt widget.
     
     Args:
@@ -132,6 +199,10 @@ def create_webview(
         return None
 
 
-# Re-export for convenience
-from modes.web.webview_integration import WebViewBase
-__all__ = ["check_webview2_available", "create_webview", "WebViewBase"]
+__all__ = [
+    "WEBVIEW2_AVAILABLE",
+    "IS_WINDOWS",
+    "WebViewBase",
+    "check_webview2_available",
+    "create_webview",
+]

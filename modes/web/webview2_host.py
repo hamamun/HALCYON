@@ -53,7 +53,7 @@ class WebContext(QObject):
         self._tabs = TabModel(self)
         self._bookmarks = BookmarkModel(parent=self)
         self._runtime_status = _runtime_status()
-        self._webviews: dict[int, "webview_integration.WebView | None"] = {}
+        self._webviews: dict[int, "webview_integration.WebViewBase | None"] = {}
         self._container_widget = None
         self._webview_initialized = False
         

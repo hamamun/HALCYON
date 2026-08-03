@@ -1,8 +1,14 @@
 # Web mode dependencies - Windows WebView2 integration
-# These packages provide access to Windows' built-in WebView2 Runtime
-
-# WinRT APIs for WebView2 - pure Python, no extra DLLs needed
-webview2-Microsoft.Web.WebView2.Core>=1.0.0
-
-# Alternative: winrt with WebView2 (choose one)
-# winrt>=5.0.0
+# These packages provide access to Windows' built-in WebView2 Runtime.
+#
+# Windows-only: the wheels are win32/win_amd64/win_arm64 for CPython 3.9-3.14.
+# On non-Windows the Web mode degrades gracefully (runtime status reports
+# "available on Windows builds only"), so this file is a no-op there.
+#
+# Import namespace is lowercase and does NOT match the distribution name:
+#     pip install  webview2-Microsoft.Web.WebView2.Core
+#     import       webview2.microsoft.web.webview2.core
+#
+# The [all] extra pulls in the winrt-Windows.Foundation projections that the
+# async create_*_async() calls need; without it initialisation fails at runtime.
+webview2-Microsoft.Web.WebView2.Core[all]>=3.2.1; sys_platform == "win32"
