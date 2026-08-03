@@ -120,11 +120,11 @@ Popover {
     // Best matches and the ListView in More results both delegate to this.
     //
     // The download button is a *sibling* of the ListRow rather than a child of
-    // its content: ListRow's own MouseArea fills the row and, being declared
-    // after the content slot, would consume every click before a nested
-    // AbstractButton could see it. Layering the button on top of the row at
-    // the same level keeps the row's hover feedback and lets the button
-    // receive clicks — one MouseArea per interactive rectangle, no overlap.
+    // its content. ListRow's own MouseArea stacks beneath the content slot
+    // (see ListRow.qml), so a nested button would work too — but keeping the
+    // button at the same level as the row keeps the row reusable as pure
+    // background + selection and makes the hit areas explicit: one interactive
+    // rectangle per row, no overlap.
     Component {
         id: resultRow
 

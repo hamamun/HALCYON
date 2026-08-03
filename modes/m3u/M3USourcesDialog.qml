@@ -431,6 +431,7 @@ Dialog {
         property var entry: null
 
         title: "Delete playlist"
+        confirmText: "Delete"
         message: entry ? "Remove “" + entry.name + "” from your saved playlists?"
                        : ""
         onConfirmed: if (entry) root.ctx.removeSource(entry.id)
