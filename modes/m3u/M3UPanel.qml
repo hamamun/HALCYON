@@ -140,8 +140,8 @@ Item {
     }
 
     // -------------------------------------------------------- status strip --
-    // Load/stream errors surface here with the one Retry affordance (§M2.4);
-    // a dead playlist never crashes the panel and never fails silently.
+    // Load errors surface here with the Retry affordance (§M2.4).
+    // Stream play errors go to a toast instead.
     Rectangle {
         id: statusStrip
         anchors.top: filterField.bottom
@@ -176,6 +176,17 @@ Item {
             visible: root.ctx && root.ctx.statusIsError
             implicitHeight: 26
             onClicked: if (root.ctx) root.ctx.retry()
+        }
+    }
+
+    // -------------------------------------------------------- stream error toast --
+    // Stream play failures show as a toast, not in the panel (§M2.4).
+    Connections {
+        target: root.ctx
+        function onStreamError(message) {
+            // osdLayer is provided by the shell; show a toast for stream errors.
+            if (typeof osdLayer !== "undefined" && osdLayer)
+                osdLayer.show(message, Glyphs.alert);
         }
     }
 
