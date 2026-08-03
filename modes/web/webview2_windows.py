@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
     from PySide6.QtCore import QObject
 
+from modes.web.webview_integration import WebViewBase
+
 log = logging.getLogger(__name__)
 
 IS_WINDOWS = sys.platform == "win32"
@@ -26,7 +28,13 @@ _CoreWebView2Controller = None
 
 if IS_WINDOWS:
     try:
-        from webview2_Microsoft.Web.WebView2.Core import CoreWebView2Environment, CoreWebView2Controller
+        from webview2.microsoft.web.webview2.core import (  # type: ignore[import-not-found]
+            CoreWebView2Controller,
+            CoreWebView2Environment,
+        )
+
+        _CoreWebView2Environment = CoreWebView2Environment
+        _CoreWebView2Controller = CoreWebView2Controller
         WEBVIEW2_AVAILABLE = True
     except ImportError as e:
         log.info("webview2-Microsoft.Web.WebView2.Core not available: %s", e)
@@ -34,7 +42,7 @@ if IS_WINDOWS:
         log.warning("Failed to import WebView2: %s", e)
 
 
-class WebView:
+class WebView(WebViewBase):
     """WebView2 wrapper for Qt widgets.
     
     This class creates a WebView2 control and parents it to a Qt widget's
