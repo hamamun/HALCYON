@@ -140,30 +140,6 @@ class WebContext(QObject):
     def closeTab(self, index: int) -> None:  # noqa: N802
         self._tabs.close(index)
 
-    @Slot(str)
-    def navigate(self, text: str) -> None:
-        self._tabs.navigateActive(text)
-
-    @Slot()
-    def goBack(self) -> None:  # noqa: N802
-        self._tabs.back()
-
-    @Slot()
-    def goForward(self) -> None:  # noqa: N802
-        self._tabs.forward()
-
-    @Slot()
-    def reload(self) -> None:
-        self._tabs.reload()
-
-    @Slot()
-    def stop(self) -> None:
-        self._tabs.stop()
-
-    @Slot()
-    def home(self) -> None:
-        self._tabs.home()
-
     @Slot(int)
     def openBookmark(self, source_index: int) -> None:  # noqa: N802
         item = self._bookmarks.get(source_index)
