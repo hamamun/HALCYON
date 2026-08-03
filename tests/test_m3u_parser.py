@@ -46,7 +46,8 @@ def test_basic_extinf_attributes() -> None:
     assert first.name == "BBC One HD"
     assert first.group == "News"
     assert first.logo == "https://img/bbc1.png"
-    assert first.country == "UK"
+    assert first.country == "United Kingdom"  # resolver converts "UK" to full name
+    assert first.language == "English"         # resolved from country
     assert first.tvg_id == "bbc1.uk"
     assert first.is_remote
 
@@ -142,3 +143,108 @@ def test_looks_like_playlist_ref() -> None:
     assert looks_like_playlist_ref("/lists/sub.m3u")
     assert not looks_like_playlist_ref("http://x/stream/123")
     assert not looks_like_playlist_ref("film.mkv")
+
+
+# ------------------------------------------------------------------
+# Country & Language resolution tests
+# ------------------------------------------------------------------
+
+def test_country_strategy1_explicit_attribute() -> None:
+    """Strategy 1: explicit tvg-country attribute."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-country="DE",ARD\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "Germany"
+
+
+def test_country_strategy1_alternate_attr_names() -> None:
+    """Strategy 1: alternative attribute names (country, nation, region)."""
+    for attr in ("country", "nation", "region", "tvg-nation", "tvg-region"):
+        text = f'#EXTM3U\n#EXTINF:-1 {attr}="FR",TF1\nhttp://x/1\n'
+        result = parse_m3u(text)
+        assert result.channels[0].country == "France", f"failed for attr {attr}"
+
+
+def test_country_strategy2_tvg_id_pattern() -> None:
+    """Strategy 2: extract country from tvg-id like 'BBC.uk' or 'CNN.us@East'."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-id="BBC.uk",BBC One\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "United Kingdom"
+
+    text = '#EXTM3U\n#EXTINF:-1 tvg-id="CNN.us@East",CNN\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "United States"
+
+
+def test_country_strategy3_group_title_splitting() -> None:
+    """Strategy 3: extract country from group-title like 'UK | Sports'."""
+    text = '#EXTM3U\n#EXTINF:-1 group-title="UK | Sports",BBC Sport\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "United Kingdom"
+
+    # Should skip category words (Sports) and find the country code
+    text = '#EXTM3U\n#EXTINF:-1 group-title="DE - News",ARD\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "Germany"
+
+
+def test_country_strategy3_skips_category_words() -> None:
+    """Strategy 3 must not mistake 'US' in 'US Sports' as something else,
+    but must skip 'Sports' as a non-country word."""
+    text = '#EXTM3U\n#EXTINF:-1 group-title="US / Sports",ESPN\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "United States"
+
+
+def test_country_strategy4_title_pattern() -> None:
+    """Strategy 4: extract country from title like '[UK] BBC' or 'UK: CNN'."""
+    text = '#EXTM3U\n#EXTINF:-1,[UK] BBC One\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "United Kingdom"
+
+    text = '#EXTM3U\n#EXTINF:-1,DE: ARD\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "Germany"
+
+
+def test_country_strategy_priority() -> None:
+    """Strategy 1 (explicit) wins over strategies 2-4."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-country="FR" tvg-id="BBC.uk" group-title="DE | News",[US] BBC\nhttp://x/1\n'
+    result = parse_m3u(text)
+    # Explicit tvg-country="FR" wins
+    assert result.channels[0].country == "France"
+
+
+def test_country_empty_when_nothing_matches() -> None:
+    """No country data at all → empty string."""
+    text = '#EXTM3U\n#EXTINF:-1 group-title="News",Generic Channel\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == ""
+
+
+def test_language_explicit_attribute() -> None:
+    """Explicit tvg-language is used directly."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-language="Arabic",Al Jazeera\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].language == "Arabic"
+
+
+def test_language_fallback_from_country() -> None:
+    """When tvg-language is missing, language is resolved from country."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-country="JP",NHK\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].country == "Japan"
+    assert result.channels[0].language == "Japanese"
+
+
+def test_language_explicit_wins_over_country() -> None:
+    """Explicit tvg-language wins over country-based inference."""
+    text = '#EXTM3U\n#EXTINF:-1 tvg-country="US" tvg-language="Spanish",Univision\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].language == "Spanish"
+
+
+def test_language_empty_when_nothing_matches() -> None:
+    """No language data at all → empty string."""
+    text = '#EXTM3U\n#EXTINF:-1 group-title="Music",Random Stream\nhttp://x/1\n'
+    result = parse_m3u(text)
+    assert result.channels[0].language == ""

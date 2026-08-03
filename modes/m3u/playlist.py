@@ -46,6 +46,7 @@ log = logging.getLogger(__name__)
 GROUPING_NONE = "none"
 GROUPING_CATEGORY = "category"
 GROUPING_COUNTRY = "country"
+GROUPING_LANGUAGE = "language"
 
 
 class ChannelModel(QAbstractListModel):
@@ -59,6 +60,7 @@ class ChannelModel(QAbstractListModel):
     UrlRole = Qt.UserRole + 5
     GroupKeyRole = Qt.UserRole + 6
     IsCurrentRole = Qt.UserRole + 7
+    LanguageRole = Qt.UserRole + 8
 
     countChanged = Signal()
     currentIndexChanged = Signal()
@@ -87,6 +89,8 @@ class ChannelModel(QAbstractListModel):
             return channel.group
         if role == self.CountryRole:
             return channel.country
+        if role == self.LanguageRole:
+            return channel.language
         if role == self.LogoRole:
             return channel.logo
         if role == self.UrlRole:
@@ -102,6 +106,7 @@ class ChannelModel(QAbstractListModel):
             self.NameRole: b"name",
             self.GroupRole: b"group",
             self.CountryRole: b"country",
+            self.LanguageRole: b"language",
             self.LogoRole: b"logo",
             self.UrlRole: b"url",
             self.GroupKeyRole: b"groupKey",
@@ -154,7 +159,7 @@ class ChannelModel(QAbstractListModel):
 
     @Slot(str)
     def setGrouping(self, grouping: str) -> None:  # noqa: N802
-        if grouping not in (GROUPING_NONE, GROUPING_CATEGORY, GROUPING_COUNTRY):
+        if grouping not in (GROUPING_NONE, GROUPING_CATEGORY, GROUPING_COUNTRY, GROUPING_LANGUAGE):
             return
         if grouping == self._grouping:
             return
@@ -232,6 +237,8 @@ class ChannelModel(QAbstractListModel):
             return channel.group
         if self._grouping == GROUPING_COUNTRY:
             return channel.country
+        if self._grouping == GROUPING_LANGUAGE:
+            return channel.language
         return ""
 
     def _rebuild_view(self) -> None:
@@ -242,6 +249,7 @@ class ChannelModel(QAbstractListModel):
                 if self._filter in c.name.casefold()
                 or self._filter in c.group.casefold()
                 or self._filter in c.country.casefold()
+                or self._filter in c.language.casefold()
             ]
         if self._grouping != GROUPING_NONE:
             view.sort(key=lambda c: (self._group_key(c).casefold()

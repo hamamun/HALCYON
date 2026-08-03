@@ -7,8 +7,8 @@ import Halcyon.Ui
 // The toolbar holds EXACTLY TWO buttons: Playlists… (the one home for every
 // way a source enters M3U, §4.1) and Clear Playlist. The body is the channel
 // list from the loaded source: name, group tag, tvg-logo thumbnail, a filter
-// box, and a grouping selector (By category / By country / No group —
-// remembered). Single click plays. The playing channel is always highlighted
+// box, and a grouping selector (By category / By country / By language /
+// No group — remembered). Single click plays. The playing channel is always
 // and kept visible. There is no right dock in this mode and nothing here is
 // shared with Local (§A.1).
 Item {
@@ -73,7 +73,7 @@ Item {
     }
 
     // ------------------------------------------------------- grouping row --
-    // By category (default) / By country / No group — remembered (§P2.4).
+    // By category (default) / By country / By language / No group — remembered (§P2.4).
     Row {
         id: groupRow
         anchors.top: sourceStrip.bottom
@@ -86,6 +86,7 @@ Item {
             model: [
                 { "key": "category", "label": "Category" },
                 { "key": "country",  "label": "Country" },
+                { "key": "language", "label": "Language" },
                 { "key": "none",     "label": "No group" }
             ]
             delegate: TextButton {
@@ -177,7 +178,8 @@ Item {
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.spaceXs
                 text: section.length > 0 ? section
-                      : (root.ctx && root.ctx.channels.grouping === "country"
+                      : (root.ctx && (root.ctx.channels.grouping === "country"
+                                      || root.ctx.channels.grouping === "language")
                          ? "Unknown" : "Ungrouped")
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeTiny
