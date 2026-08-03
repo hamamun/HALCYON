@@ -272,6 +272,7 @@ Shell {
         }
         function exitFullscreen()  { if (window.fullscreen) toggleFullscreen() }
         function toggleLeftPanel() {
+            if (!window.leftDockAvailable()) return;   // Web: bookmarks live in top-bar menu
             window.leftPanelOpen = !window.leftPanelOpen;
             Settings.set("window.leftPanelVisible", window.leftPanelOpen);
         }
@@ -321,6 +322,10 @@ Shell {
     // The right dock (Info / Lyrics / Equalizer) is deliberately independent
     // from transport feedback. M3U can show a toast without inheriting Local's
     // rich media panels; future modes make the same decision in their spec.
+    function leftDockAvailable() {
+        return !!modeSpec && modeSpec.panelQml !== "";
+    }
+
     function rightDockAvailable() {
         return !!modeSpec && modeSpec.rightDockEnabled;
     }
@@ -530,7 +535,7 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
-                open: !window.fullscreen && window.leftPanelOpen
+                open: !window.fullscreen && window.leftPanelOpen && window.leftDockAvailable()
                 source: window.modeSpec ? window.modeSpec.panelQml : ""
                 blurSource: stage
                 z: 10
@@ -816,7 +821,7 @@ Shell {
             var shift = event.modifiers & Qt.ShiftModifier;
             var ctrl = event.modifiers & Qt.ControlModifier;
 
-            if (ctrl) {
+            if (ctrl && window.activeMode !== "web") {
                 switch (event.key) {
                 case Qt.Key_O: Actions.addFiles();       event.accepted = true; return;
                 case Qt.Key_E: Actions.showEqualizer();  event.accepted = true; return;

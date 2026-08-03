@@ -82,9 +82,15 @@ QtObject {
     readonly property string music:      "\uE8D6"
     readonly property string video:      "\uE714"
     readonly property string bookmark:   "\uE734"
+    readonly property string bookmarkFilled: "\uE735"
+    readonly property string bookmarkManager: "\uE8FD"  // list-style manage icon, not Settings
     readonly property string globe:      "\uE774"
     readonly property string refresh:    "\uE72C"
     readonly property string home:       "\uE80F"
+    readonly property string back:       "\uE72B"
+    readonly property string forward:    "\uE72A"
+    readonly property string more:       "\uE712"
+    readonly property string add:        "\uE710"
 
     // Right-dock widen/narrow, used by the Lyrics tab.
     //

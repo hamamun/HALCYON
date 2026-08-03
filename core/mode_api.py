@@ -34,7 +34,8 @@ class ModeSpec:
     #: Title-bar chip label (§P1.4).
     title: str
 
-    #: Left-dock panel, a QML URL.
+    #: Left-dock panel, a QML URL. Empty string = this mode has no left dock
+    #: (Web keeps bookmarks in its top-bar dropdown and manager tab).
     panel_qml: str
 
     #: The mode's own control bar, assembled from shared ``ui/transport/`` parts
@@ -74,8 +75,9 @@ class ModeSpec:
             raise ValueError(f"ModeSpec.id must be a valid identifier, got {self.id!r}")
         if not self.title:
             raise ValueError(f"ModeSpec({self.id}).title must not be empty")
-        if not self.panel_qml:
-            raise ValueError(f"ModeSpec({self.id}).panel_qml must not be empty")
+        # ``panel_qml`` may be empty: Web mode deliberately has no left dock.
+        # Modes that do declare a panel still resolve through the shell's single
+        # PanelHost slot.
 
     @property
     def has_transport(self) -> bool:

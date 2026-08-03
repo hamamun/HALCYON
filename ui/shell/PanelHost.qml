@@ -3,9 +3,9 @@ import Halcyon.Ui
 
 // The single left dock slot — §P1.2.
 //
-// One slot, N panels. Local's queue, M3U's channels and Web's bookmarks all land
-// here, loaded from `ModeSpec.panel_qml`. Three panels, one slot, zero
-// duplication (§P3.5).
+// One slot, N panels. Local's queue and M3U's channels land here, loaded from
+// `ModeSpec.panel_qml`. A mode may leave the slot empty — Web keeps bookmarks in
+// its top-bar dropdown and manager tab (§P3.5).
 //
 // The dock itself — width, glass, collapse animation — is shared and identical.
 // What the panel puts inside is entirely the mode's business (§B.2).

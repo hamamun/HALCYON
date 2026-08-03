@@ -14,7 +14,7 @@
 
 ## Progress
 
-*One table. Counts are real — regenerated from the boxes below on 2026-08-02
+*One table. Counts are real — regenerated from the boxes below on 2026-08-03
 (the two tables that used to sit here disagreed with each other and with the
 file; both were replaced).*
 
@@ -22,9 +22,9 @@ file; both were replaced).*
 |---|---|---|---|---|
 | 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
-| 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
-| 3 — Web | 0 / 5 | 0 / 62 | 0 / 40 | `v1.0.0` |
-| **Total** | — | **233 / 303** | **104 / 206** | |
+| 2 — M3U | 5 / 5 | 58 / 58 | 62 / 62 | `v0.2.0-m3u` *(signed off 2026-08-03)* |
+| 3 — Web | 0 / 5 | 0 / 76 | 0 / 57 | `v1.0.0` |
+| **Total** | — | **233 / 317** | **166 / 224** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -471,7 +471,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Nested / chained playlist references handled or explicitly ignored
 - [x] `modes/m3u/playlist.py` — channel model
 
-◻ Parses real-world IPTV playlists · ◻ Malformed files don't crash · ◻ Groups and logos extracted
+◼ Parses real-world IPTV playlists · ◼ Malformed files don't crash · ◼ Groups and logos extracted
 
 ---
 
@@ -486,7 +486,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] ★ Append one entry to `core/modes.py`; v3.5's generic `right_dock_enabled` capability split is the documented owner-approved shared exception
 - [x] Second chip appears in the title bar **with no `TitleBar.qml` edit** · §P1.4
 
-◻ Both chips render · ◻ Switching works · ◻ shared diff contains only the documented generic v3.5 capability split
+◼ Both chips render · ◼ Switching works · ◼ shared diff contains only the documented generic v3.5 capability split
 
 ---
 
@@ -521,11 +521,11 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] No reorder — the file defines order
 - [x] ★ **No right panel in M3U** — Ctrl+I inert, EQ not offered; Local's right dock untouched (owner decision 2026-08-02) · §P2.4
 
-◻ Channels list with logos and groups · ◻ Filter works · ◻ one-click clear × restores the full list
-◻ Toolbar is exactly Playlists… + Clear Playlist · ◻ Manager caps at 7; add/edit/delete work
-◻ Loading a source stops the stream · ◻ Last-used source restores · ◻ Dead sources fail with retry, no crash
-◻ Grouping: category / country / none — remembered · ◻ Playing channel stays visible when zapping
-◻ No right panel; Ctrl+I does nothing
+◼ Channels list with logos and groups · ◼ Filter works · ◼ one-click clear × restores the full list
+◼ Toolbar is exactly Playlists… + Clear Playlist · ◼ Manager caps at 7; add/edit/delete work
+◼ Loading a source stops the stream · ◼ Last-used source restores · ◼ Dead sources fail with retry, no crash
+◼ Grouping: category / country / none — remembered · ◼ Playing channel stays visible when zapping
+◼ No right panel; Ctrl+I does nothing
 
 ---
 
@@ -541,7 +541,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Stream error state: clear message, no crash, no hang
 - [x] Connection timeout handled with a retry affordance
 
-◻ Exactly seven controls, one row · ◻ Layout looks designed for seven, balanced, no gaps · ◻ Buttons visually identical to Local's · ◻ Unreachable stream fails gracefully
+◼ Exactly seven controls, one row · ◼ Layout looks designed for seven, balanced, no gaps · ◼ Buttons visually identical to Local's · ◼ Unreachable stream fails gracefully
 
 ---
 
@@ -557,59 +557,59 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Minimal hover controls (play/pause, close) — from shared components
 - [x] Position and size remembered
 
-◻ Opens, stays on top, resizes, snaps · ◻ Main window minimises, PiP keeps playing · ◻ **CPU rise vs non-PiP is negligible** (proves shared buffer) · ◻ Double-click restores
+◼ Opens, stays on top, resizes, snaps · ◼ Main window minimises, PiP keeps playing · ◼ **CPU rise vs non-PiP is negligible** (proves shared buffer) · ◼ Double-click restores
 
 ---
 
-## ◻ PHASE 2 SIGN-OFF · §P2.6
+## ◼ PHASE 2 SIGN-OFF · §P2.6
 
 **Regression first**
-- ◻ **Entire Phase 1 sign-off list re-run and passing**
-- ◻ Deleting `modes/m3u/` still leaves a working Local build
-- ◻ `git diff phase-1..phase-2` touches no Phase 1 file except the one `core/modes.py` line and the **disclosed engine fix** for §P2.5 (multi-reader notification fan-out in `engine/video_out.py` + `engine/surface.py` — the Phase 1 foundation promised PiP support but shipped single-slot notifications; see `PHASE2_DISCLOSED` in `tools/check_isolation.py` and `tests/test_video_pip_notify.py`)
-- ◻ `tools/check_isolation.py` passes
+- ◼ **Entire Phase 1 sign-off list re-run and passing**
+- ◼ Deleting `modes/m3u/` still leaves a working Local build
+- ◼ `git diff phase-1..phase-2` touches no Phase 1 file except the one `core/modes.py` line and the **disclosed engine fix** for §P2.5 (multi-reader notification fan-out in `engine/video_out.py` + `engine/surface.py` — the Phase 1 foundation promised PiP support but shipped single-slot notifications; see `PHASE2_DISCLOSED` in `tools/check_isolation.py` and `tests/test_video_pip_notify.py`)
+- ◼ `tools/check_isolation.py` passes
 
 **M3U**
-- ◻ Loads `.m3u` and `.m3u8`, local and remote entries
-- ◻ Remote playlists load over HTTP(S) — no new dependency
-- ◻ `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
-- ◻ HLS streams play
-- ◻ Filter box narrows the list
-- ◻ Grouping: **By category** (default) / **By country** / **No group** — remembered
-- ◻ Playing channel highlighted and kept visible when zapping with prev/next
-- ◻ Toolbar holds exactly **Playlists…** and **Clear Playlist**, and both work
-- ◻ Malformed / unreachable entries fail gracefully with a message, no crash
+- ◼ Loads `.m3u` and `.m3u8`, local and remote entries
+- ◼ Remote playlists load over HTTP(S) — no new dependency
+- ◼ `#EXTINF` name, `group-title`, `tvg-logo` parsed and shown
+- ◼ HLS streams play
+- ◼ Filter box narrows the list
+- ◼ Grouping: **By category** (default) / **By country** / **No group** — remembered
+- ◼ Playing channel highlighted and kept visible when zapping with prev/next
+- ◼ Toolbar holds exactly **Playlists…** and **Clear Playlist**, and both work
+- ◼ Malformed / unreachable entries fail gracefully with a message, no crash
 
 **Playlists manager** *(owner decision, 2026-08-02 — replaces the title-bar Open idea)*
-- ◻ Up to 7 saved sources: add by URL and by local file, edit, delete with confirm, cap hint at 7
-- ◻ Clicking a source loads it **and stops the current stream**
-- ◻ Last-used source reloads automatically when entering M3U
-- ◻ Current source name shown above the list as plain text
-- ◻ Dead URL → message + Retry · moved file → message + edit/remove · never a crash
-- ◻ Panel drop opens the source via the same handler as Add File
+- ◼ Up to 7 saved sources: add by URL and by local file, edit, delete with confirm, cap hint at 7
+- ◼ Clicking a source loads it **and stops the current stream**
+- ◼ Last-used source reloads automatically when entering M3U
+- ◼ Current source name shown above the list as plain text
+- ◼ Dead URL → message + Retry · moved file → message + edit/remove · never a crash
+- ◼ Panel drop opens the source via the same handler as Add File
 
 **Controls**
-- ◻ Exactly seven render, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen**
-- ◻ No seek bar, time display, repeat/shuffle, or track menu — **absent, not greyed**
-- ◻ Volume and mute work; volume persists across a mode switch
-- ◻ M3U transport toasts: Play/Pause · Next/Previous with channel name · volume · mute · fullscreen (honour the global OSD setting)
-- ◻ **No right panel in M3U** — Ctrl+I does nothing; EQ not offered
-- ◻ M3U bar is its own layout — single row, balanced, **no empty gaps** · §B.2
+- ◼ Exactly seven render, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen**
+- ◼ No seek bar, time display, repeat/shuffle, or track menu — **absent, not greyed**
+- ◼ Volume and mute work; volume persists across a mode switch
+- ◼ M3U transport toasts: Play/Pause · Next/Previous with channel name · volume · mute · fullscreen (honour the global OSD setting)
+- ◼ **No right panel in M3U** — Ctrl+I does nothing; EQ not offered
+- ◼ M3U bar is its own layout — single row, balanced, **no empty gaps** · §B.2
 
 **PiP**
-- ◻ Opens, on top, resizes, snaps
-- ◻ Main minimises, PiP plays on
-- ◻ Negligible CPU increase
-- ◻ Double-click restores
+- ◼ Opens, on top, resizes, snaps
+- ◼ Main minimises, PiP plays on
+- ◼ Negligible CPU increase
+- ◼ Double-click restores
 
 **Mode switching**
-- ◻ Both chips render
-- ◻ Local ↔ M3U swaps panel and control set correctly
-- ◻ Local playlist survives a round-trip to M3U and back
-- ◻ The two playlists never contaminate each other
-- ◻ **One-tuner rule:** switching modes stops playback — never background audio
-- ◻ Back in Local the resume prompt works; back in M3U the list + last channel are intact, nothing auto-plays
-- ◻ Right dock hidden in M3U: `right_dock_enabled` stays false even though M3U enables lightweight transport toasts
+- ◼ Both chips render
+- ◼ Local ↔ M3U swaps panel and control set correctly
+- ◼ Local playlist survives a round-trip to M3U and back
+- ◼ The two playlists never contaminate each other
+- ◼ **One-tuner rule:** switching modes stops playback — never background audio
+- ◼ Back in Local the resume prompt works; back in M3U the list + last channel are intact, nothing auto-plays
+- ◼ Right dock hidden in M3U: `right_dock_enabled` stays false even though M3U enables lightweight transport toasts
 
 **→ Merge to `main`, tag `v0.2.0-m3u`.**
 
@@ -619,27 +619,30 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 **Ship:** `v1.0.0` · **Est:** 5–6 days · **Branch:** `phase-3-web`
 
-> ★ **Additive only.** Web renders **inside the main window** — `WebEngineView` is a `QQuickItem`. · §P3.2
+> ★ **Owner-final direction.** Web mode uses Windows / Microsoft Edge **WebView2**, not QtWebEngine. It appears inside Halcyon with our title bar, tabs row, address bar, and a clean browser content rectangle.
 
 ---
 
-## Milestone 3.1 — WebEngine Integration · 1–2 d
+## Milestone 3.1 — WebView2 Integration · 1–2 d
 
-- [ ] `pip install PySide6-Addons` (supplies QtWebEngine)
-- [ ] ★ `QtWebEngineQuick.initialize()` **before** the QML engine is created · §P3.2
-- [ ] ★ If the view renders blank: `QQuickWindow.setGraphicsApi(GraphicsApi.OpenGL)` **before** `QGuiApplication` · §P3.2
-- [ ] `modes/web/WebStage.qml` — `WebEngineView` filling the Stage
-- [ ] ★ **Verify it renders inside the main window** — no second window anywhere
-- [ ] ★ Verify QML panels and the address bar composite **over** web content
-- [ ] Profile: persistent cookies, cache, and storage paths under `%APPDATA%\Halcyon`
-- [ ] User agent set to a current desktop Chrome string
-- [ ] Sensible settings: JS on, local storage on, autoplay policy, PDF viewer
-- [ ] Fullscreen request handling (a video going fullscreen inside the page)
+- [ ] ★ Use Microsoft Edge WebView2 runtime — **no QtWebEngine / PySide6-Addons browser bundle**
+- [ ] Installer/runtime check: WebView2 Evergreen Runtime present or installed
+- [ ] `modes/web/webview2_host.py` — native WebView2 host / lifetime bridge
+- [ ] `modes/web/WebStage.qml` — owns Web tabs row, address bar, and browser rectangle
+- [ ] Browser content sits below Halcyon title bar + Web tabs + address bar
+- [ ] ★ Browser renders inside the Halcyon window — no external Edge/browser window
+- [ ] WebView2 resizes cleanly with the Halcyon window
+- [ ] WebView2 hides/releases cleanly when switching away from Web
+- [ ] Profile: cookies, cache, and storage paths under `%APPDATA%\Halcyon`
+- [ ] User agent is a current desktop Edge/Chrome-compatible string
+- [ ] Sensible settings: JavaScript on, local storage on, normal autoplay/site policy
+- [ ] Fullscreen request handling for website videos
 - [ ] Download handling — save prompt
-- [ ] New-window / popup requests handled in-place or blocked, not spawning OS windows
-- [ ] Certificate error handling
+- [ ] New-window / popup requests open as Halcyon tabs, not OS windows
+- [ ] Certificate/security errors handled clearly
+- [ ] Site permission prompts handled clearly where WebView2 supports them
 
-◻ ★ **Web renders inside the main window** · ◻ Glass shell and panel visible around it · ◻ Pages scroll, links work, text input works · ◻ HTML5 video plays
+◻ ★ WebView2 renders inside Halcyon · ◻ No external browser window · ◻ Pages scroll, links work, text input works · ◻ HTML5 video plays
 
 ---
 
@@ -647,56 +650,80 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 - [ ] `modes/web/__init__.py` — `ModeSpec` for `"web"`
 - [ ] `stage_qml` → `WebStage.qml` (overrides the video stage)
-- [ ] `transport_qml` → `AddressBar.qml`
+- [ ] `transport_qml` → empty string — **no bottom transport bar**
 - [ ] `osd_enabled=False`
-- [ ] ★ Append one entry to `core/modes.py` — **the only edit to earlier phases**
-- [ ] ★ Video engine **stops/releases cleanly** when switching to Web
+- [ ] `right_dock_enabled=False` — no Info / Lyrics / Equalizer
+- [ ] `media_keys_enabled=False` — page owns typing, Space, and page shortcuts
+- [ ] `uses_player=False` — Web does not drive libVLC
+- [ ] ★ Append one entry to `core/modes.py`
+- [ ] ★ Video engine stops/releases cleanly when switching to Web
 - [ ] Third chip appears with no `TitleBar.qml` edit
 
-◻ Three chips render · ◻ Switching in any order is stable · ◻ Video engine releases properly
+◻ Three chips render · ◻ Switching in any order is stable · ◻ Video engine releases properly · ◻ No EQ/right panel in Web
 
 ---
 
-## Milestone 3.3 — Address Bar · 1 d
+## Milestone 3.3 — Tabs + Address Bar · 1–1.5 d
 
-- [ ] `modes/web/AddressBar.qml` — occupies the transport region, **is not a transport bar** · §P3.4
-- [ ] Built from the **same `IconButton` vocabulary** as the other modes · §B.1
-- [ ] Back · Forward · Reload/Stop · Home
-- [ ] URL field: editable, shows current URL, selects all on focus
+- [ ] `modes/web/tabs.py` — per-session tab model
+- [ ] Tabs row appears below Halcyon title bar
+- [ ] Initial Web state: no page tab, only **+ New Tab**
+- [ ] Typing URL/search and pressing Enter creates the first tab automatically
+- [ ] Tab row: favicon · title · close icon · + button
+- [ ] New tab / close tab / switch tab
+- [ ] Per-tab back/forward history
+- [ ] ★ Maximum **15 tabs**
+- [ ] Attempting tab 16 shows toast: `Maximum 15 tabs reached.`
+- [ ] Tabs survive Web → Local/M3U → Web during the same session
+- [ ] Tabs are not restored after app restart
+- [ ] `modes/web/AddressBar.qml` — icon-based Web navigation bar
+- [ ] Icon buttons: Back · Forward · Reload/Stop · Home · Star · Bookmarks/Menu
+- [ ] URL/search field is the only text-based control in the top chrome
 - [ ] Enter navigates; non-URL input goes to a search engine
 - [ ] Loading progress indicator
-- [ ] Page title shown in the title bar
-- [ ] ★ **No media controls render in Web mode**
-- [ ] ★ **No OSD fires in Web mode**
-- [ ] ★ Media hotkeys inert in Web mode (`Space` must scroll the page, not toggle playback)
+- [ ] Page title shown in the active tab / window title
+- [ ] ★ No media controls render in Web mode
+- [ ] ★ No OSD media feedback fires in Web mode
+- [ ] ★ Media hotkeys inert in Web mode
 
-◻ All navigation works · ◻ Search fallback works · ◻ No transport bar, no OSD · ◻ Media hotkeys inert
+◻ Starts with only + New Tab · ◻ Tabs work · ◻ 15-tab limit works · ◻ Navigation/search works · ◻ No transport bar, no OSD, no EQ
 
 ---
 
-## Milestone 3.4 — Bookmarks · 1 d
+## Milestone 3.4 — Bookmarks Dropdown + Manager · 1–1.5 d
 
 - [ ] `modes/web/bookmarks.py` — JSON store in `%APPDATA%\Halcyon`
-- [ ] `modes/web/WebPanel.qml` — third and final panel in the one dock slot
-- [ ] Toolbar: **Add Bookmark** (captures current URL + title) · **Edit** · **Delete** · §P3.5
-- [ ] Rows: favicon · title · URL
-- [ ] Click to navigate
-- [ ] Drag to reorder
-- [ ] Edit dialog: title and URL
+- [ ] Address-bar star: empty = not bookmarked, filled = bookmarked
+- [ ] Empty star opens Add Bookmark popup with current title + URL prefilled
+- [ ] Filled star opens Edit / Remove / Cancel popup
+- [ ] `modes/web/BookmarkMenu.qml` — Edge-style dropdown from the top Web bar
+- [ ] Dropdown top option: **Manage Bookmarks**
+- [ ] Dropdown rows show bookmark title + URL text
+- [ ] Dropdown closes on same button, outside click, or Esc
+- [ ] Clicking a bookmark navigates current tab
+- [ ] `modes/web/BookmarkManager.qml` — internal manager tab
+- [ ] Manage Bookmarks opens inside a Halcyon tab, not a side drawer
+- [ ] Manual Add: title + URL
+- [ ] Edit bookmark title + URL
 - [ ] Delete confirmation
+- [ ] Drag to reorder
+- [ ] Search bookmarks
+- [ ] Favicons load where available
 - [ ] Persists across restart
 - [ ] Seed with a few sensible defaults
 - [ ] *Folders deferred to v1.1* · §8
 
-◻ Add / edit / delete / reorder / navigate all work · ◻ Favicons load · ◻ Persists across restart
+◻ Star add/edit/remove works · ◻ Dropdown opens/closes correctly · ◻ Manage opens in tab · ◻ Manual add/edit/delete/reorder/search work · ◻ Persists across restart
 
 ---
 
 ## Milestone 3.5 — Final Integration & Release · 1–2 d
 
-- [ ] ★ Nuitka packaging **including QtWebEngine** — helper process, resources, locales · §9
-- [ ] Verify QtWebEngine works in the frozen build *(a common packaging failure — budget time)*
+- [ ] ★ Nuitka/installer packaging handles WebView2 runtime properly
+- [ ] Verify WebView2 works in the packaged build
+- [ ] No QtWebEngine/PySide6-Addons browser dependency remains
 - [ ] Full `Theme.qml` consistency pass across all three modes · §B.3
+- [ ] All Web clickable controls are icon-based except URL field and bookmark title/URL text
 - [ ] Settings dialog covers all modes
 - [ ] About dialog with version and licence notices
 - [ ] Final animation pass
@@ -705,41 +732,58 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ### ◻ §B.3 — "One machine" review
 - ◻ Screenshots of all three modes side by side look like **one product**
-- ◻ No control is drawn by a component existing only for one mode *(address bar and PiP excepted)*
+- ◻ No control is drawn by a component existing only for one mode *(address bar, tabs, bookmark menu, and PiP excepted)*
 - ◻ No mode defines a colour, blur, radius, or duration outside `Theme.qml`
 - ◻ Each bar looks **designed for its own contents** — balanced, no gaps, no cramping
 - ◻ Switching modes feels like **one app changing channel**, not a different app loading
 
 ---
 
-## ◻ PHASE 3 SIGN-OFF · §P3.6
+## ◻ PHASE 3 SIGN-OFF · §P3.7
 
 **Regression first**
 - ◻ **Phase 1 and Phase 2 sign-off lists both re-run and passing**
 - ◻ Deleting `modes/web/` leaves Local + M3U fully working
-- ◻ No Phase 1 or Phase 2 file edited except the one `core/modes.py` line
+- ◻ No Phase 1 or Phase 2 file edited except documented generic Web-host integration points and the one `core/modes.py` line
 - ◻ `tools/check_isolation.py` passes
 
 **Web**
-- ◻ ★ **Renders INSIDE the main window — no second window appears anywhere**
-- ◻ Chromium content correct; scroll, links, text input all work
-- ◻ Frameless glass shell, title bar, and left panel remain correct around it
-- ◻ Address bar: navigate, back, forward, reload, home
+- ◻ ★ WebView2 renders INSIDE Halcyon — no outside browser window appears
+- ◻ Page content correct; scroll, links, text input, login, and permissions work
+- ◻ Halcyon title bar, Web tabs row, and address bar remain correct above browser content
+- ◻ Address bar: navigate, back, forward, reload/stop, home, search
 - ◻ HTML5 video plays with the page's own controls
-- ◻ Bookmarks add / edit / delete / reorder / navigate, persist across restart
+
+**Tabs**
+- ◻ Starts with no page tab, only + New Tab
+- ◻ URL/search creates the first tab automatically
+- ◻ New tab, close tab, switch tab work
+- ◻ Maximum 15 tabs; opening tab 16 shows the maximum-tabs toast
+- ◻ Tabs survive Web ↔ Local/M3U during the session
+- ◻ Tabs are not restored after app restart
+- ◻ New-window/popups open as Halcyon tabs, not outside windows
+
+**Bookmarks**
+- ◻ Star add/edit/remove works
+- ◻ Bookmarks dropdown opens/closes correctly
+- ◻ Dropdown bookmark click navigates current tab
+- ◻ Manage Bookmarks opens as an internal tab
+- ◻ Manual add / edit / delete / reorder / search all work
+- ◻ Bookmarks persist across restart
 
 **Controls**
 - ◻ No transport bar renders in Web mode
-- ◻ No OSD fires
-- ◻ Media hotkeys inert
-- ◻ Switching away from Web returns cleanly
+- ◻ No OSD media feedback fires
+- ◻ No right Info/Lyrics/Equalizer panel is available
+- ◻ Media hotkeys inert; page receives typing and page shortcuts
+- ◻ Switching away from Web returns cleanly; switching back restores session tabs
 
 **Final integration**
 - ◻ All three chips render; switching in any order is stable
 - ◻ Three separate lists — local queue, M3U channels, bookmarks — never cross-contaminate
 - ◻ Settings, theme, and window geometry consistent across all modes
 - ◻ Clean shutdown from any mode
-- ◻ Installer works on a clean Windows machine with no VLC installed
+- ◻ Installer works on a clean Windows machine, including WebView2 runtime handling
 
 **→ Merge to `main`, tag `v1.0.0`. 🎉**
 
