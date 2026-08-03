@@ -91,15 +91,39 @@ Shell {
         // settled — and `null.usesPlayer` throws rather than returning false.
         function playPause() {
             if (!window.usesPlayer()) return;
-            App.playPause();
-            osdGlyph(Player.isPlaying ? Glyphs.pause : Glyphs.play);
+            // Capture the requested direction before libVLC's asynchronous
+            // state publish. A newly opened live channel may still report
+            // "Opening" for a moment, but the user correctly asked to play.
+            var wasPlaying = !!(Player && Player.isPlaying);
+            if (!App.playPause())
+                return;                  // empty playlist / no media: stay quiet
+            osd(wasPlaying ? "Paused" : "Playing",
+                wasPlaying ? Glyphs.pause : Glyphs.play);
+            // Keep the quick centre acknowledgement alongside the readable
+            // status toast — the icon is useful at a glance over video.
+            osdGlyph(wasPlaying ? Glyphs.pause : Glyphs.play);
         }
         function play()  { if (window.usesPlayer()) App.play() }
         function pause() { if (window.usesPlayer()) App.pause() }
         function stop()  { if (window.usesPlayer()) App.stop() }
 
-        function next()     { App.next() }
-        function previous() { App.previous() }
+        // M3U contexts provide a friendly channel label through the generic
+        // controller protocol. Local returns an empty string here because its
+        // existing media-change toast already names the file.
+        function _channelToast(action, glyph, accepted) {
+            if (!accepted)
+                return;
+            var name = window.playlistPlaybackLabel();
+            if (name.length === 0)
+                return;
+            osd(action + ": " + window.shortToastName(name), glyph);
+        }
+        function next() {
+            _channelToast("Next", Glyphs.next, App.next());
+        }
+        function previous() {
+            _channelToast("Previous", Glyphs.previous, App.previous());
+        }
 
         function seekRelative(ms) {
             if (!window.usesPlayer()) return;
@@ -233,8 +257,11 @@ Shell {
 
         // -------------------------------------------------------- view --
         function toggleFullscreen() {
-            window.setFullscreen(!window.fullscreen);
-            osdGlyph(window.fullscreen ? Glyphs.fullscreen : Glyphs.fullscreenExit);
+            var entering = !window.fullscreen;
+            window.setFullscreen(entering);
+            osd(entering ? "Fullscreen" : "Exit fullscreen",
+                entering ? Glyphs.fullscreen : Glyphs.fullscreenExit);
+            osdGlyph(entering ? Glyphs.fullscreen : Glyphs.fullscreenExit);
         }
         function exitFullscreen()  { if (window.fullscreen) toggleFullscreen() }
         function toggleLeftPanel() {
@@ -276,19 +303,37 @@ Shell {
         function osdLevel(spec)    { if (osdEnabled()) osdLayer.showLevel(spec.text, spec.glyph, spec.level) }
     }
 
-    // OSD fires only where the ModeSpec allows it (§6.2) — M3U and Web never,
-    // and neither does anything before the first spec resolves.
+    // OSD fires only where the ModeSpec allows it (§6.2), and never before the
+    // first spec resolves. M3U opts in for lightweight transport feedback;
+    // the user can still disable every toast from Settings.
     function osdEnabled()  {
         return !!modeSpec && modeSpec.osdEnabled && Settings.get("ui.osdEnabled", true);
     }
     function osdGlyph(g)   { if (osdEnabled()) osdLayer.showGlyph(g) }
 
-    // The right dock (Info / Lyrics / Equalizer) is rich media chrome like the
-    // OSD, so it follows the same flag: available in Local, absent in modes
-    // that declare no OSD (M3U §P2.4/v3.3 — owner decision; Web §P3.4 gets the
-    // same for free). Names no mode; Phase 2's one disclosed shared-UI edit.
+    // The right dock (Info / Lyrics / Equalizer) is deliberately independent
+    // from transport feedback. M3U can show a toast without inheriting Local's
+    // rich media panels; future modes make the same decision in their spec.
     function rightDockAvailable() {
-        return !!modeSpec && modeSpec.osdEnabled;
+        return !!modeSpec && modeSpec.rightDockEnabled;
+    }
+
+    function shortToastName(name) {
+        name = String(name || "");
+        return name.length > 60 ? name.substring(0, 59) + "…" : name;
+    }
+
+    // A context may provide a friendly playlist label (M3U channel name). A
+    // local file has no such protocol and continues to use its filename below.
+    function playlistPlaybackLabel() {
+        if (typeof App.currentPlaybackLabel !== "function")
+            return "";
+        return App.currentPlaybackLabel() || "";
+    }
+
+    function playbackDisplayName() {
+        var label = playlistPlaybackLabel();
+        return label.length > 0 ? label : (App.currentFileStem || "");
     }
 
     // Does the active mode drive the shared player? False while modeSpec is
@@ -692,24 +737,23 @@ Shell {
     }
 
     // ======================================================================
-    // NOW-PLAYING TOAST — one hook for every track change. The core emits
+    // NOW-PLAYING TOAST — one hook for every media change. The core emits
     // mediaNameChanged from the single media-open path (app.py), so
-    // Next/Previous, double-clicking a queue row, auto-advance at end of
-    // track and the first open all report here — without next()/previous()
-    // growing OSD knowledge of their own.
+    // Next/Previous, clicking a queue/channel row, auto-advance at end of
+    // media and the first open all report here. M3U supplies its parsed channel
+    // name through the generic context protocol; Local falls back to its file
+    // name without teaching this shared shell about either mode.
     Connections {
         target: App
         function onMediaNameChanged() {
-            var name = App.currentFileStem;
+            var name = window.playbackDisplayName();
             if (name.length === 0)
                 return;                  // stop / nothing playing
             if (!window.osdEnabled())
                 return;
             if (osdLayer.resumeShowing)
                 return;                  // the resume toast owns this open
-            if (name.length > 60)        // the status pill has no width cap
-                name = name.substring(0, 59) + "…";
-            osdLayer.show("Now Playing: " + name,
+            osdLayer.show("Now Playing: " + window.shortToastName(name),
                           App.hasVideo ? Glyphs.video : Glyphs.music);
         }
     }

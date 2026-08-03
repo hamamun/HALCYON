@@ -129,7 +129,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ### Build — the contract
 - [x] ★ `core/mode_api.py` — `ModeSpec` frozen dataclass · §A.2
-- [x] ★ Fields: `id`, `title`, `panel_qml`, **`stage_qml`**, **`transport_qml`**, `osd_enabled`
+- [x] ★ Fields: `id`, `title`, `panel_qml`, **`stage_qml`**, **`transport_qml`**, `osd_enabled`, `right_dock_enabled`
 - [x] ★ `stage_qml` defaults to the video surface — *declared now so Phase 3 stays additive* · §P3.3
 - [x] ★ `core/modes.py` — `REGISTRY` list; later phases append exactly one entry
 - [x] ★ `tools/check_isolation.py` · §A.5
@@ -234,7 +234,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] ★ Repeated triggers **reset the timer** rather than stacking
 - [x] ★ **Never** covers the subtitle safe area (bottom 20%)
 - [x] Suppressed while a menu or panel has focus
-- [x] ★ Driven by `ModeSpec.osd_enabled` — **Local only**
+- [x] ★ Driven by `ModeSpec.osd_enabled` — Local and M3U transport feedback
 
 ### Build — all 10 triggers · §P1.5
 - [x] Volume change — speaker glyph + level bar + %
@@ -478,15 +478,15 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 ## Milestone 2.2 — Mode Registration · 0.5 d
 
 - [x] `modes/m3u/__init__.py` — `ModeSpec` for `"m3u"`, title chip `"M3U"` · §P2.3
-- [x] Real fields only (the `controls=[...]` draft never shipped): `panel_qml`, `transport_qml`, `osd_enabled=False`, `media_keys_enabled=True`, `uses_player=True` · §P2.3 v3.2/v3.3
+- [x] Real fields only (the `controls=[...]` draft never shipped): `panel_qml`, `transport_qml`, `osd_enabled=True`, `right_dock_enabled=False`, `media_keys_enabled=True`, `uses_player=True` · §P2.3 v3.5
 - [x] `setup` hook publishes the channel model as `modeContext_m3u` — **no `main.py` edit** · §A.2
 - [x] ★ **One-tuner rule** (owner decision, v3.4) — entering M3U stops Local playback
       (playlist + position preserved); leaving M3U stops the stream; nothing
       auto-plays on entry. Enforced from M3U's own setup hook — no Phase 1 edit · §P2.3
-- [x] ★ Append one entry to `core/modes.py` — **the only Phase 1 edit permitted**
+- [x] ★ Append one entry to `core/modes.py`; v3.5's generic `right_dock_enabled` capability split is the documented owner-approved shared exception
 - [x] Second chip appears in the title bar **with no `TitleBar.qml` edit** · §P1.4
 
-◻ Both chips render · ◻ Switching works · ◻ `git diff` shows exactly one Phase 1 line changed
+◻ Both chips render · ◻ Switching works · ◻ shared diff contains only the documented generic v3.5 capability split
 
 ---
 
@@ -521,7 +521,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] No reorder — the file defines order
 - [x] ★ **No right panel in M3U** — Ctrl+I inert, EQ not offered; Local's right dock untouched (owner decision 2026-08-02) · §P2.4
 
-◻ Channels list with logos and groups · ◻ Filter works
+◻ Channels list with logos and groups · ◻ Filter works · ◻ one-click clear × restores the full list
 ◻ Toolbar is exactly Playlists… + Clear Playlist · ◻ Manager caps at 7; add/edit/delete work
 ◻ Loading a source stops the stream · ◻ Last-used source restores · ◻ Dead sources fail with retry, no crash
 ◻ Grouping: category / country / none — remembered · ◻ Playing channel stays visible when zapping
@@ -592,7 +592,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - ◻ Exactly seven render, one row: **prev · play/pause · stop · next · volume+mute · PiP · fullscreen**
 - ◻ No seek bar, time display, repeat/shuffle, or track menu — **absent, not greyed**
 - ◻ Volume and mute work; volume persists across a mode switch
-- ◻ No OSD fires in M3U mode
+- ◻ M3U transport toasts: Play/Pause · Next/Previous with channel name · volume · mute · fullscreen (honour the global OSD setting)
 - ◻ **No right panel in M3U** — Ctrl+I does nothing; EQ not offered
 - ◻ M3U bar is its own layout — single row, balanced, **no empty gaps** · §B.2
 
@@ -609,7 +609,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - ◻ The two playlists never contaminate each other
 - ◻ **One-tuner rule:** switching modes stops playback — never background audio
 - ◻ Back in Local the resume prompt works; back in M3U the list + last channel are intact, nothing auto-plays
-- ◻ Right dock hidden in M3U: `ui/Main.qml` touched only in two generic lines (right dock + Ctrl+I follow `osd_enabled` — names no mode)
+- ◻ Right dock hidden in M3U: `right_dock_enabled` stays false even though M3U enables lightweight transport toasts
 
 **→ Merge to `main`, tag `v0.2.0-m3u`.**
 

@@ -112,6 +112,10 @@ Item {
         anchors.margins: Theme.spaceSm
         anchors.bottomMargin: 0
         placeholderText: "Filter channels…"
+        clearable: true
+        clearTooltip: "Clear filter"
+        // Clearing the shared field assigns an empty string, which runs this
+        // same filter path and restores the full channel list in one click.
         onTextChanged: if (root.ctx) root.ctx.channels.setFilter(text)
     }
 

@@ -4,6 +4,8 @@ and search/filter interaction across all categories/groups.
 
 from __future__ import annotations
 
+from PySide6.QtCore import QObject, Signal
+
 from modes.m3u.parser import Channel
 from modes.m3u.playlist import (
     GROUPING_CATEGORY,
@@ -11,6 +13,7 @@ from modes.m3u.playlist import (
     GROUPING_LANGUAGE,
     GROUPING_NONE,
     ChannelModel,
+    M3UContext,
 )
 
 
@@ -94,3 +97,42 @@ def test_no_group_mode_disables_accordion() -> None:
     for row in range(model.count):
         idx = model.index(row)
         assert model.data(idx, model.IsGroupExpandedRole) is True
+
+
+class _Engine(QObject):
+    errorOccurred = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.opened: list[str] = []
+
+    def open(self, url: str) -> None:
+        self.opened.append(url)
+
+
+class _Controller(QObject):
+    activeModeChanged = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.activeMode = "m3u"
+
+
+class _Settings:
+    def __init__(self, path) -> None:
+        self.path = path
+
+    def get_mode(self, _mode: str, _key: str, default):
+        return default
+
+
+def test_context_exposes_friendly_selected_channel_name_for_toasts(tmp_path) -> None:
+    """Transport feedback must say "BBC News", never the stream URL."""
+    engine = _Engine()
+    context = M3UContext(engine, _Controller(), _Settings(tmp_path / "settings.json"))
+    context.channels.set_channels(_sample_channels())
+    context.channels.setGrouping(GROUPING_NONE)
+
+    assert context.play_index(1)
+    assert context.current_playback_label() == "BBC News"
+    assert engine.opened == ["http://x/2"]

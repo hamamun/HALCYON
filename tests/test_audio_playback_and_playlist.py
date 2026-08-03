@@ -75,7 +75,7 @@ def test_play_pause_when_playlist_empty_does_not_play(qt_app):
     controller.register_context("local", model)
 
     # Pressing play on empty playlist
-    controller.playPause()
+    assert controller.playPause() is False
 
     # Engine toggle or play should NOT have been called
     engine.toggle.assert_not_called()
@@ -103,7 +103,7 @@ def test_play_pause_when_stopped_starts_first_track(qt_app, playlist_with_tracks
     requested = []
     model.playRequested.connect(lambda p, i: requested.append((p, i)))
 
-    controller.playPause()
+    assert controller.playPause() is True
 
     assert model.current_index() == 0
     assert len(requested) == 1

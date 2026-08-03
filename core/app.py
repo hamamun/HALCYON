@@ -63,6 +63,7 @@ class ModeList(QObject):
             "stageQml": paths.qml_url(spec.stage_qml),
             "transportQml": paths.qml_url(spec.transport_qml),
             "osdEnabled": spec.osd_enabled,
+            "rightDockEnabled": spec.right_dock_enabled,
             "mediaKeysEnabled": spec.media_keys_enabled,
             "usesPlayer": spec.uses_player,
         }
@@ -325,17 +326,48 @@ class AppController(QObject):
         if target is not None and hasattr(target, "move_row"):
             target.move_row(source, target_row)
 
-    @Slot()
-    def next(self) -> None:
-        target = self.playlist
-        if target is not None and hasattr(target, "play_next"):
-            target.play_next()
+    @Slot(result=bool)
+    def next(self) -> bool:
+        """Play the next item and report whether the active context accepted it.
 
-    @Slot()
-    def previous(self) -> None:
+        The boolean lets the QML action host show a channel toast only after a
+        real M3U next action, rather than claiming success at the end of a list.
+        The controller remains mode-neutral: every context is asked through the
+        same small ``play_next`` protocol.
+        """
         target = self.playlist
-        if target is not None and hasattr(target, "play_previous"):
-            target.play_previous()
+        play_next = getattr(target, "play_next", None)
+        if callable(play_next):
+            return bool(play_next())
+        return False
+
+    @Slot(result=bool)
+    def previous(self) -> bool:
+        """Play the previous item; see :meth:`next` for the shared protocol."""
+        target = self.playlist
+        play_previous = getattr(target, "play_previous", None)
+        if callable(play_previous):
+            return bool(play_previous())
+        return False
+
+    @Slot(result=str)
+    def currentPlaybackLabel(self) -> str:  # noqa: N802 - QML-facing
+        """A friendly label supplied by the active playlist, when it has one.
+
+        Local media already has a filename-based now-playing label. M3U needs
+        the parsed channel name instead of exposing a raw stream URL, so its
+        context implements ``current_playback_label``. Keeping this duck-typed
+        preserves the controller's mode neutrality for future modes.
+        """
+        target = self.playlist
+        label = getattr(target, "current_playback_label", None)
+        if not callable(label):
+            return ""
+        try:
+            return str(label() or "")
+        except Exception:  # noqa: BLE001 - a cosmetic label must never block playback
+            log.debug("active playlist could not provide a playback label", exc_info=True)
+            return ""
 
     @Slot()
     def cycleRepeat(self) -> None:  # noqa: N802 - QML-facing
@@ -350,15 +382,20 @@ class AppController(QObject):
             target.toggle_shuffle()
 
     # -------------------------------------------------------------- playback ---
-    @Slot()
-    def playPause(self) -> None:  # noqa: N802 - QML-facing
-        """Toggle play/pause, or start playing from playlist if stopped."""
+    @Slot(result=bool)
+    def playPause(self) -> bool:  # noqa: N802 - QML-facing
+        """Toggle play/pause, or start playing from a playlist if stopped.
+
+        ``True`` means an action was sent to the engine or active playlist. It
+        gives the UI an honest basis for its Play/Pause toast: an empty playlist
+        should not announce that it has started playing.
+        """
         from engine.vlc_engine import State
 
         state = self._engine.state
         if state in (State.Playing, State.Paused):
             self._engine.toggle()
-            return
+            return True
 
         target = self.playlist
         if target is not None:
@@ -368,7 +405,7 @@ class AppController(QObject):
             if callable(fast):
                 try:
                     if fast():
-                        return
+                        return True
                 except Exception:
                     log.debug("play_current fast path failed", exc_info=True)
             count = getattr(target, "count", 0)
@@ -378,10 +415,13 @@ class AppController(QObject):
                     target.play_index(cur)
                 else:
                     target.play_index(0)
-            return
+                return True
+            return False
 
         if self._engine.currentMedia:
             self._engine.play()
+            return True
+        return False
 
     @Slot()
     def play(self) -> None:  # noqa: N802 - QML-facing

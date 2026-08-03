@@ -19,7 +19,8 @@ SPEC = ModeSpec(
     transport_qml="qrc:/modes/local/LocalTransport.qml",
     # stage_qml defaults to the shared video surface — Local has no reason to
     # override it.
-    osd_enabled=True,        # the OSD is Local's, and only Local's (§6.2)
+    osd_enabled=True,
+    right_dock_enabled=True, # Info / Lyrics / Equalizer are Local's rich chrome
     media_keys_enabled=True,
     uses_player=True,
 )

@@ -47,8 +47,15 @@ class ModeSpec:
     #: (§P3.3) — the foundation is designed before it is needed.
     stage_qml: str = DEFAULT_STAGE_QML
 
-    #: Whether the OSD layer is live in this mode (§6.2). Local only in practice.
+    #: Whether transient on-video feedback (toasts, level pills and media status)
+    #: is live in this mode (§6.2). This is independent from the optional right
+    #: dock: M3U uses transport feedback but deliberately has no Info/EQ dock.
     osd_enabled: bool = False
+
+    #: Whether the optional Info / Lyrics / Equalizer dock belongs to this mode.
+    #: Kept separate from ``osd_enabled`` so a lightweight playback mode can
+    #: show transport feedback without inheriting Local-only media panels.
+    right_dock_enabled: bool = False
 
     #: Whether media hotkeys (space, seek, volume…) do anything here. Web is inert
     #: (§P3.6) because the page owns its own playback UI.
