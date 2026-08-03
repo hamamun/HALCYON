@@ -597,6 +597,16 @@ class M3UContext(QObject):
     def current_index(self) -> int:
         return self._model.currentIndex
 
+    def current_playback_label(self) -> str:
+        """Friendly name for transport feedback, never the raw stream URL.
+
+        :class:`core.app.AppController` reads this through its generic playlist
+        protocol after Next/Previous. It is intentionally a tiny Python-side
+        accessor rather than a second playback path.
+        """
+        current = self._model._current
+        return current.name if current is not None else ""
+
     @Slot(result=bool)
     def play_current(self) -> bool:
         """O(1) resume for 15k lists: re-open the selected channel URL directly,

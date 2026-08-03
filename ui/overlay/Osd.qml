@@ -1,7 +1,7 @@
 import QtQuick
 import Halcyon.Ui
 
-// The OSD — §6.2, §P1.5. Local only.
+// The OSD — §6.2, §P1.5. Local media feedback + M3U transport feedback.
 //
 // A transient overlay drawn *in the scene graph over the video*. This is only
 // possible because of §0.3 — with a native video window there is nothing to draw
@@ -12,7 +12,7 @@ import Halcyon.Ui
 //   * repeats RESET the timer instead of stacking
 //   * never covers the subtitle safe area (bottom 20%)
 //   * suppressed while a menu or panel has focus
-//   * driven by ModeSpec.osd_enabled — M3U and Web never fire it
+//   * driven by ModeSpec.osd_enabled — Local and M3U may use it; Web does not
 Item {
     id: root
 

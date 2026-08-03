@@ -4,9 +4,9 @@ import Halcyon.Ui
 
 // The right dock — Info / Lyrics / Equalizer (§P1.5).
 //
-// Shared, not Local's: M3U reaches the *same* equalizer through the *same*
-// panel via Ctrl+I (§P2.4). One implementation, reached the same way from every
-// mode — not a copy per mode.
+// Shared implementation, but enabled only by modes that opt into the rich
+// Info/Lyrics/Equalizer dock. M3U keeps this panel absent while still using the
+// shared on-video toast layer for transport feedback.
 //
 // Lyrics tab expand: clicking the expand button (visible only on the Lyrics tab)
 // smoothly animates the panel from the normal width to a wider reading width,

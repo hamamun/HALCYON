@@ -7,8 +7,9 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v3.4** — 2 August 2026 |
-| **Changes in v3.4** | **One-tuner rule (owner decision):** one engine plays one thing — switching the chip stops whatever is playing; there is never background audio. Entering M3U stops Local (playlist + position preserved; Local's resume prompt brings you back). Leaving M3U stops the stream (list and last channel intact; nothing auto-plays). Enforced from M3U's own `setup` hook — no Phase 1 file is edited. **Disclosed second shared edit:** `ui/Main.qml` gains two generic lines — the right dock and Ctrl+I now follow the active mode's `osd_enabled` flag (rich media chrome is Local's; this names no mode, and Phase 3's Web gets the same behaviour for free). |
+| **Version** | Plan **v3.5** — 3 August 2026 |
+| **Changes in v3.5** | **M3U polish (owner decision):** the channel filter gets a one-click clear ×, and M3U shows the shared transport toast for Play/Pause, Next/Previous (with the friendly channel name), volume, mute and fullscreen. Toast capability and the Local-only Info/Lyrics/Equalizer dock are now separate mode flags, so M3U gains feedback without gaining a right dock. |
+| **Changes in v3.4** | **One-tuner rule (owner decision):** one engine plays one thing — switching the chip stops whatever is playing; there is never background audio. Entering M3U stops Local (playlist + position preserved; Local's resume prompt brings you back). Leaving M3U stops the stream (list and last channel intact; nothing auto-plays). Enforced from M3U's own `setup` hook — no Phase 1 file is edited. The earlier right-dock/OSD coupling is superseded by v3.5's distinct right-dock flag. |
 | **Changes in v3.3** | **Owner decisions (2 Aug 2026):** M3U bar = **seven controls, one row** — stop joins, volume+mute retained. **M3U has no right panel** — Ctrl+I inert, EQ not offered in M3U (the §P1.5 EQ note is technically still true, but superseded: it's simply not exposed there). **Channel grouping selector:** By category (default) / By country / No group. **Playing channel stays highlighted and scrolled into view.** Chip label confirmed: **M3U.** |
 | **Changes in v3.2** | **Phase 1 tagged `v0.1.0-local`** — the frozen baseline; `tools/check_isolation.py --phase 2` now actually guards the foundation. **Owner decision: the M3U Playlists manager (§P2.4)** — up to 7 saved sources (URL or local file, add/edit/delete) in M3U's own dialog, opened from the M3U panel toolbar. The title-bar Open idea is dropped (the title bar is frozen, and source management belongs inside the mode). **Loading a source stops the current stream.** §P2.3 snippet corrected to the shipped `ModeSpec` (the `controls=[...]` field never shipped — §B.4 is the mechanism). |
 | **Changes in v3.1** | **Web mode now embeds inside the main window** — pywebview dropped for `QtWebEngineQuick`; the "separate window" limitation is gone. **M3U gains volume + mute.** Equalizer confirmed available in all playback modes. New §B: *One Machine, Three Channels* — shared component vocabulary, per-mode layout freedom. §A.1 corrected. |
@@ -57,6 +58,10 @@ The mistake to avoid is the one you've hit in other players: switching mode make
 
 > **The shared foundation is built once, in Phase 1, and frozen at sign-off.**
 > **Phases 2 and 3 are purely additive: they register new modules against that foundation and modify no Phase 1 file.**
+>
+> **v3.5 exception (owner-approved):** the generic mode-capability split between
+> transient feedback and the right dock updates the shared contract without
+> naming M3U. It is documented in the changelog and covered by regression tests.
 
 See **§B** for what "same machine" means concretely — and, importantly, what it does *not* constrain.
 
@@ -73,7 +78,8 @@ class ModeSpec:
     panel_qml:     str      # left-dock panel
     stage_qml:     str      # centre stage; defaults to the video surface
     transport_qml: str      # the mode's own bar, built from shared parts (§B.4)
-    osd_enabled:   bool     # §6.2
+    osd_enabled:   bool     # transient feedback / §6.2
+    right_dock_enabled: bool # Info / Lyrics / Equalizer availability
 ```
 
 Phase 2 adds `modes/m3u/` containing its own `ModeSpec`, panel, and parser, then appends one line to a registration list. Phase 3 does the same for `modes/web/`.
@@ -82,7 +88,7 @@ Phase 2 adds `modes/m3u/` containing its own `ModeSpec`, panel, and parser, then
 
 ### A.3 Rules that hold across all phases
 
-1. **No later phase edits an earlier phase's files.** Only exception: appending to the mode-registration list, and adding rows to the acceptance-test file. Any other edit means the foundation was wrong — stop and fix Phase 1 properly rather than patching around it.
+1. **No later phase edits an earlier phase's files.** Only exceptions: appending to the mode-registration list, adding rows to the acceptance-test file, and an owner-approved generic capability change documented in the version changelog (v3.5's `right_dock_enabled` split). Any other edit means the foundation was wrong — stop and fix Phase 1 properly rather than patching around it.
 2. **No mode imports another mode.** Enforced by a lint check in CI (§A.5).
 3. **Shared code lives in `engine/`, `core/`, `ui/shell/`, `ui/components/`.** Mode-specific code lives in `modes/<id>/`. Nothing else.
 4. **Every phase ends with a tagged, installable build.** Not a branch, not a dev script — something you double-click.
@@ -453,7 +459,7 @@ Only one mode chip renders in Phase 1 — the switcher is registry-driven, so Ph
 - Icons only, tooltips on hover, 220 ms `OutCubic`, 40×40 hit targets, glass hover ring
 - **⚙ popover** groups speed, audio track, subtitle track, subtitle delay
 
-### OSD — Local only
+### OSD — Local media feedback and M3U transport feedback
 
 Transient overlay drawn *in the scene graph over the video* — possible only because of §0.3.
 
@@ -572,7 +578,7 @@ ui/overlay/PipWindow.qml   # new shared component (Phase 2 owns it)
 ```
 
 ```python
-# core/modes.py — the entire Phase 1 edit
+# core/modes.py — registry integration
 REGISTRY = [local.SPEC, m3u.SPEC]   # ← one word added
 ```
 
@@ -583,7 +589,8 @@ SPEC = ModeSpec(
     id="m3u", title="M3U",
     panel_qml="qrc:/modes/m3u/M3UPanel.qml",
     transport_qml="qrc:/modes/m3u/M3UTransport.qml",
-    osd_enabled=False,        # the OSD is Local's, and only Local's (§6.2)
+    osd_enabled=True,         # transport feedback, controlled by the global OSD setting
+    right_dock_enabled=False, # M3U still has no Info/Lyrics/Equalizer dock
     media_keys_enabled=True,  # space/volume stay useful; seek keys no-op on live
     uses_player=True,
     setup=build_m3u_context,  # exposes the channel model to QML as modeContext_m3u
@@ -598,9 +605,9 @@ Volume was missing from earlier drafts — an oversight, corrected before Phase 
 
 Per §B.2, `M3UTransport.qml` arranges these seven in a **single-row layout designed for seven** — roughly 52px tall, balanced and centred, built from the same `ui/transport/` component vocabulary. It is *not* Local's two-row bar with the seek row deleted and gaps left behind. There is **no seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed. The buffering indicator and the retry affordance live in this mode's own files — a flaky IPTV stream must never add special cases to shared code (§A.3). The `setup` hook means `main.py` does not gain a single line: it calls each registered mode's `setup` and publishes the result (§A.2).
 
-**One-tuner rule (owner decision, v3.4):** Local and M3U share one engine, and one engine plays one thing. Switching the chip **stops whatever is playing** — there is never background audio. Entering M3U stops Local playback: the playlist and the position are preserved, and coming back, Local's ordinary resume prompt returns you to where you left. Leaving M3U stops the stream: the channel list and the last channel stay highlighted, and nothing auto-plays on entry — playback only ever starts from a click. Enforced from M3U's own `setup` hook by listening for mode changes — **no Phase 1 file is edited.** (Want the channel in the corner while you do something else? That is exactly what PiP is for, §P2.5.)
+**One-tuner rule (owner decision, v3.4):** Local and M3U share one engine, and one engine plays one thing. Switching the chip **stops whatever is playing** — there is never background audio. Entering M3U stops Local playback: the playlist and the position are preserved, and coming back, Local's ordinary resume prompt returns you to where you left. Leaving M3U stops the stream: the channel list and the last channel stay highlighted, and nothing auto-plays on entry — playback only ever starts from a click. The one-tuner behaviour itself is enforced from M3U's own `setup` hook; v3.5's separate generic capability split is the documented shared exception. (Want the channel in the corner while you do something else? That is exactly what PiP is for, §P2.5.)
 
-**Right dock in M3U:** none (§P2.4). The shell implements this generically: the right dock and Ctrl+I follow the active mode's `osd_enabled` flag — rich media chrome is Local's, and Web (Phase 3) inherits the same behaviour with no further change. This two-line `ui/Main.qml` addition is Phase 2's only shared-file touch besides the registry line, and it names no mode.
+**Right dock in M3U:** none (§P2.4). The shell implements this generically through a dedicated `right_dock_enabled` mode flag, separate from `osd_enabled`: M3U can show lightweight transport feedback while Ctrl+I and the Info/Lyrics/Equalizer dock stay absent. Web can make the same independent choice later.
 
 ## P2.4 Panel
 
@@ -636,7 +643,7 @@ A glass dialog (the same dialog pattern as Settings and the subtitle downloader 
 
 **Right panel:** **none in M3U** (owner decision, 2026-08-02). Ctrl+I is inert here; the equalizer stays Local-only and is simply not offered. Local's right dock is untouched — this changes nothing for Local.
 
-**OSD:** off.
+**Transport toast:** on (owner decision, 2026-08-03). The shared toast gives feedback for Play/Pause, Next/Previous (using the channel's parsed name), volume, mute and fullscreen. It follows the global OSD setting; this does not enable the right panel.
 
 > **On seeking:** M3U entries are frequently live streams where seeking is meaningless, hence no seek bar. If you later want scrubbing for VOD-heavy playlists, build a seek row into `M3UTransport.qml` from the shared `SeekBar` part — the vocabulary already supports it (§B.4).
 
@@ -678,7 +685,7 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 - [ ] **Exactly seven controls render, one row:** prev · play/pause · stop · next · volume+mute · PiP · fullscreen
 - [ ] **No seek bar, no time display, no repeat/shuffle, no subtitle/audio menu** — absent, not greyed
 - [ ] Volume slider and mute both work; volume persists across a mode switch
-- [ ] **No OSD fires in M3U mode**
+- [ ] **Transport toasts fire in M3U:** Play/Pause, Next/Previous with channel name, volume, mute and fullscreen; global OSD setting still suppresses them
 - [ ] **No right panel in M3U — Ctrl+I does nothing; EQ not offered**
 - [ ] M3U bar is its own layout — single row, correctly balanced, **no empty gaps where Local's controls would be** (§B.2)
 
@@ -873,7 +880,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | Frameless glass UI | 1 | ✅ |
 | **No overlay / click-through bug** | 1 | ✅ **structurally impossible — §0** |
 | Vast format support, no codec install | 1 | ✅ bundled libVLC |
-| **OSD — local only** | 1 | ✅ |
+| **OSD — Local + M3U transport feedback** | 1 / 2 | ✅ |
 | **Local: play/pause/stop/prev/next** | 1 | ✅ |
 | **Local: seek ±, seek bar** | 1 | ✅ |
 | **Local: volume + mute** | 1 | ✅ |

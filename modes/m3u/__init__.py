@@ -29,7 +29,10 @@ SPEC = ModeSpec(
     transport_qml="qrc:/modes/m3u/M3UTransport.qml",
     # stage_qml defaults to the shared video surface — M3U plays through the
     # same pipeline as Local (§P2.2).
-    osd_enabled=False,        # the OSD is Local's, and only Local's (§6.2)
+    # M3U deliberately gets lightweight transport toasts, but not Local's
+    # Info/Lyrics/Equalizer dock.
+    osd_enabled=True,
+    right_dock_enabled=False,
     media_keys_enabled=True,  # space/volume stay useful; seek keys no-op on live
     uses_player=True,
     setup=build_m3u_context,
