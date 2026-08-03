@@ -61,10 +61,12 @@ class ChannelModel(QAbstractListModel):
     GroupKeyRole = Qt.UserRole + 6
     IsCurrentRole = Qt.UserRole + 7
     LanguageRole = Qt.UserRole + 8
+    IsGroupExpandedRole = Qt.UserRole + 9
 
     countChanged = Signal()
     currentIndexChanged = Signal()
     groupingChanged = Signal()
+    expandedGroupChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -74,6 +76,8 @@ class ChannelModel(QAbstractListModel):
         self._current_index: int = -1        # cached index in _view for O(1) play resume (15k list)
         self._filter = ""
         self._grouping = GROUPING_CATEGORY
+        self._expanded_group = ""
+        self._group_counts: dict[str, int] = {}
 
     # ------------------------------------------------------------- Qt API --
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -99,6 +103,10 @@ class ChannelModel(QAbstractListModel):
             return self._group_key(channel)
         if role == self.IsCurrentRole:
             return channel is self._current
+        if role == self.IsGroupExpandedRole:
+            if self._grouping == GROUPING_NONE:
+                return True
+            return self._group_key(channel) == self._expanded_group
         return None
 
     def roleNames(self) -> dict[int, QByteArray]:  # noqa: N802
@@ -111,6 +119,7 @@ class ChannelModel(QAbstractListModel):
             self.UrlRole: b"url",
             self.GroupKeyRole: b"groupKey",
             self.IsCurrentRole: b"isCurrent",
+            self.IsGroupExpandedRole: b"isGroupExpanded",
         }
 
     # --------------------------------------------------------- QML surface --
@@ -126,6 +135,28 @@ class ChannelModel(QAbstractListModel):
     def grouping(self) -> str:  # noqa: N802
         return self._grouping
 
+    @Property(str, notify=expandedGroupChanged)
+    def expandedGroup(self) -> str:  # noqa: N802
+        return self._expanded_group
+
+    @Slot(str, result=int)
+    def groupCount(self, group_key: str) -> int:  # noqa: N802
+        return self._group_counts.get(group_key, 0)
+
+    @Slot(str)
+    def toggleGroup(self, group_key: str) -> None:  # noqa: N802
+        if self._grouping == GROUPING_NONE:
+            return
+        if self._expanded_group == group_key:
+            self._expanded_group = ""
+        else:
+            self._expanded_group = group_key
+        if self._view:
+            top = self.index(0)
+            bottom = self.index(len(self._view) - 1)
+            self.dataChanged.emit(top, bottom, [self.IsGroupExpandedRole])
+        self.expandedGroupChanged.emit()
+
     # ------------------------------------------------------------ mutation --
     def set_channels(self, channels: list[Channel]) -> None:
         """Replace the whole list (a source was loaded). The current channel
@@ -140,10 +171,11 @@ class ChannelModel(QAbstractListModel):
                 if channel.url == current_url:
                     self._current = channel
                     break
-        self._rebuild_view()
+        self._rebuild_view(preserve_expanded=False)
         self.endResetModel()
         self.countChanged.emit()
         self.currentIndexChanged.emit()
+        self.expandedGroupChanged.emit()
 
     @Slot(str)
     def setFilter(self, text: str) -> None:  # noqa: N802
@@ -152,10 +184,11 @@ class ChannelModel(QAbstractListModel):
             return
         self.beginResetModel()
         self._filter = text
-        self._rebuild_view()
+        self._rebuild_view(preserve_expanded=True)
         self.endResetModel()
         self.countChanged.emit()
         self.currentIndexChanged.emit()
+        self.expandedGroupChanged.emit()
 
     @Slot(str)
     def setGrouping(self, grouping: str) -> None:  # noqa: N802
@@ -165,11 +198,12 @@ class ChannelModel(QAbstractListModel):
             return
         self.beginResetModel()
         self._grouping = grouping
-        self._rebuild_view()
+        self._rebuild_view(preserve_expanded=False)
         self.endResetModel()
         self.groupingChanged.emit()
         self.countChanged.emit()
         self.currentIndexChanged.emit()
+        self.expandedGroupChanged.emit()
         # The QML panel persists the choice through the context (mode settings).
 
     # ------------------------------------------------------------ playback --
@@ -209,9 +243,12 @@ class ChannelModel(QAbstractListModel):
         self._view = []
         self._current = None
         self._current_index = -1
+        self._expanded_group = ""
+        self._group_counts = {}
         self.endResetModel()
         self.countChanged.emit()
         self.currentIndexChanged.emit()
+        self.expandedGroupChanged.emit()
 
     # ------------------------------------------------------------ internals --
     #: Set by the context: the function that actually opens a URL in the
@@ -221,6 +258,10 @@ class ChannelModel(QAbstractListModel):
     def _set_current(self, channel: Channel) -> None:
         old_row = self._current_index
         self._current = channel
+        if self._grouping != GROUPING_NONE and channel is not None:
+            group = self._group_key(channel)
+            if group and group != self._expanded_group and group in self._group_counts:
+                self.toggleGroup(group)
         # new index is where this channel lands in the current view
         try:
             new_row = self._view.index(channel)
@@ -234,14 +275,14 @@ class ChannelModel(QAbstractListModel):
 
     def _group_key(self, channel: Channel) -> str:
         if self._grouping == GROUPING_CATEGORY:
-            return channel.group
+            return channel.group or "Ungrouped"
         if self._grouping == GROUPING_COUNTRY:
-            return channel.country
+            return channel.country or "Unknown"
         if self._grouping == GROUPING_LANGUAGE:
-            return channel.language
+            return channel.language or "Unknown"
         return ""
 
-    def _rebuild_view(self) -> None:
+    def _rebuild_view(self, preserve_expanded: bool = False) -> None:
         view = list(self._channels)
         if self._filter:
             view = [
@@ -252,10 +293,29 @@ class ChannelModel(QAbstractListModel):
                 or self._filter in c.language.casefold()
             ]
         if self._grouping != GROUPING_NONE:
-            view.sort(key=lambda c: (self._group_key(c).casefold()
-                                     or "\uffff",  # ungrouped sinks to the end
+            view.sort(key=lambda c: ("\uffff" if self._group_key(c) in ("Ungrouped", "Unknown")
+                                     else self._group_key(c).casefold(),
                                      c.name.casefold()))
         self._view = view
+
+        # Compute matching channel count per group in this view
+        counts: dict[str, int] = {}
+        for c in view:
+            key = self._group_key(c)
+            counts[key] = counts.get(key, 0) + 1
+        self._group_counts = counts
+
+        if self._grouping == GROUPING_NONE:
+            self._expanded_group = ""
+        else:
+            if not (preserve_expanded and self._expanded_group in self._group_counts):
+                if self._current is not None and self._group_key(self._current) in self._group_counts:
+                    self._expanded_group = self._group_key(self._current)
+                elif self._view:
+                    self._expanded_group = self._group_key(self._view[0])
+                else:
+                    self._expanded_group = ""
+
         # keep cached index in sync with filtered / sorted view
         if self._current is None:
             self._current_index = -1
