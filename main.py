@@ -128,13 +128,14 @@ def main(argv: list[str] | None = None) -> int:
         QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
 
     from PySide6.QtCore import QCoreApplication, QUrl
-    from PySide6.QtGui import QGuiApplication, QIcon
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
     from PySide6.QtQml import QQmlApplicationEngine
 
     QCoreApplication.setOrganizationName("Halcyon")
     QCoreApplication.setApplicationName("Halcyon")
 
-    app = QGuiApplication(argv)
+    app = QApplication(argv)
     icon_path = ROOT / "assets" / "halcyon.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
