@@ -37,6 +37,12 @@ class WebContext(QObject):
         self._bookmarks = BookmarkModel(parent=self)
         available, message = check_webview2_available()
         self._runtime_available, self._runtime_message = available, message
+        #: Last WebView2 controller init failure, shown instead of the generic
+        #: "runtime detected" line when a controller could not start.  Empty
+        #: when everything is healthy.  Kept separate from ``_runtime_available``
+        #: (which only reflects whether the pip package imports) so a one-off
+        #: init failure never permanently masks a later successful start.
+        self._init_error_message = ""
         self._window: QQuickWindow | None = None
         self._window_hwnd = 0
         self._bounds = (0, 0, 0, 0)
@@ -80,6 +86,8 @@ class WebContext(QObject):
     def webView2Available(self) -> bool: return self._runtime_available
     @Property(str, notify=runtimeChanged)
     def webView2Status(self) -> str: return self._runtime_message
+    @Property(str, notify=runtimeChanged)
+    def webView2InitError(self) -> str: return self._init_error_message
     @Property(bool, notify=nativeVisibilityChanged)
     def nativeBrowserVisible(self) -> bool: # noqa: N802
         return self._native_should_be_visible()
@@ -220,13 +228,30 @@ class WebContext(QObject):
 
     def _create_webview(self, tab) -> None:
         key = id(tab)
-        self._webviews[key] = webview_integration.create_webview(
+        # Reserve the slot *before* the native initialisation. WebView2 init
+        # pumps a nested QEventLoop (see webview2_windows._run_initialization),
+        # so a re-entrant _sync_webviews during it must see this tab as already
+        # being created rather than spawn a duplicate controller.
+        self._webviews[key] = None
+        view = webview_integration.create_webview(
             self._window_hwnd, tab.url,
             on_title_changed=lambda title, k=key: self._on_webview_title(k, title),
             on_url_changed=lambda url, k=key: self._on_webview_url(k, url),
             on_loading_changed=lambda loading, k=key: self._on_webview_loading(k, loading),
             on_navigation_completed=lambda success, k=key: self._on_webview_completed(k, success),
+            on_init_error=lambda message, k=key: self._on_webview_init_error(k, message),
         )
+        # Native init pumps a nested event loop, so the tab could have been
+        # closed (or the whole browser torn down) while we were creating the
+        # controller.  Drop it rather than leave a controller parented to a tab
+        # nobody owns anymore.
+        still_live = {id(t) for t in self._tabs._tabs if not t.is_manager}
+        if key not in still_live:
+            if view:
+                view.close()
+            self._webviews.pop(key, None)
+            return
+        self._webviews[key] = view
 
     def _tab_for_key(self, key: int):
         return next((tab for tab in self._tabs._tabs if id(tab) == key), None)
@@ -234,8 +259,16 @@ class WebContext(QObject):
         tab = self._tabs.active_tab()
         return self._webviews.get(id(tab)) if tab and not tab.is_manager else None
     def _native_should_be_visible(self) -> bool:
-        return bool(self._runtime_available and self._stage_visible and not self._popup_open and
-                    self._tabs.hasActiveTab and not self._tabs.activeIsManager and self._window_hwnd)
+        if not (self._runtime_available and self._stage_visible and not self._popup_open and
+                self._tabs.hasActiveTab and not self._tabs.activeIsManager and self._window_hwnd):
+            return False
+        # Availability only means the WebView2 *package* imports.  If the actual
+        # runtime/controller failed to start, do not claim the native browser is
+        # showing: the QML fallback column (which appears when this is false)
+        # is the only place the user learns init failed instead of staring at a
+        # silent blank rectangle.
+        view = self._active_webview()
+        return bool(view and view.is_ready)
     def _on_webview_title(self, key: int, title: str) -> None:
         tab = self._tab_for_key(key)
         if tab: self._tabs.set_web_state(tab, title=title)
@@ -247,6 +280,19 @@ class WebContext(QObject):
         if tab: self._tabs.set_web_state(tab, loading=loading)
     def _on_webview_completed(self, key: int, _success: bool) -> None:
         self._on_webview_loading(key, False)
+    def _on_webview_init_error(self, key: int, message: str) -> None:
+        """A native controller could not start: tell the UI instead of a blank box.
+
+        ``is_ready`` stays False on the view, so ``nativeBrowserVisible`` is now
+        False and the QML fallback column will show ``webView2Status`` — which is
+        exactly the message we set here.
+        """
+        tab = self._tab_for_key(key)
+        label = f" in {tab.title!r}" if tab else ""
+        log.error("WebView2 initialisation failed%s: %s", label, message)
+        self._init_error_message = message
+        self.runtimeChanged.emit()
+        self.nativeVisibilityChanged.emit()
     def _set_runtime_error(self, message: str) -> None:
         self._runtime_available, self._runtime_message = False, message
         self.runtimeChanged.emit()

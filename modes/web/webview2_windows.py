@@ -6,10 +6,11 @@ and keeps that controller clipped to the supplied rectangle.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from typing import Callable
+
+from PySide6.QtCore import QEventLoop, QTimer
 
 from core import paths
 from modes.web.webview_integration import WebViewBase
@@ -47,6 +48,7 @@ class WebView(WebViewBase):
         on_url_changed: Callable[[str], None] | None = None,
         on_loading_changed: Callable[[bool], None] | None = None,
         on_navigation_completed: Callable[[bool], None] | None = None,
+        on_init_error: Callable[[str], None] | None = None,
     ) -> None:
         self._hwnd = int(parent_hwnd)
         self._initial_url = initial_url
@@ -54,6 +56,7 @@ class WebView(WebViewBase):
         self._on_url_changed_cb = on_url_changed
         self._on_loading_changed_cb = on_loading_changed
         self._on_navigation_completed_cb = on_navigation_completed
+        self._on_init_error_cb = on_init_error
         self._controller = None
         self._webview = None
         self._initialized = False
@@ -67,23 +70,20 @@ class WebView(WebViewBase):
         self._run_initialization()
 
     def _run_initialization(self) -> None:
-        """Run WinRT initialisation on Qt's GUI thread.
+        """Run WinRT initialisation on Qt's GUI thread, pumping the message queue.
 
         Qt owns the GUI thread and its COM apartment.  We deliberately do not
         move this work to a worker thread: WebView2 controllers must belong to
         their parent window's UI thread.
-        """
-        try:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(self._init_async())
-            else:
-                loop.create_task(self._init_async())
-        except Exception as exc:
-            log.exception("WebView2 initialisation could not start: %s", exc)
 
-    async def _init_async(self) -> None:
+        WebView2's async methods only complete while the GUI thread's message
+        pump is running.  Driving them with ``asyncio.run()`` freezes the app:
+        asyncio's Windows proactor loop never pumps the GUI thread's message
+        queue, so the completion is never delivered and the thread deadlocks
+        (the classic WebView2 hang).  We instead drive each async operation
+        with a nested :class:`QEventLoop`, which keeps Qt — and therefore the
+        Windows message pump — running until the operation reports done.
+        """
         try:
             if WebView._environment is None:
                 data_dir = paths.data_dir() / "webview2" / "profile"
@@ -91,12 +91,14 @@ class WebView(WebViewBase):
                 # This is the WinRT API, not the similarly named .NET API:
                 # create_async() has *zero* parameters.  A custom data folder
                 # belongs to create_with_options_async().
-                WebView._environment = await CoreWebView2Environment.create_with_options_async(
-                    "", str(data_dir), None
+                WebView._environment = self._await_result(
+                    CoreWebView2Environment.create_with_options_async("", str(data_dir), None)
                 )
 
             parent = CoreWebView2ControllerWindowReference.create_from_window_handle(self._hwnd)
-            self._controller = await WebView._environment.create_core_webview2_controller_async(parent)
+            self._controller = self._await_result(
+                WebView._environment.create_core_webview2_controller_async(parent)
+            )
             self._webview = self._controller.core_webview2
             self._controller.default_background_color = (0xFF, 0x0E, 0x11, 0x18)
             self._controller.bounds = self._bounds
@@ -110,8 +112,69 @@ class WebView(WebViewBase):
             log.info("WebView2 controller created for HALCYON window %s", self._hwnd)
         except FileNotFoundError:
             log.error("WebView2 Runtime is not installed.")
+            self._report_init_error("WebView2 Runtime is not installed. Install the Microsoft Edge WebView2 Evergreen Runtime.")
+        except TimeoutError as exc:
+            log.error("WebView2 initialisation timed out: %s", exc)
+            self._report_init_error(str(exc))
         except Exception as exc:
             log.exception("WebView2 controller initialisation failed: %s", exc)
+            self._report_init_error(f"WebView2 could not start: {exc}")
+
+    def _report_init_error(self, message: str) -> None:
+        """Surface an initialisation failure so the UI can show it.
+
+        ``is_ready`` stays False, which hides the native browser and reveals the
+        QML fallback message.  Delivering the failure text here (instead of only
+        logging it) is what lets that fallback say *why* instead of the generic
+        "runtime detected" line.
+        """
+        if self._on_init_error_cb:
+            try:
+                self._on_init_error_cb(message)
+            except Exception:
+                log.exception("error callback raised while reporting WebView2 init failure")
+
+    @staticmethod
+    def _await_result(async_op):
+        """Wait for a WinRT ``IAsyncOperation`` while keeping the UI alive.
+
+        PyWinRT delivers a WebView2 async completion through the GUI thread's
+        message pump (see :meth:`_run_initialization`).  We attach a completion
+        handler that quits a nested :class:`QEventLoop`, run that loop so Qt
+        keeps pumping Windows messages, then fetch the operation's result.
+        ``async_op`` exposes the standard ``completed`` / ``get_results()`` /
+        ``status`` surface of ``IAsyncOperation``.
+
+        A watchdog timer guarantees the nested loop cannot hang the app if a
+        WebView2 operation never reports back (the class of failure that froze
+        the app before).  If it fires, ``get_results()`` is not called on an
+        unfinished operation; we raise instead so the caller surfaces an error
+        rather than deadlocking.
+        """
+        loop = QEventLoop()
+        state = {"done": False}
+        #: How long to keep pumping before giving up on a WebView2 operation.
+        timeout_ms = 30000
+
+        def _done(_op, _result) -> None:
+            state["done"] = True
+            loop.quit()
+
+        async_op.completed = _done
+
+        watchdog = QTimer()
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(loop.quit)
+        watchdog.start(timeout_ms)
+
+        try:
+            loop.exec_()
+        finally:
+            watchdog.stop()
+
+        if not state["done"]:
+            raise TimeoutError("WebView2 initialisation timed out (runtime not responding)")
+        return async_op.get_results()
 
     def _install_events(self) -> None:
         if not self._webview:
@@ -202,6 +265,10 @@ class WebView(WebViewBase):
     @property
     def can_go_forward(self) -> bool:
         return bool(self._webview and self._webview.can_go_forward)
+
+    @property
+    def is_ready(self) -> bool:
+        return self._initialized
 
     @property
     def current_url(self) -> str:
