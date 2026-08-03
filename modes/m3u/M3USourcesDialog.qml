@@ -16,6 +16,7 @@ Dialog {
 
     property var ctx: null
     property string errorText: ""
+    property string infoText: ""
 
     anchors.centerIn: Overlay.overlay
     modal: true
@@ -72,10 +73,76 @@ Dialog {
     contentItem: Item {
         implicitHeight: 340
 
+        Rectangle {
+            id: infoBanner
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: visible ? 56 : 0
+            visible: root.infoText.length > 0
+            radius: Theme.radiusSmall
+            color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.10)
+            border.width: 1
+            border.color: Theme.accentDim
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.spaceSm
+                spacing: Theme.spaceSm
+
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: Glyphs.bookmark
+                    font.family: Theme.fontFamilyIcons
+                    font.pixelSize: 16
+                    color: Theme.accent
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 1
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.infoText
+                        elide: Text.ElideRight
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Theme.weightMedium
+                        color: Theme.text
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.errorText.length > 0
+                                 || (root.ctx && root.ctx.canSaveCurrentSource)
+                        text: root.errorText.length > 0
+                              ? root.errorText
+                              : "After saving, click the bookmark again."
+                        elide: Text.ElideRight
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: root.errorText.length > 0 ? Theme.danger : Theme.textFaint
+                    }
+                }
+                TextButton {
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: root.ctx && root.ctx.canSaveCurrentSource
+                    text: "Save current"
+                    glyph: Glyphs.save
+                    primary: true
+                    onClicked: root.saveCurrentForFavourites()
+                }
+            }
+        }
+
         // ---------------------------------------------------- source list --
         ListView {
             id: sourceList
-            anchors.fill: parent
+            anchors.top: infoBanner.bottom
+            anchors.topMargin: infoBanner.visible ? Theme.spaceSm : 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
             clip: true
             spacing: 2
             model: root.ctx ? root.ctx.sources : []
@@ -167,7 +234,7 @@ Dialog {
         // Empty store: the first-run state — one prompt that starts the same
         // Add URL flow, not a second implementation of it (§4.1).
         Column {
-            anchors.centerIn: parent
+            anchors.centerIn: sourceList
             width: parent.width - Theme.spaceXl * 2
             spacing: Theme.spaceMd
             visible: sourceList.count === 0
@@ -242,6 +309,29 @@ Dialog {
                 }
             }
         }
+    }
+
+    // Open helpers: normal open clears hints; favourite flow keeps an info banner.
+    function openNormal() {
+        root.infoText = "";
+        root.open();
+    }
+    function openForFavourites(message) {
+        root.errorText = "";
+        root.infoText = message;
+        root.open();
+    }
+    function saveCurrentForFavourites() {
+        if (!root.ctx)
+            return;
+        var problem = root.ctx.saveCurrentSourceForFavourites();
+        if (problem.length > 0) {
+            root.errorText = problem;
+            return;
+        }
+        root.errorText = "";
+        root.infoText = "";
+        root.close();
     }
 
     // Shared edit/delete verbs — row buttons and any future trigger bind here.

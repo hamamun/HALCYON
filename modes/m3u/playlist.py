@@ -39,6 +39,7 @@ from PySide6.QtCore import (
 from core import paths as path_utils
 from modes.m3u.parser import Channel, ParseResult, parse_m3u
 from modes.m3u import parser
+from modes.m3u.favourites import FavouritesStore
 from modes.m3u.sources import KIND_FILE, KIND_URL, MAX_SOURCES, Source, SourcesStore
 
 log = logging.getLogger(__name__)
@@ -62,11 +63,15 @@ class ChannelModel(QAbstractListModel):
     IsCurrentRole = Qt.UserRole + 7
     LanguageRole = Qt.UserRole + 8
     IsGroupExpandedRole = Qt.UserRole + 9
+    IsFavouriteRole = Qt.UserRole + 10
 
     countChanged = Signal()
+    totalCountChanged = Signal()
     currentIndexChanged = Signal()
     groupingChanged = Signal()
     expandedGroupChanged = Signal()
+    favouritesOnlyChanged = Signal()
+    favouritesChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -78,6 +83,8 @@ class ChannelModel(QAbstractListModel):
         self._grouping = GROUPING_CATEGORY
         self._expanded_group = ""
         self._group_counts: dict[str, int] = {}
+        self._favourite_urls: set[str] = set()
+        self._favourites_only = False
 
     # ------------------------------------------------------------- Qt API --
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -107,6 +114,8 @@ class ChannelModel(QAbstractListModel):
             if self._grouping == GROUPING_NONE:
                 return True
             return self._group_key(channel) == self._expanded_group
+        if role == self.IsFavouriteRole:
+            return channel.url in self._favourite_urls
         return None
 
     def roleNames(self) -> dict[int, QByteArray]:  # noqa: N802
@@ -120,12 +129,23 @@ class ChannelModel(QAbstractListModel):
             self.GroupKeyRole: b"groupKey",
             self.IsCurrentRole: b"isCurrent",
             self.IsGroupExpandedRole: b"isGroupExpanded",
+            self.IsFavouriteRole: b"isFavourite",
         }
 
     # --------------------------------------------------------- QML surface --
     @Property(int, notify=countChanged)
     def count(self) -> int:  # noqa: N802
         return len(self._view)
+
+    @Property(int, notify=totalCountChanged)
+    def totalCount(self) -> int:  # noqa: N802
+        return len(self._channels)
+
+    @Property(int, notify=favouritesChanged)
+    def favouriteCount(self) -> int:  # noqa: N802
+        if not self._channels:
+            return 0
+        return sum(1 for channel in self._channels if channel.url in self._favourite_urls)
 
     @Property(int, notify=currentIndexChanged)
     def currentIndex(self) -> int:  # noqa: N802
@@ -138,6 +158,10 @@ class ChannelModel(QAbstractListModel):
     @Property(str, notify=expandedGroupChanged)
     def expandedGroup(self) -> str:  # noqa: N802
         return self._expanded_group
+
+    @Property(bool, notify=favouritesOnlyChanged)
+    def favouritesOnly(self) -> bool:  # noqa: N802
+        return self._favourites_only
 
     @Slot(str, result=int)
     def groupCount(self, group_key: str) -> int:  # noqa: N802
@@ -174,8 +198,10 @@ class ChannelModel(QAbstractListModel):
         self._rebuild_view(preserve_expanded=False)
         self.endResetModel()
         self.countChanged.emit()
+        self.totalCountChanged.emit()
         self.currentIndexChanged.emit()
         self.expandedGroupChanged.emit()
+        self.favouritesChanged.emit()
 
     @Slot(str)
     def setFilter(self, text: str) -> None:  # noqa: N802
@@ -205,6 +231,20 @@ class ChannelModel(QAbstractListModel):
         self.currentIndexChanged.emit()
         self.expandedGroupChanged.emit()
         # The QML panel persists the choice through the context (mode settings).
+
+    @Slot(bool)
+    def setFavouritesOnly(self, enabled: bool) -> None:  # noqa: N802
+        enabled = bool(enabled)
+        if enabled == self._favourites_only:
+            return
+        self.beginResetModel()
+        self._favourites_only = enabled
+        self._rebuild_view(preserve_expanded=True)
+        self.endResetModel()
+        self.favouritesOnlyChanged.emit()
+        self.countChanged.emit()
+        self.currentIndexChanged.emit()
+        self.expandedGroupChanged.emit()
 
     # ------------------------------------------------------------ playback --
     @Slot(int, result=bool)
@@ -247,8 +287,43 @@ class ChannelModel(QAbstractListModel):
         self._group_counts = {}
         self.endResetModel()
         self.countChanged.emit()
+        self.totalCountChanged.emit()
         self.currentIndexChanged.emit()
         self.expandedGroupChanged.emit()
+        self.favouritesChanged.emit()
+
+    def channel_at(self, row: int) -> Channel | None:
+        if not (0 <= row < len(self._view)):
+            return None
+        return self._view[row]
+
+    def set_favourites(self, urls: set[str]) -> None:
+        urls = {str(url).strip() for url in urls if str(url).strip()}
+        if urls == self._favourite_urls:
+            return
+        reset = self._favourites_only
+        if reset:
+            self.beginResetModel()
+        self._favourite_urls = urls
+        if reset:
+            self._rebuild_view(preserve_expanded=True)
+            self.endResetModel()
+            self.countChanged.emit()
+            self.currentIndexChanged.emit()
+            self.expandedGroupChanged.emit()
+        elif self._view:
+            top = self.index(0)
+            bottom = self.index(len(self._view) - 1)
+            self.dataChanged.emit(top, bottom, [self.IsFavouriteRole])
+        self.favouritesChanged.emit()
+
+    def set_favourite_url(self, url: str, favourite: bool) -> None:
+        urls = set(self._favourite_urls)
+        if favourite:
+            urls.add(url)
+        else:
+            urls.discard(url)
+        self.set_favourites(urls)
 
     # ------------------------------------------------------------ internals --
     #: Set by the context: the function that actually opens a URL in the
@@ -292,6 +367,8 @@ class ChannelModel(QAbstractListModel):
                 or self._filter in c.country.casefold()
                 or self._filter in c.language.casefold()
             ]
+        if self._favourites_only:
+            view = [c for c in view if c.url in self._favourite_urls]
         if self._grouping != GROUPING_NONE:
             view.sort(key=lambda c: ("\uffff" if self._group_key(c) in ("Ungrouped", "Unknown")
                                      else self._group_key(c).casefold(),
@@ -392,12 +469,17 @@ class M3UContext(QObject):
 
         store_path = settings.path.parent / "m3u-sources.json"
         self._store = SourcesStore(store_path)
+        favourites_path = settings.path.parent / "m3u-favourites.json"
+        self._favourites = FavouritesStore(favourites_path)
 
         self._status_message = ""
         self._status_is_error = False
         self._loading = False
         self._current_source_name = ""
         self._current_source_id = ""
+        self._unsaved_source_name = ""
+        self._unsaved_source_kind = ""
+        self._unsaved_source_location = ""
         self._last_attempted_id = ""
         self._pending_source_id = ""
         self._inflight: dict[str, _LoadSignals] = {}
@@ -444,6 +526,10 @@ class M3UContext(QObject):
     def currentSourceName(self) -> str:  # noqa: N802
         return self._current_source_name
 
+    @Property(bool, notify=infoChanged)
+    def canSaveCurrentSource(self) -> bool:  # noqa: N802
+        return bool(self._unsaved_source_location) and not self._store.full
+
     @Property(str, notify=statusChanged)
     def statusMessage(self) -> str:  # noqa: N802
         return self._status_message
@@ -475,6 +561,7 @@ class M3UContext(QObject):
         if self._store.add(name, kind, location) is None:
             return "Could not add the source."
         self.sourcesChanged.emit()
+        self.infoChanged.emit()
         return ""
 
     @Slot(str, str, str, result=bool)
@@ -492,11 +579,23 @@ class M3UContext(QObject):
 
     @Slot(str, result=bool)
     def removeSource(self, source_id: str) -> bool:  # noqa: N802
+        source = self._store.get(source_id)
         ok = self._store.remove(source_id)
         if ok:
+            self._favourites.remove_source(source_id)
             if self._settings.get_mode("m3u", "lastSource", "") == source_id:
                 self._settings.set_mode("m3u", "lastSource", "")
+            if source_id == self._current_source_id:
+                self._current_source_id = ""
+                if self._model.favouritesOnly:
+                    self._model.setFavouritesOnly(False)
+                self._model.set_favourites(set())
+                if source is not None:
+                    self._remember_unsaved_source(source.name, source.kind, source.location)
+                    self._current_source_name = f"{source.name} (not saved)"
+                self.infoChanged.emit()
             self.sourcesChanged.emit()
+            self.infoChanged.emit()
         return ok
 
     @Slot(str)
@@ -565,7 +664,10 @@ class M3UContext(QObject):
             self._set_status("Could not open the file.", is_error=True)
             return
         self._current_source_id = ""
+        if self._model.favouritesOnly:
+            self._model.setFavouritesOnly(False)
         self._current_source_name = f"{Path(path).stem} (not saved)"
+        self._remember_unsaved_source(Path(path).stem, KIND_FILE, path)
         self.infoChanged.emit()
         self._apply_result(result)
 
@@ -579,6 +681,65 @@ class M3UContext(QObject):
         and the remembered choice (§P2.4 — the grouping choice is remembered)."""
         self._model.setGrouping(grouping)
         self._settings.set_mode("m3u", "grouping", grouping)
+
+    @Slot(int, result=str)
+    def toggleFavourite(self, row: int) -> str:  # noqa: N802
+        """Toggle a channel favourite, or ask QML to save an unsaved list."""
+        if not self._current_source_id:
+            return "save-required" if self._model.totalCount > 0 else ""
+        channel = self._model.channel_at(row)
+        if channel is None:
+            return ""
+        new_state = self._favourites.toggle(self._current_source_id, channel.url)
+        if new_state is None:
+            return ""
+        self._model.set_favourite_url(channel.url, new_state)
+        return "added" if new_state else "removed"
+
+    @Slot(result=str)
+    def toggleFavouritesOnly(self) -> str:  # noqa: N802
+        """Toolbar bookmark: show all channels or only favourites."""
+        if self._model.totalCount <= 0:
+            return ""
+        if not self._current_source_id:
+            if self._model.favouritesOnly:
+                self._model.setFavouritesOnly(False)
+                return ""
+            return "save-required"
+        self._model.setFavouritesOnly(not self._model.favouritesOnly)
+        return ""
+
+    @Slot(result=str)
+    def saveCurrentSourceForFavourites(self) -> str:  # noqa: N802
+        """Save a dropped/temporary playlist so favourites have a home.
+
+        The already parsed channel list stays in place; only the source gains a
+        saved id, after which the next bookmark click can persist normally.
+        """
+        if not self._unsaved_source_location or not self._unsaved_source_kind:
+            return "There is no temporary playlist to save."
+        if self._store.full:
+            return f"You already have {MAX_SOURCES} — remove one to add another."
+
+        location = self._unsaved_source_location
+        kind = self._unsaved_source_kind
+        if kind == KIND_FILE and not Path(location).exists():
+            return "File not found — it may have moved."
+        if kind == KIND_URL and not parser.is_url(location):
+            return "That doesn't look like a URL — it should start with http:// or https://"
+
+        source = self._store.add(self._unsaved_source_name, kind, location)
+        if source is None:
+            return "Could not save the playlist."
+
+        self._current_source_id = source.id
+        self._current_source_name = source.name
+        self._clear_unsaved_source()
+        self._model.set_favourites(self._favourites.list(source.id))
+        self._settings.set_mode("m3u", "lastSource", source.id)
+        self.sourcesChanged.emit()
+        self.infoChanged.emit()
+        return ""
 
     # ------------------------------ shared-controller protocol (duck-typed) --
     # The controller calls these on whichever context is active (§A.2): Next,
@@ -637,6 +798,16 @@ class M3UContext(QObject):
         self._set_status("", is_error=False)
 
     # ------------------------------------------------------------ internals --
+    def _remember_unsaved_source(self, name: str, kind: str, location: str) -> None:
+        self._unsaved_source_name = (name or "").strip()
+        self._unsaved_source_kind = kind
+        self._unsaved_source_location = location
+
+    def _clear_unsaved_source(self) -> None:
+        self._unsaved_source_name = ""
+        self._unsaved_source_kind = ""
+        self._unsaved_source_location = ""
+
     def _open_url(self, url: str) -> None:
         """Channels open straight in the shared engine (§P2.2 — HLS included).
         Not through the controller's openPath: streams never resume, never
@@ -652,6 +823,9 @@ class M3UContext(QObject):
 
     def _apply_result(self, result: ParseResult) -> None:
         self._loading = False
+        favourite_urls = (self._favourites.list(self._current_source_id)
+                          if self._current_source_id else set())
+        self._model.set_favourites(favourite_urls)
         self._model.set_channels(result.channels)
         if not result.channels:
             self._set_status("No playable channels found in this playlist.",
@@ -673,6 +847,7 @@ class M3UContext(QObject):
         result = parser.parse_m3u(text, base_dir=base_dir)
         self._current_source_id = source_id
         self._current_source_name = source.name if source else ""
+        self._clear_unsaved_source()
         self.infoChanged.emit()
         self._settings.set_mode("m3u", "lastSource", source_id)
         self._apply_result(result)

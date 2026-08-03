@@ -7,15 +7,19 @@ import Halcyon.Ui
 // The toolbar holds EXACTLY TWO buttons: Playlists… (the one home for every
 // way a source enters M3U, §4.1) and Clear Playlist. The body is the channel
 // list from the loaded source: name, group tag, tvg-logo thumbnail, a filter
-// box, and a grouping selector (By category / By country / By language /
-// No group — remembered). Single click plays. The playing channel is always
-// and kept visible. There is no right dock in this mode and nothing here is
+// box, a grouping selector (By category / By country / By language / No group
+// — remembered), and a favourites-only toggle. Single click plays. The
+// playing channel is always and kept visible. There is no right dock in this mode and nothing here is
 // shared with Local (§A.1).
 Item {
     id: root
 
     // Exposed by main.py as <id-capitalised>Playlist — "m3u" -> "M3uPlaylist".
     property var ctx: typeof M3uPlaylist !== "undefined" ? M3uPlaylist : null
+
+    function showSaveFavouritePrompt() {
+        sourcesDialog.openForFavourites("Save this playlist first to use favourites.");
+    }
 
     // ------------------------------------------------------------ toolbar --
     PanelToolbar {
@@ -26,12 +30,12 @@ Item {
         IconButton {
             glyph: Glyphs.playlist
             tooltip: "Playlists…"
-            onClicked: sourcesDialog.open()          // the ONE home (§4.1)
+            onClicked: sourcesDialog.openNormal()    // the ONE home (§4.1)
         }
         IconButton {
             glyph: Glyphs.clearAll
             tooltip: "Clear playlist"
-            enabled: root.ctx && root.ctx.channels.count > 0
+            enabled: root.ctx && root.ctx.channels.totalCount > 0
             onClicked: clearConfirm.open()
         }
     }
@@ -99,6 +103,22 @@ Item {
                 tooltip: modelData.tooltip
                 active: root.ctx && root.ctx.channels.grouping === modelData.key
                 onClicked: if (root.ctx) root.ctx.persistGrouping(modelData.key)
+            }
+        }
+
+        IconButton {
+            anchors.verticalCenter: parent.verticalCenter
+            glyph: Glyphs.bookmark
+            tooltip: root.ctx && root.ctx.channels.favouritesOnly
+                     ? "Show all channels" : "Show favourites only"
+            active: root.ctx && root.ctx.channels.favouritesOnly
+            enabled: root.ctx && root.ctx.channels.totalCount > 0
+            onClicked: {
+                if (!root.ctx)
+                    return;
+                var outcome = root.ctx.toggleFavouritesOnly();
+                if (outcome === "save-required")
+                    root.showSaveFavouritePrompt();
             }
         }
     }
@@ -257,6 +277,7 @@ Item {
             required property string logo
             required property bool isCurrent
             required property bool isGroupExpanded
+            required property bool isFavourite
 
             width: ListView.view.width
             height: isGroupExpanded ? Theme.listRowHeight : 0
@@ -298,7 +319,9 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - 34 - (groupTag.visible ? groupTag.width : 0) - Theme.spaceSm * (groupTag.visible ? 3 : 2)
+                    width: parent.width - 34 - 30
+                           - (groupTag.visible ? groupTag.width : 0)
+                           - Theme.spaceSm * (groupTag.visible ? 4 : 3)
                     text: row.name
                     elide: Text.ElideRight
                     font.family: Theme.fontFamily
@@ -315,6 +338,24 @@ Item {
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.textFaint
+                }
+                IconButton {
+                    id: favouriteButton
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 30
+                    height: 30
+                    iconSize: 14
+                    showRing: hovered || active
+                    glyph: Glyphs.bookmark
+                    active: row.isFavourite
+                    tooltip: row.isFavourite ? "Remove from favourites" : "Add to favourites"
+                    onClicked: {
+                        if (!root.ctx)
+                            return;
+                        var outcome = root.ctx.toggleFavourite(row.index);
+                        if (outcome === "save-required")
+                            root.showSaveFavouritePrompt();
+                    }
                 }
             }
         }
@@ -350,7 +391,13 @@ Item {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
-            text: "No playlist loaded.\nAdd a stream URL or a saved .m3u file, or drop one here."
+            text: root.ctx && root.ctx.channels.totalCount > 0
+                  ? (root.ctx.channels.favouritesOnly
+                     ? (root.ctx.channels.favouriteCount > 0
+                        ? "No favourite channels match your filter."
+                        : "No favourite channels yet.\nShow all channels and click a bookmark to add one.")
+                     : "No channels match your filter.")
+                  : "No playlist loaded.\nAdd a stream URL or a saved .m3u file, or drop one here."
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
             color: Theme.textFaint
@@ -360,7 +407,7 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Playlists…"
             glyph: Glyphs.playlist
-            onClicked: sourcesDialog.open()          // same trigger as the toolbar
+            onClicked: sourcesDialog.openNormal()    // same trigger as the toolbar
         }
     }
 
@@ -404,8 +451,8 @@ Item {
     ConfirmDialog {
         id: clearConfirm
         title: "Clear playlist"
-        message: root.ctx && root.ctx.channels.count > 1
-                 ? "Remove all " + root.ctx.channels.count + " channels from the list?"
+        message: root.ctx && root.ctx.channels.totalCount > 1
+                 ? "Remove all " + root.ctx.channels.totalCount + " channels from the list?"
                  : "Remove this channel from the list?"
         onConfirmed: Actions.clearPlaylist()       // the one action home
     }
