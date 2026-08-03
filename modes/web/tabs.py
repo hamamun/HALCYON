@@ -261,6 +261,40 @@ class TabModel(QAbstractListModel):
             return self._tabs[self._active]
         return None
 
+    def set_web_state(
+        self,
+        tab: Tab,
+        *,
+        title: str | None = None,
+        url: str | None = None,
+        loading: bool | None = None,
+    ) -> None:
+        """Apply state reported by the real WebView2 controller.
+
+        Redirects and document titles originate in the browser, not in the
+        optimistic QML tab model.  Keep the current history entry in sync
+        without creating a new history entry for every redirect.
+        """
+        try:
+            row = self._tabs.index(tab)
+        except ValueError:
+            return
+        if url:
+            tab.url = url
+            tab.favicon = favicon_for(url)
+            if 0 <= tab.history_index < len(tab.history):
+                tab.history[tab.history_index] = url
+        if title is not None and title.strip():
+            tab.title = title.strip()
+        elif url:
+            tab.title = title_for_url(url)
+        if loading is not None:
+            tab.loading = loading
+        self._emit_rows([row])
+        if row == self._active:
+            self.activeChanged.emit()
+        self.changed.emit()
+
     def _append(self, tab: Tab) -> bool:
         if len(self._tabs) >= MAX_TABS:
             self.limitReached.emit()

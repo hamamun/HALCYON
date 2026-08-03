@@ -69,3 +69,20 @@ def test_url_normalisation() -> None:
     assert normalise_url("https://example.com/path") == "https://example.com/path"
     assert "bing.com/search" in normalise_url("halcyon browser")
     assert canonical_url("https://EXAMPLE.com/") == "https://example.com/"
+
+
+def test_real_browser_state_updates_the_active_tab() -> None:
+    _app()
+    tabs = TabModel()
+    assert tabs.openUrl("https://example.com")
+    tab = tabs.active_tab()
+    assert tab is not None
+
+    # WebView2 reports titles and final redirect URLs asynchronously. Those
+    # updates must change the existing history entry, not create a phantom tab
+    # navigation for every redirect.
+    tabs.set_web_state(tab, title="Example Domain", url="https://www.example.com/", loading=True)
+    assert tabs.activeTitle == "Example Domain"
+    assert tabs.activeUrl == "https://www.example.com/"
+    assert tab.history == ["https://www.example.com/"]
+    assert tab.loading
