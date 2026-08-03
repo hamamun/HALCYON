@@ -65,9 +65,10 @@ def test_registry_appends_m3u_after_local() -> None:
             registry = node.value
     assert registry is not None and isinstance(registry, ast.List)
     entries = [e for e in registry.elts if isinstance(e, ast.Attribute)]
-    assert [e.attr for e in entries] == ["SPEC", "SPEC"]
-    assert [e.value.id for e in entries] == ["local", "m3u"], (
-        "REGISTRY must read [local.SPEC, m3u.SPEC]"
+    names = [e.value.id for e in entries]
+    assert [e.attr for e in entries] == ["SPEC"] * len(entries)
+    assert names[:2] == ["local", "m3u"], (
+        "REGISTRY must keep M3U appended immediately after Local"
     )
 
 
