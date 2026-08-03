@@ -50,6 +50,16 @@ class WebViewBase(ABC):
 
     def set_visible(self, visible: bool) -> None: pass
     @property
+    def is_ready(self) -> bool:
+        """True once the native controller exists and can render content.
+
+        Distinct from "the WebView2 package imports".  The package being
+        installed does not mean the runtime/controller came up, so callers that
+        decide whether to show native content (or fall back to a message) must
+        gate on this, not on availability alone.
+        """
+        return False
+    @property
     def can_go_back(self) -> bool: return False
     @property
     def can_go_forward(self) -> bool: return False
@@ -66,14 +76,17 @@ def create_webview(
     on_url_changed: Callable[[str], None] | None = None,
     on_loading_changed: Callable[[bool], None] | None = None,
     on_navigation_completed: Callable[[bool], None] | None = None,
+    on_init_error: Callable[[str], None] | None = None,
 ) -> WebViewBase | None:
     if not IS_WINDOWS or not WEBVIEW2_AVAILABLE or not parent_hwnd:
         return None
     try:
         from modes.web.webview2_windows import WebView
         return WebView(parent_hwnd, initial_url, on_title_changed, on_url_changed,
-                       on_loading_changed, on_navigation_completed)
+                       on_loading_changed, on_navigation_completed, on_init_error)
     except Exception as exc:
+        if on_init_error:
+            on_init_error(f"Could not create WebView2 controller: {exc}")
         log.exception("Could not create WebView2 controller: %s", exc)
         return None
 

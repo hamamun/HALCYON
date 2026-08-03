@@ -331,9 +331,11 @@ Item {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: root.ctx && root.ctx.webView2Available
-                      ? "WebView2 runtime detected. Native browser content attaches in this rectangle."
-                      : (root.ctx ? root.ctx.webView2Status : "Web context not available.")
+                text: root.ctx && root.ctx.webView2InitError.length > 0
+                      ? root.ctx.webView2InitError
+                      : (root.ctx && root.ctx.webView2Available
+                         ? "WebView2 runtime detected. Native browser content attaches in this rectangle."
+                         : (root.ctx ? root.ctx.webView2Status : "Web context not available."))
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.textMuted
