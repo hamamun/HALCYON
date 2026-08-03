@@ -7,7 +7,8 @@ What this understands:
 
 * the ``#EXTM3U`` header line
 * ``#EXTINF`` with a duration and the common ``tvg-*`` attributes
-  (``tvg-id``, ``tvg-name``, ``tvg-logo``, ``tvg-country``) plus ``group-title``
+  (``tvg-id``, ``tvg-name``, ``tvg-logo``, ``tvg-country``,
+  ``tvg-language``) plus ``group-title``
 * ``#EXTGRP`` as a fallback group
 * plain entries without an ``#EXTINF`` (the URL's file name becomes the title)
 * local paths — absolute, ``~``-relative and playlist-relative — and remote
@@ -18,6 +19,11 @@ What this understands:
 * nested playlist references (``.m3u`` / ``.m3u8`` URLs, including HLS master
   playlists): explicitly ignored and counted — a playlist is a document you
   load, not a channel you play
+* **country resolution** — when ``tvg-country`` is missing, the parser tries
+  four fallback strategies (tvg-id pattern, group-title splitting, title
+  pattern) to extract an ISO country code and maps it to a readable name.
+* **language resolution** — when ``tvg-language`` is missing, the parser
+  falls back to the resolved country's primary language.
 
 Remote playlists are fetched with the standard library only (§P2.4 — no new
 dependency).
@@ -46,6 +52,223 @@ _ATTR_RE = re.compile(r'([a-zA-Z0-9\-_]+)\s*=\s*"([^"]*)"')
 _HLS_VARIANT_RE = re.compile(r"^#EXT-X-(STREAM-INF|MEDIA)\b", re.IGNORECASE)
 _PLAYLIST_EXT = {".m3u", ".m3u8"}
 
+# ---------------------------------------------------------------------------
+# Country resolution lookup tables
+# ---------------------------------------------------------------------------
+
+#: ISO 3166-1 alpha-2 country codes → readable names.  Used by the country
+#: resolver to turn a 2-letter code into something human-friendly.
+_ISO2_COUNTRY_NAMES: dict[str, str] = {
+    "AF": "Afghanistan", "AL": "Albania", "DZ": "Algeria", "AD": "Andorra",
+    "AO": "Angola", "AR": "Argentina", "AM": "Armenia", "AU": "Australia",
+    "AT": "Austria", "AZ": "Azerbaijan", "BS": "Bahamas", "BH": "Bahrain",
+    "BD": "Bangladesh", "BY": "Belarus", "BE": "Belgium", "BZ": "Belize",
+    "BJ": "Benin", "BO": "Bolivia", "BA": "Bosnia", "BW": "Botswana",
+    "BR": "Brazil", "BN": "Brunei", "BG": "Bulgaria", "BF": "Burkina Faso",
+    "KH": "Cambodia", "CM": "Cameroon", "CA": "Canada", "CL": "Chile",
+    "CN": "China", "CO": "Colombia", "CR": "Costa Rica", "HR": "Croatia",
+    "CU": "Cuba", "CY": "Cyprus", "CZ": "Czechia", "DK": "Denmark",
+    "DO": "Dominican Republic", "EC": "Ecuador", "EG": "Egypt",
+    "SV": "El Salvador", "GQ": "Equatorial Guinea", "EE": "Estonia",
+    "ET": "Ethiopia", "FI": "Finland", "FR": "France", "GA": "Gabon",
+    "GM": "Gambia", "GE": "Georgia", "DE": "Germany", "GH": "Ghana",
+    "GR": "Greece", "GT": "Guatemala", "GN": "Guinea", "HT": "Haiti",
+    "HN": "Honduras", "HK": "Hong Kong", "HU": "Hungary", "IS": "Iceland",
+    "IN": "India", "ID": "Indonesia", "IR": "Iran", "IQ": "Iraq",
+    "IE": "Ireland", "IL": "Israel", "IT": "Italy", "JM": "Jamaica",
+    "JP": "Japan", "JO": "Jordan", "KZ": "Kazakhstan", "KE": "Kenya",
+    "KW": "Kuwait", "KG": "Kyrgyzstan", "LA": "Laos", "LV": "Latvia",
+    "LB": "Lebanon", "LY": "Libya", "LI": "Liechtenstein", "LT": "Lithuania",
+    "LU": "Luxembourg", "MK": "North Macedonia", "MY": "Malaysia",
+    "ML": "Mali", "MT": "Malta", "MX": "Mexico", "MD": "Moldova",
+    "MC": "Monaco", "MN": "Mongolia", "ME": "Montenegro", "MA": "Morocco",
+    "MZ": "Mozambique", "MM": "Myanmar", "NA": "Namibia", "NP": "Nepal",
+    "NL": "Netherlands", "NZ": "New Zealand", "NI": "Nicaragua", "NE": "Niger",
+    "NG": "Nigeria", "KP": "North Korea", "NO": "Norway", "OM": "Oman",
+    "PK": "Pakistan", "PA": "Panama", "PY": "Paraguay", "PE": "Peru",
+    "PH": "Philippines", "PL": "Poland", "PT": "Portugal", "QA": "Qatar",
+    "RO": "Romania", "RU": "Russia", "RW": "Rwanda", "SA": "Saudi Arabia",
+    "SN": "Senegal", "RS": "Serbia", "SG": "Singapore", "SK": "Slovakia",
+    "SI": "Slovenia", "SO": "Somalia", "ZA": "South Africa", "KR": "South Korea",
+    "ES": "Spain", "LK": "Sri Lanka", "SD": "Sudan", "SE": "Sweden",
+    "CH": "Switzerland", "SY": "Syria", "TW": "Taiwan", "TJ": "Tajikistan",
+    "TZ": "Tanzania", "TH": "Thailand", "TN": "Tunisia", "TR": "Turkey",
+    "TM": "Turkmenistan", "UG": "Uganda", "UA": "Ukraine",
+    "AE": "United Arab Emirates", "GB": "United Kingdom", "UK": "United Kingdom",
+    "US": "United States", "UY": "Uruguay", "UZ": "Uzbekistan",
+    "VE": "Venezuela", "VN": "Vietnam", "YE": "Yemen", "ZM": "Zambia",
+    "ZW": "Zimbabwe", "INT": "International",
+}
+
+#: Words that appear in group-title segments but are NOT country codes.
+#: The country resolver skips these when splitting group-title by delimiters.
+_M3U_CATEGORY_HINTS: frozenset[str] = frozenset({
+    "SPORTS", "SPORT", "NEWS", "MOVIES", "MOVIE", "MUSIC", "KIDS", "CHILDREN",
+    "ENTERTAINMENT", "ENT", "DOCUMENTARY", "DOCS", "COMEDY", "DRAMA", "FILMS",
+    "GENERAL", "LIFESTYLE", "FOOD", "TRAVEL", "SCIENCE", "TECH", "TECHNOLOGY",
+    "MOVIES", "SERIES", "ANIME", "CARTOON", "RELIGION", "CLASSIC", "CLASSICS",
+    "LOCAL", "NATIONAL", "REGIONAL", "WORLD", "INTERNATIONAL", "LATINO",
+    "LATIN", "HD", "SD", "FHD", "4K", "UHD", "VIP", "PREMIUM", "ADULT",
+    "XXX", "LIVE", "RADIO", "VOD", "CATCHUP", "EPG", "TV", "TV SHOWS",
+    "SHOPPING", "WEATHER", "AUTO", "BUSINESS", "FINANCE", "EDUCATION",
+    "FASHION", "HISTORY", "NATURE", "OUTDOOR", "GAMING", "ANIMATION",
+    "CULTURE", "ARTS", "RELIGIOUS", "SPIRITUAL", "MOTORS", "FOOTBALL",
+    "CRICKET", "TENNIS", "GOLF", "RUGBY", "BOXING", "MMA", "UFC",
+})
+
+#: ISO 3166-1 alpha-2 → primary language (ISO 639-1 name, capitalised).
+#: Used by the language resolver as a fallback when ``tvg-language`` is absent.
+_COUNTRY_TO_LANGUAGE: dict[str, str] = {
+    "AF": "Pashto", "AL": "Albanian", "DZ": "Arabic", "AD": "Catalan",
+    "AO": "Portuguese", "AR": "Spanish", "AM": "Armenian", "AU": "English",
+    "AT": "German", "AZ": "Azerbaijani", "BS": "English", "BH": "Arabic",
+    "BD": "Bengali", "BY": "Belarusian", "BE": "Dutch", "BZ": "English",
+    "BJ": "French", "BO": "Spanish", "BA": "Bosnian", "BW": "English",
+    "BR": "Portuguese", "BN": "Malay", "BG": "Bulgarian", "BF": "French",
+    "KH": "Khmer", "CM": "French", "CA": "English", "CL": "Spanish",
+    "CN": "Chinese", "CO": "Spanish", "CR": "Spanish", "HR": "Croatian",
+    "CU": "Spanish", "CY": "Greek", "CZ": "Czech", "DK": "Danish",
+    "DO": "Spanish", "EC": "Spanish", "EG": "Arabic", "SV": "Spanish",
+    "GQ": "Spanish", "EE": "Estonian", "ET": "Amharic", "FI": "Finnish",
+    "FR": "French", "GA": "French", "GM": "English", "GE": "Georgian",
+    "DE": "German", "GH": "English", "GR": "Greek", "GT": "Spanish",
+    "GN": "French", "HT": "French", "HN": "Spanish", "HK": "Chinese",
+    "HU": "Hungarian", "IS": "Icelandic", "IN": "Hindi", "ID": "Indonesian",
+    "IR": "Persian", "IQ": "Arabic", "IE": "English", "IL": "Hebrew",
+    "IT": "Italian", "JM": "English", "JP": "Japanese", "JO": "Arabic",
+    "KZ": "Kazakh", "KE": "Swahili", "KW": "Arabic", "KG": "Kyrgyz",
+    "LA": "Lao", "LV": "Latvian", "LB": "Arabic", "LY": "Arabic",
+    "LI": "German", "LT": "Lithuanian", "LU": "French", "MK": "Macedonian",
+    "MY": "Malay", "ML": "French", "MT": "Maltese", "MX": "Spanish",
+    "MD": "Romanian", "MC": "French", "MN": "Mongolian", "ME": "Montenegrin",
+    "MA": "Arabic", "MZ": "Portuguese", "MM": "Burmese", "NA": "English",
+    "NP": "Nepali", "NL": "Dutch", "NZ": "English", "NI": "Spanish",
+    "NE": "French", "NG": "English", "KP": "Korean", "NO": "Norwegian",
+    "OM": "Arabic", "PK": "Urdu", "PA": "Spanish", "PY": "Spanish",
+    "PE": "Spanish", "PH": "Filipino", "PL": "Polish", "PT": "Portuguese",
+    "QA": "Arabic", "RO": "Romanian", "RU": "Russian", "RW": "Kinyarwanda",
+    "SA": "Arabic", "SN": "French", "RS": "Serbian", "SG": "English",
+    "SK": "Slovak", "SI": "Slovene", "SO": "Somali", "ZA": "English",
+    "KR": "Korean", "ES": "Spanish", "LK": "Sinhala", "SD": "Arabic",
+    "SE": "Swedish", "CH": "German", "SY": "Arabic", "TW": "Chinese",
+    "TJ": "Tajik", "TZ": "Swahili", "TH": "Thai", "TN": "Arabic",
+    "TR": "Turkish", "TM": "Turkmen", "UG": "English", "UA": "Ukrainian",
+    "AE": "Arabic", "GB": "English", "UK": "English", "US": "English",
+    "UY": "Spanish", "UZ": "Uzbek", "VE": "Spanish", "VN": "Vietnamese",
+    "YE": "Arabic", "ZM": "English", "ZW": "English",
+}
+
+# ---------------------------------------------------------------------------
+# Country attribute names (strategy 1) — all the variants we recognise.
+# The parser collects whichever of these is present.
+# ---------------------------------------------------------------------------
+_COUNTRY_ATTR_NAMES: tuple[str, ...] = (
+    "tvg-country", "country", "nation", "tvg-nation", "region", "tvg-region",
+)
+
+# Regex helpers for country extraction from tvg-id and title.
+_TVG_ID_COUNTRY_RE = re.compile(r"[.@]([A-Za-z]{2})(?:[@\s]|$)")
+_TITLE_BRACKET_COUNTRY_RE = re.compile(r"^\[([A-Za-z]{2})\]")
+_TITLE_PREFIX_COUNTRY_RE = re.compile(r"^([A-Za-z]{2})\s*[:\-–—]\s*")
+_GROUP_SPLIT_RE = re.compile(r"\s*[|/;,–—\-]\s*")
+
+
+def _normalise_country_code(code: str) -> str:
+    """Turn a 2-letter ISO code into a readable name.  Returns the uppercase
+    code as-is when it's not in our lookup table."""
+    upper = code.upper().strip()
+    if not upper or len(upper) > 3:
+        return ""
+    return _ISO2_COUNTRY_NAMES.get(upper, upper)
+
+
+def _resolve_country(
+    name: str,
+    tvg_id: str,
+    group: str,
+    raw_country: str,
+) -> str:
+    """Four-strategy country resolution (tried in order):
+
+    1. Explicit country attributes (already collected as *raw_country*)
+    2. ``tvg-id`` pattern — e.g. ``BBC.uk`` → United Kingdom
+    3. ``group-title`` splitting — e.g. ``UK | Sports`` → United Kingdom
+    4. Channel title pattern — e.g. ``[UK] BBC`` or ``UK: CNN``
+
+    Returns a readable country name, or ``""`` when nothing matches.
+    """
+    # Strategy 1: explicit attribute
+    if raw_country.strip():
+        val = raw_country.strip()
+        # Could be a 2-letter code or already a name
+        if len(val) <= 3 and val.isalpha():
+            return _normalise_country_code(val)
+        return val
+
+    # Strategy 2: tvg-id pattern (e.g. "bbc1.uk", "CNN.us@East")
+    if tvg_id:
+        m = _TVG_ID_COUNTRY_RE.search(tvg_id)
+        if m:
+            code = m.group(1).upper()
+            if code in _ISO2_COUNTRY_NAMES:
+                return _ISO2_COUNTRY_NAMES[code]
+
+    # Strategy 3: group-title splitting
+    if group:
+        parts = _GROUP_SPLIT_RE.split(group)
+        for part in parts:
+            stripped = part.strip()
+            if not stripped:
+                continue
+            upper = stripped.upper()
+            if upper in _M3U_CATEGORY_HINTS:
+                continue
+            if len(stripped) == 2 and stripped.isalpha():
+                code = stripped.upper()
+                if code in _ISO2_COUNTRY_NAMES:
+                    return _ISO2_COUNTRY_NAMES[code]
+
+    # Strategy 4: title pattern (e.g. "[UK] BBC" or "UK: CNN")
+    if name:
+        m = _TITLE_BRACKET_COUNTRY_RE.match(name)
+        if m:
+            code = m.group(1).upper()
+            if code in _ISO2_COUNTRY_NAMES:
+                return _ISO2_COUNTRY_NAMES[code]
+        m = _TITLE_PREFIX_COUNTRY_RE.match(name)
+        if m:
+            code = m.group(1).upper()
+            if code in _ISO2_COUNTRY_NAMES:
+                return _ISO2_COUNTRY_NAMES[code]
+
+    return ""
+
+
+def _resolve_language(
+    raw_language: str,
+    resolved_country: str,
+) -> str:
+    """Resolve the channel's language:
+
+    1. Explicit ``tvg-language`` attribute if present
+    2. Reverse-lookup from the resolved country (e.g. "Germany" → "German")
+
+    Returns ``""`` when nothing matches.
+    """
+    if raw_language.strip():
+        return raw_language.strip()
+    if resolved_country:
+        # Try exact match first
+        lang = _COUNTRY_TO_LANGUAGE.get(resolved_country)
+        if lang:
+            return lang
+        # Try matching by ISO code (e.g. country might be "DE" or "Germany")
+        for code, lang_name in _COUNTRY_TO_LANGUAGE.items():
+            if (code.upper() == resolved_country.upper()
+                    or _ISO2_COUNTRY_NAMES.get(code.upper(), "") == resolved_country):
+                return lang_name
+    return ""
+
 
 @dataclass
 class Channel:
@@ -58,6 +281,7 @@ class Channel:
     logo: str = ""
     tvg_id: str = ""
     country: str = ""
+    language: str = ""
     duration: float = -1.0
 
     @property
@@ -160,13 +384,21 @@ def parse_m3u(text: str, base_dir: Path | None = None) -> ParseResult:
                 duration = -1.0
             # EXTGRP survives until its entry's URL arrives — it is the
             # fallback for THIS next entry, cleared once the entry exists.
+            # Collect all country-related attributes for the resolver.
+            raw_country = ""
+            for attr_name in _COUNTRY_ATTR_NAMES:
+                val = attrs.get(attr_name, "")
+                if val.strip():
+                    raw_country = val
+                    break
             pending = {
                 "name": (title or "").strip()
                         or attrs.get("tvg-name", ""),
                 "group": attrs.get("group-title", ""),
                 "logo": attrs.get("tvg-logo", ""),
                 "tvg_id": attrs.get("tvg-id", ""),
-                "country": attrs.get("tvg-country", ""),
+                "raw_country": raw_country,
+                "raw_language": attrs.get("tvg-language", ""),
                 "duration": duration,
             }
             continue
@@ -199,13 +431,25 @@ def parse_m3u(text: str, base_dir: Path | None = None) -> ParseResult:
         if pending is None:
             channel = Channel(name=_title_from_url(line), url=url)
         else:
+            # Resolve country (4 strategies) then language (fallback from country).
+            resolved_country = _resolve_country(
+                name=pending["name"],
+                tvg_id=pending["tvg_id"],
+                group=pending["group"],
+                raw_country=pending["raw_country"],
+            )
+            resolved_language = _resolve_language(
+                raw_language=pending["raw_language"],
+                resolved_country=resolved_country,
+            )
             channel = Channel(
                 name=pending["name"] or _title_from_url(line),
                 url=url,
                 group=pending["group"] or pending_group,
                 logo=pending["logo"],
                 tvg_id=pending["tvg_id"],
-                country=pending["country"],
+                country=resolved_country,
+                language=resolved_language,
                 duration=pending["duration"],
             )
         channels.append(channel)
