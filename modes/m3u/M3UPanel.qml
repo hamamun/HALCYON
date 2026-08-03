@@ -140,8 +140,8 @@ Item {
     }
 
     // -------------------------------------------------------- status strip --
-    // Load errors surface here with the Retry affordance (§M2.4).
-    // Stream play errors go to a toast instead.
+    // Load status is surfaced through the shared toast; there is no inline
+    // retry action in the M3U panel.
     Rectangle {
         id: statusStrip
         anchors.top: filterField.bottom
@@ -157,25 +157,14 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
-            anchors.right: retryButton.left
+            anchors.right: parent.right
             anchors.leftMargin: Theme.spaceMd
-            anchors.rightMargin: Theme.spaceSm
+            anchors.rightMargin: Theme.spaceMd
             text: root.ctx ? root.ctx.statusMessage : ""
             elide: Text.ElideRight
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
             color: root.ctx && root.ctx.statusIsError ? Theme.danger : Theme.textMuted
-        }
-        TextButton {
-            id: retryButton
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.right: parent.right
-            anchors.rightMargin: Theme.spaceXs
-            text: "Retry"
-            glyph: Glyphs.refresh
-            visible: root.ctx && root.ctx.statusIsError
-            implicitHeight: 26
-            onClicked: if (root.ctx) root.ctx.retry()
         }
     }
 
@@ -414,10 +403,10 @@ Item {
             color: Theme.textFaint
             lineHeight: 1.35
         }
-        TextButton {
+        IconButton {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Playlists…"
             glyph: Glyphs.playlist
+            tooltip: "Playlists"
             onClicked: sourcesDialog.openNormal()    // same trigger as the toolbar
         }
     }
