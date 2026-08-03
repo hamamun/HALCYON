@@ -114,23 +114,24 @@ class WebView(WebViewBase):
 
         try:
             import asyncio
-            
-            # Try to get running loop
+
+            # If an asyncio loop is already running (e.g. pytest-asyncio),
+            # schedule the init coroutine on it — fire-and-forget is fine
+            # because _init_async logs its own errors and queued navigations
+            # are applied on the next navigate() call.
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self._init_async())
-                    return
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                pass
-            
-            # Run async init
-            asyncio.run(self._init_async())
-            
+                # No running loop — asyncio.run() is safe: it creates a
+                # fresh loop, runs the coroutine to completion, and closes
+                # the loop.  This blocks the Qt event loop briefly, which
+                # is acceptable for one-time startup init.
+                asyncio.run(self._init_async())
+            else:
+                loop.create_task(self._init_async())
+
         except Exception as e:
             log.error("WebView2 async init failed: %s", e)
-            # Fallback to sync init
-            self._init_sync()
 
     async def _init_async(self) -> None:
         """Async initialization of WebView2."""
@@ -138,50 +139,38 @@ class WebView(WebViewBase):
             # Create user data directory
             data_dir = Path.home() / ".halcyon" / "webview2"
             data_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Create WebView2 environment
-            env = await CoreWebView2Environment.create_async(str(data_dir))
+
+            # WinRT CreateAsync has three overloads:
+            #   0 args → CreateAsync()
+            #   2 args → CreateAsync(browserExecutableFolder, userDataFolder)
+            #   3 args → CreateAsync(browserExecutableFolder, userDataFolder, options)
+            # There is NO 1-arg overload — passing a single positional raises
+            # "Invalid parameter count".  Pass None for the first param and the
+            # user-data folder as the second so the 2-arg overload matches.
+            env = await CoreWebView2Environment.create_async(None, str(data_dir))
             self._webview = env
-            
+
             # Create controller with our HWND
             controller = await env.create_core_webview2_controller_async(self._hwnd)
             self._controller = controller
-            
+
             # Configure the controller
             self._setup_controller()
-            
+
             self._initialized = True
             log.info("WebView2 initialized successfully on HWND: %s", self._hwnd)
-            
+
             # Navigate to initial URL
             if self._initial_url and self._initial_url != "about:blank":
                 self.navigate(self._initial_url)
             else:
                 # Navigate to blank with our background color
                 self.navigate_to_blank()
-                
+
         except FileNotFoundError:
             log.error("WebView2 Runtime not found. Please install Microsoft Edge WebView2 Runtime.")
         except Exception as e:
             log.error("WebView2 initialization failed: %s", e)
-
-    def _init_sync(self) -> None:
-        """Synchronous initialization fallback."""
-        if not WEBVIEW2_AVAILABLE or not self._hwnd:
-            return
-
-        try:
-            import asyncio
-            
-            # Create new event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self._init_async())
-            finally:
-                loop.close()
-        except Exception as e:
-            log.error("WebView2 sync init failed: %s", e)
 
     def _setup_controller(self) -> None:
         """Set up WebView2 controller properties and event handlers."""
@@ -189,20 +178,23 @@ class WebView(WebViewBase):
             return
 
         try:
-            # Set default background color (matches app theme)
-            self._controller.default_background_color = 0x0E1118  # Theme.base color
-            
+            # DefaultBackgroundColor is a Windows.UI.Color struct (A,R,G,B).
+            # PyWinRT accepts a plain tuple in place of a projected struct.
+            self._controller.default_background_color = (
+                0xFF, 0x0E, 0x11, 0x18,
+            )  # fully opaque Theme.base
+
             # Set size to match parent
             if self._widget:
                 size = self._widget.size()
                 self._controller.bounds = (0, 0, size.width(), size.height())
-            
+
             # Get CoreWebView for event handling
             webview = self._controller.core_web_view
             if webview:
                 # Set up navigation event handlers
                 self._setup_event_handlers(webview)
-                
+
         except Exception as e:
             log.warning("Failed to setup controller: %s", e)
 
