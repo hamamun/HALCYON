@@ -457,6 +457,8 @@ class M3UContext(QObject):
     sourcesChanged = Signal()
     statusChanged = Signal()
     infoChanged = Signal()
+    # Emitted when a channel fails to play — QML shows a toast (§M2.4).
+    streamError = Signal(str)   # human-readable message
 
     def __init__(self, engine, controller, settings, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -475,6 +477,7 @@ class M3UContext(QObject):
         self._status_message = ""
         self._status_is_error = False
         self._loading = False
+        self._current_channel_name = ""
         self._current_source_name = ""
         self._current_source_id = ""
         self._unsaved_source_name = ""
@@ -494,9 +497,7 @@ class M3UContext(QObject):
         )
 
         # Stream play errors surface in the panel with the retry affordance
-        # (§M2.4) — clear message, no crash, no hang. Local surfaces its own
-        # errors; this handler only speaks while M3U is the active mode.
-        self._failed_channel_url = ""
+        # Stream play errors emit a toast through the streamError signal (§M2.4).
         engine.errorOccurred.connect(self._on_engine_error)
 
         # The one-tuner rule + last-source restore live on this one connection.
@@ -541,6 +542,10 @@ class M3UContext(QObject):
     @Property(bool, notify=statusChanged)
     def loading(self) -> bool:  # noqa: N802
         return self._loading
+
+    @Property(str, notify=infoChanged)
+    def currentChannelName(self) -> str:  # noqa: N802
+        return self._current_channel_name
 
     # ------------------------------------------- QML: sources manager slots --
     @Slot(str, str, str, result=str)
@@ -609,7 +614,6 @@ class M3UContext(QObject):
             self._set_status("That source no longer exists.", is_error=True)
             return
         self._stop_playback()
-        self._failed_channel_url = ""
         self._last_attempted_id = source_id
         self._pending_source_id = source_id
         self._loading = True
@@ -628,13 +632,7 @@ class M3UContext(QObject):
 
     @Slot()
     def retry(self) -> None:  # noqa: N802
-        """The one retry affordance (§M2.4). A failed *load* refetches the
-        source; a failed *channel* reopens the stream URL."""
-        if self._failed_channel_url:
-            url, self._failed_channel_url = self._failed_channel_url, ""
-            self._set_status("", is_error=False)
-            self._engine.open(url)
-            return
+        """Retry a failed playlist load (§M2.4)."""
         if self._last_attempted_id:
             self.loadSource(self._last_attempted_id)
 
@@ -795,6 +793,8 @@ class M3UContext(QObject):
     @Slot()
     def clear(self) -> None:
         self._model.clear()
+        self._current_channel_name = ""
+        self.infoChanged.emit()
         self._set_status("", is_error=False)
 
     # ------------------------------------------------------------ internals --
@@ -812,6 +812,10 @@ class M3UContext(QObject):
         """Channels open straight in the shared engine (§P2.2 — HLS included).
         Not through the controller's openPath: streams never resume, never
         prompt."""
+        # Track the channel name for the title bar.
+        current = self._model._current
+        self._current_channel_name = current.name if current else ""
+        self.infoChanged.emit()
         self._engine.open(url)
 
     def _stop_playback(self) -> None:
@@ -871,11 +875,9 @@ class M3UContext(QObject):
         if self._controller.activeMode != "m3u":
             return     # Local announces its own errors; stay out of its way
         current = self._model._current
-        self._failed_channel_url = current.url if current else ""
         name = current.name if current else "This channel"
-        self._set_status(
-            f"{name} could not be played — it may be offline or unreachable.",
-            is_error=True,
+        self.streamError.emit(
+            f"{name} could not be played — it may be offline or unreachable."
         )
 
     def _on_mode_changed(self) -> None:
@@ -892,7 +894,9 @@ class M3UContext(QObject):
                 self._restored_last_source = True
                 self._restore_last_source()
         elif leaving == "m3u":
-            # Leaving M3U stops the stream (list + last channel stay put).
+            # Leaving M3U stops the stream and clears the channel name for the title bar.
+            self._current_channel_name = ""
+            self.infoChanged.emit()
             self._stop_playback()
 
     def _restore_last_source(self) -> None:

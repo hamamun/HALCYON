@@ -55,8 +55,15 @@ Shell {
     // shell draws no caption of its own, so this is otherwise invisible to the
     // user — but it is what Windows shows, and "Halcyon" for every window is
     // useless the moment two copies are open.
-    title: titleBar.mediaTitle !== "" ? titleBar.mediaTitle + "  \u00B7  Halcyon"
-                                      : "Halcyon"
+    //
+    // For M3U, the channel name is shown instead of file metadata.
+    title: {
+        var channelName = window.modeChannelName();
+        if (channelName !== "")
+            return channelName + "  \u00B7  Halcyon";
+        var media = titleBar.mediaTitle;
+        return media !== "" ? media + "  \u00B7  Halcyon" : "Halcyon";
+    }
     visible: true
 
     Component.onCompleted: {
@@ -334,6 +341,14 @@ Shell {
     function playbackDisplayName() {
         var label = playlistPlaybackLabel();
         return label.length > 0 ? label : (App.currentFileStem || "");
+    }
+
+    // Get the current channel name for M3U mode (for the title bar).
+    // Returns empty string for other modes.
+    function modeChannelName() {
+        if (activeMode === "m3u" && modeContext && modeContext.currentChannelName)
+            return modeContext.currentChannelName;
+        return "";
     }
 
     // Does the active mode drive the shared player? False while modeSpec is
