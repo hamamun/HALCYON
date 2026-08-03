@@ -38,6 +38,7 @@ QtObject {
     readonly property string addFolder:  "\uE8F4"
     readonly property string clearAll:   "\uE74D"
     readonly property string clearItem:  "\uE738"
+    readonly property string deleteItem: "\uE74D"
     readonly property string playlist:   "\uE90B"
 
     // M3U grouping and source management.  These names describe their meaning

@@ -124,12 +124,11 @@ Dialog {
                         color: root.errorText.length > 0 ? Theme.danger : Theme.textFaint
                     }
                 }
-                TextButton {
+                IconButton {
                     Layout.alignment: Qt.AlignVCenter
                     visible: root.ctx && root.ctx.canSaveCurrentSource
-                    text: "Save current"
                     glyph: Glyphs.save
-                    primary: true
+                    tooltip: "Save current"
                     onClicked: root.saveCurrentForFavourites()
                 }
             }
@@ -389,8 +388,8 @@ Dialog {
                 anchors.right: parent.right
                 spacing: Theme.spaceSm
 
-                TextButton { text: "Cancel"; onClicked: addUrlDialog.close() }
-                TextButton { text: "Add"; primary: true; onClicked: addUrlDialog.save() }
+                IconButton { glyph: Glyphs.cancel; tooltip: "Cancel"; onClicked: addUrlDialog.close() }
+                IconButton { glyph: Glyphs.save; tooltip: "Add URL"; onClicked: addUrlDialog.save() }
             }
         }
 
@@ -441,7 +440,7 @@ Dialog {
         }
         footer: Row {
             spacing: Theme.spaceSm
-            TextButton { text: "OK"; primary: true; onClicked: fileErrorDialog.close() }
+            IconButton { glyph: Glyphs.close; tooltip: "OK"; onClicked: fileErrorDialog.close() }
         }
     }
 
@@ -530,6 +529,7 @@ Dialog {
 
         title: "Delete playlist"
         confirmText: "Delete"
+        confirmGlyph: Glyphs.deleteItem
         message: entry ? "Remove “" + entry.name + "” from your saved playlists?"
                        : ""
         onConfirmed: if (entry) root.ctx.removeSource(entry.id)

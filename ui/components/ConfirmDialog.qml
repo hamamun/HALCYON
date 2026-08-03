@@ -12,6 +12,7 @@ Dialog {
     // Clear Playlist, §P1.5); destructive flows like deleting a saved
     // playlist pass their own verb so the button names the action it takes.
     property string confirmText: "Clear"
+    property string confirmGlyph: Glyphs.clearAll
 
     signal confirmed()
 
@@ -53,13 +54,14 @@ Dialog {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.spaceSm
 
-            TextButton {
-                text: "Cancel"
+            IconButton {
+                glyph: Glyphs.cancel
+                tooltip: "Cancel"
                 onClicked: root.close()
             }
-            TextButton {
-                text: root.confirmText
-                primary: true
+            IconButton {
+                glyph: root.confirmGlyph
+                tooltip: root.confirmText
                 onClicked: { root.confirmed(); root.close(); }
             }
         }
