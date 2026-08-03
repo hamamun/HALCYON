@@ -1,0 +1,8 @@
+# Web mode dependencies - Windows WebView2 integration
+# These packages provide access to Windows' built-in WebView2 Runtime
+
+# WinRT APIs for WebView2 - pure Python, no extra DLLs needed
+webview2-Microsoft.Web.WebView2.Core>=1.0.0
+
+# Alternative: winrt with WebView2 (choose one)
+# winrt>=5.0.0
