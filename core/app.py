@@ -362,6 +362,15 @@ class AppController(QObject):
 
         target = self.playlist
         if target is not None:
+            # M3U fast O(1) resume for 15k lists - avoids scanning view.
+            # Duck-typed: if the mode offers play_current, use it.
+            fast = getattr(target, "play_current", None)
+            if callable(fast):
+                try:
+                    if fast():
+                        return
+                except Exception:
+                    log.debug("play_current fast path failed", exc_info=True)
             count = getattr(target, "count", 0)
             if count > 0:
                 cur = getattr(target, "current_index", lambda: -1)()
@@ -385,6 +394,13 @@ class AppController(QObject):
 
         target = self.playlist
         if target is not None:
+            fast = getattr(target, "play_current", None)
+            if callable(fast):
+                try:
+                    if fast():
+                        return
+                except Exception:
+                    log.debug("play_current fast path failed in play()", exc_info=True)
             count = getattr(target, "count", 0)
             if count > 0:
                 cur = getattr(target, "current_index", lambda: -1)()

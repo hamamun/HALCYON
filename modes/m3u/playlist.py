@@ -69,6 +69,7 @@ class ChannelModel(QAbstractListModel):
         self._channels: list[Channel] = []
         self._view: list[Channel] = []       # filter + grouping applied
         self._current: Channel | None = None
+        self._current_index: int = -1        # cached index in _view for O(1) play resume (15k list)
         self._filter = ""
         self._grouping = GROUPING_CATEGORY
 
@@ -114,12 +115,7 @@ class ChannelModel(QAbstractListModel):
 
     @Property(int, notify=currentIndexChanged)
     def currentIndex(self) -> int:  # noqa: N802
-        if self._current is None:
-            return -1
-        try:
-            return self._view.index(self._current)
-        except ValueError:
-            return -1
+        return self._current_index
 
     @Property(str, notify=groupingChanged)
     def grouping(self) -> str:  # noqa: N802
@@ -207,6 +203,7 @@ class ChannelModel(QAbstractListModel):
         self._channels = []
         self._view = []
         self._current = None
+        self._current_index = -1
         self.endResetModel()
         self.countChanged.emit()
         self.currentIndexChanged.emit()
@@ -217,9 +214,14 @@ class ChannelModel(QAbstractListModel):
     _play = None
 
     def _set_current(self, channel: Channel) -> None:
-        old_row = self.currentIndex
+        old_row = self._current_index
         self._current = channel
-        new_row = self.currentIndex
+        # new index is where this channel lands in the current view
+        try:
+            new_row = self._view.index(channel)
+        except ValueError:
+            new_row = -1
+        self._current_index = new_row
         for row in {old_row, new_row} - {-1}:
             idx = self.index(row)
             self.dataChanged.emit(idx, idx, [self.IsCurrentRole])
@@ -246,6 +248,14 @@ class ChannelModel(QAbstractListModel):
                                      or "\uffff",  # ungrouped sinks to the end
                                      c.name.casefold()))
         self._view = view
+        # keep cached index in sync with filtered / sorted view
+        if self._current is None:
+            self._current_index = -1
+        else:
+            try:
+                self._current_index = self._view.index(self._current)
+            except ValueError:
+                self._current_index = -1
 
 
 class _LoadSignals(QObject):
@@ -506,6 +516,31 @@ class M3UContext(QObject):
     # The controller calls these on whichever context is active (§A.2): Next,
     # Previous, end-of-stream advance and Clear Playlist reach M3U through
     # exactly the same generic code path as Local.
+    # For Stop -> Play resume the controller also expects count / current_index
+    # like Local (§P1.5) — we expose them as thin proxies, no copy of the 15k list.
+    @Property(int, notify=statusChanged)
+    def count(self) -> int:  # noqa: N802 - for AppController duck-typing
+        return self._model.count
+
+    @Property(int, notify=statusChanged)
+    def currentIndex(self) -> int:  # noqa: N802 - QML friendly alias
+        return self._model.currentIndex
+
+    def current_index(self) -> int:
+        return self._model.currentIndex
+
+    @Slot(result=bool)
+    def play_current(self) -> bool:
+        """O(1) resume for 15k lists: re-open the selected channel URL directly,
+        without scanning the view. Used by AppController's Play after Stop."""
+        cur = self._model._current
+        if cur is not None:
+            self._open_url(cur.url)
+            return True
+        if self._model.count > 0:
+            return self._model.play_index(0)
+        return False
+
     @Slot(int, result=bool)
     def play_index(self, row: int) -> bool:
         return self._model.play_index(row)
