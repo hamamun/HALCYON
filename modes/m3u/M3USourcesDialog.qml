@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Dialogs
+import QtQuick.Layouts
 import Halcyon.Ui
 
 // The Playlists manager — §P2.4, owner decision 2026-08-02.
@@ -40,6 +41,7 @@ Dialog {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
+            anchors.leftMargin: Theme.spaceXl
             text: "Playlists"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeLarge
@@ -47,12 +49,23 @@ Dialog {
             color: Theme.text
         }
         Text {
+            id: countLabel
             anchors.verticalCenter: parent.verticalCenter
-            anchors.right: parent.right
+            anchors.right: closeBtn.left
+            anchors.rightMargin: Theme.spaceSm
             text: root.ctx ? sourceList.count + " / " + root.ctx.sourcesMaxCount : ""
             font.family: Theme.fontFamilyMono
             font.pixelSize: Theme.fontSizeTiny
             color: Theme.textFaint
+        }
+        IconButton {
+            id: closeBtn
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceSm
+            anchors.verticalCenter: parent.verticalCenter
+            glyph: Glyphs.close
+            tooltip: "Close"
+            onClicked: root.close()
         }
     }
 
@@ -90,26 +103,28 @@ Dialog {
                     root.close();
                 }
 
-                Row {
+                RowLayout {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
                     anchors.right: parent.right
+                    anchors.leftMargin: 4
+                    anchors.rightMargin: 4
                     spacing: Theme.spaceMd
 
                     Text {
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                         text: sourceRow.modelData.kind === "url" ? Glyphs.globe : Glyphs.playlist
                         font.family: Theme.fontFamilyIcons
                         font.pixelSize: 15
                         color: Theme.textMuted
                     }
-                    Column {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 15 - 84 - Theme.spaceMd * 3
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
                         spacing: 2
 
                         Text {
-                            width: parent.width
+                            Layout.fillWidth: true
                             text: sourceRow.modelData.name
                             elide: Text.ElideRight
                             font.family: Theme.fontFamily
@@ -118,7 +133,7 @@ Dialog {
                             color: Theme.text
                         }
                         Text {
-                            width: parent.width
+                            Layout.fillWidth: true
                             text: sourceRow.modelData.location
                             elide: Text.ElideMiddle
                             font.family: Theme.fontFamilyMono
@@ -129,8 +144,9 @@ Dialog {
                     // Per-row actions reuse the same verbs as the footer —
                     // Edit and Delete are one implementation each (§4.1); the
                     // footer buttons call the same two functions below.
+                    // Always reserve space so the URL text never covers them.
                     Row {
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                         spacing: Theme.spaceXs
 
                         IconButton {
