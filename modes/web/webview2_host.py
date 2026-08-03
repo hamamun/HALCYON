@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
@@ -16,6 +17,31 @@ if TYPE_CHECKING:
     from PySide6.QtQuick import QQuickWindow
 
 log = logging.getLogger(__name__)
+
+
+def _is_valid_hwnd(hwnd: int) -> bool:
+    """Return True when ``hwnd`` names a live native window.
+
+    WebView2 controller creation fails with ERROR_INVALID_WINDOW_HANDLE if Qt
+    has already discarded/recreated the HWND that was captured earlier.  The
+    guard is intentionally cheap and side-effect free: when Qt reports a handle
+    that Windows does not recognise yet (or no handle at all), the host simply
+    defers controller creation until the next geometry/visibility sync.
+    """
+    if not hwnd:
+        return False
+    if sys.platform != "win32":
+        # Non-Windows test environments never create WebView2 controllers, but
+        # treating non-zero fake handles as valid lets lifecycle tests exercise
+        # the retry logic with monkeypatched WebView factories.
+        return True
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.IsWindow(int(hwnd)))
+    except Exception as exc:  # pragma: no cover - defensive Windows guard
+        log.warning("Could not validate HALCYON window handle %s: %s", hwnd, exc)
+        return False
 
 
 class WebContext(QObject):
@@ -95,20 +121,20 @@ class WebContext(QObject):
     # QML bridge -------------------------------------------------------------
     @Slot(QObject)
     def attachWindow(self, window: QObject) -> None: # noqa: N802
-        """Receive the QQuickWindow that owns the QML scene and its HWND."""
-        if self._window is window:
-            return
-        self._window = window  # keep the Python wrapper alive
-        try:
-            self._window_hwnd = int(window.winId())
-            log.info("WebView2 will use HALCYON QML window HWND %s", self._window_hwnd)
-        except Exception as exc:
-            self._set_runtime_error(f"Could not get the HALCYON window handle: {exc}")
-            return
-        try:
-            window.visibleChanged.connect(lambda *_: self._sync_webviews())
-        except Exception:
-            pass
+        """Receive the QQuickWindow that owns the QML scene.
+
+        Do not cache ``winId()`` here as the final HWND.  Calling ``winId()`` can
+        cause Qt to create/recreate the native window, and a handle captured at
+        component-completion time may be stale by the time the user opens a URL.
+        ``_sync_webviews`` re-queries and validates the current HWND every time
+        it needs to touch a native WebView2 controller.
+        """
+        if self._window is not window:
+            self._window = window  # keep the Python wrapper alive
+            try:
+                window.visibleChanged.connect(lambda *_: self._sync_webviews())
+            except Exception:
+                pass
         self._sync_webviews()
 
     @Slot(float, float, float, float, bool)
@@ -206,12 +232,53 @@ class WebContext(QObject):
         return -1 if not url or url in ("about:blank", MANAGER_URL) else self._bookmarks.index_of_url(url)
 
     # native host lifecycle --------------------------------------------------
+    def _current_hwnd(self) -> int:
+        """Fetch and validate the current QQuickWindow HWND.
+
+        Qt may replace the native window after ``winId()`` has first been called.
+        Returning the latest valid handle here prevents WebView2 from being
+        parented to a stale HWND; returning 0 tells the caller to defer and try
+        again on the next sync rather than caching a failed controller forever.
+        """
+        if not self._window:
+            return 0
+        try:
+            hwnd = int(self._window.winId())
+        except Exception as exc:
+            log.warning("Could not get the HALCYON window handle: %s", exc)
+            return 0
+        if not _is_valid_hwnd(hwnd):
+            log.debug("HALCYON QML window HWND %s is not valid yet; deferring WebView2 creation", hwnd)
+            return 0
+        return hwnd
+
+    def _close_all_webviews(self) -> None:
+        for view in self._webviews.values():
+            if view:
+                view.close()
+        self._webviews.clear()
+
     def _sync_webviews(self) -> None:
+        current_hwnd = self._current_hwnd()
+        if current_hwnd != self._window_hwnd:
+            if self._window_hwnd or current_hwnd:
+                log.info("WebView2 HALCYON window HWND changed from %s to %s", self._window_hwnd, current_hwnd)
+            # Existing native child windows are parented to the old HWND (which
+            # may already be invalid), so discard them and let this/later syncs
+            # recreate against the fresh handle.
+            self._close_all_webviews()
+            self._window_hwnd = current_hwnd
+
         live_ids = {id(tab) for tab in self._tabs._tabs if not tab.is_manager}
         for key in list(self._webviews):
+            view = self._webviews.get(key)
             if key not in live_ids:
                 view = self._webviews.pop(key)
-                if view: view.close()
+                if view:
+                    view.close()
+            elif view is not None and not view.is_ready:
+                view = self._webviews.pop(key)
+                view.close()
         if self._window_hwnd:
             for tab in self._tabs._tabs:
                 if not tab.is_manager and id(tab) not in self._webviews:
@@ -251,6 +318,18 @@ class WebContext(QObject):
                 view.close()
             self._webviews.pop(key, None)
             return
+        if not (view and view.is_ready):
+            # ``None`` or a WebView object whose controller failed to initialise
+            # must not occupy the tab slot forever.  Dropping it lets a later
+            # geometry/visibility/navigation sync retry, which is crucial when
+            # the previous attempt raced a stale HWND.
+            if view:
+                view.close()
+            self._webviews.pop(key, None)
+            return
+        if self._init_error_message:
+            self._init_error_message = ""
+            self.runtimeChanged.emit()
         self._webviews[key] = view
 
     def _tab_for_key(self, key: int):

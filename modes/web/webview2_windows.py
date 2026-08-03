@@ -85,40 +85,83 @@ class WebView(WebViewBase):
         Windows message pump — running until the operation reports done.
         """
         try:
-            if WebView._environment is None:
-                data_dir = paths.data_dir() / "webview2" / "profile"
-                data_dir.mkdir(parents=True, exist_ok=True)
-                # This is the WinRT API, not the similarly named .NET API:
-                # create_async() has *zero* parameters.  A custom data folder
-                # belongs to create_with_options_async().
-                WebView._environment = self._await_result(
-                    CoreWebView2Environment.create_with_options_async("", str(data_dir), None)
+            try:
+                self._initialize_controller()
+            except FileNotFoundError:
+                raise
+            except OSError as exc:
+                # A stale QQuickWindow HWND commonly surfaces as
+                # ERROR_INVALID_WINDOW_HANDLE from WebView2.  The host already
+                # re-queries/validates HWNDs before constructing us, but the
+                # handle can still race destruction.  Drop any partially-created
+                # controller and retry once with a new environment so a poisoned
+                # cached environment does not make the next attempt fail the
+                # same way.  If the HWND is still bad, the outer OSError handler
+                # reports the failure and the host will retry on a later sync.
+                log.warning(
+                    "WebView2 controller creation failed for HWND %s; retrying with a fresh environment: %s",
+                    self._hwnd,
+                    exc,
                 )
-
-            parent = CoreWebView2ControllerWindowReference.create_from_window_handle(self._hwnd)
-            self._controller = self._await_result(
-                WebView._environment.create_core_webview2_controller_async(parent)
-            )
-            self._webview = self._controller.core_webview2
-            self._controller.default_background_color = (0xFF, 0x0E, 0x11, 0x18)
-            self._controller.bounds = self._bounds
-            self._controller.is_visible = self._visible
-            self._install_events()
-            self._initialized = True
-            if self._initial_url and self._initial_url != "about:blank":
-                self.navigate(self._initial_url)
-            else:
-                self.navigate_to_blank()
-            log.info("WebView2 controller created for HALCYON window %s", self._hwnd)
+                self._release_controller()
+                WebView._environment = None
+                self._initialize_controller()
         except FileNotFoundError:
             log.error("WebView2 Runtime is not installed.")
             self._report_init_error("WebView2 Runtime is not installed. Install the Microsoft Edge WebView2 Evergreen Runtime.")
         except TimeoutError as exc:
             log.error("WebView2 initialisation timed out: %s", exc)
             self._report_init_error(str(exc))
+        except OSError as exc:
+            log.exception("WebView2 controller initialisation failed for HWND %s: %s", self._hwnd, exc)
+            self._report_init_error(f"WebView2 could not start for the current HALCYON window handle: {exc}")
         except Exception as exc:
             log.exception("WebView2 controller initialisation failed: %s", exc)
             self._report_init_error(f"WebView2 could not start: {exc}")
+
+    @classmethod
+    def _ensure_environment(cls):
+        if cls._environment is None:
+            data_dir = paths.data_dir() / "webview2" / "profile"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            # This is the WinRT API, not the similarly named .NET API:
+            # create_async() has *zero* parameters.  A custom data folder
+            # belongs to create_with_options_async().
+            cls._environment = cls._await_result(
+                CoreWebView2Environment.create_with_options_async("", str(data_dir), None)
+            )
+        return cls._environment
+
+    def _initialize_controller(self) -> None:
+        environment = self._ensure_environment()
+        parent = CoreWebView2ControllerWindowReference.create_from_window_handle(self._hwnd)
+        self._controller = self._await_result(environment.create_core_webview2_controller_async(parent))
+        self._webview = self._controller.core_webview2
+        self._controller.default_background_color = (0xFF, 0x0E, 0x11, 0x18)
+        self._controller.bounds = self._bounds
+        self._controller.is_visible = self._visible
+        self._install_events()
+        self._initialized = True
+        if self._initial_url and self._initial_url != "about:blank":
+            self.navigate(self._initial_url)
+        else:
+            self.navigate_to_blank()
+        log.info("WebView2 controller created for HALCYON window %s", self._hwnd)
+
+    def _release_controller(self) -> None:
+        for source, remove_name, token in self._event_tokens:
+            try:
+                getattr(source, remove_name)(token)
+            except Exception:
+                pass
+        self._event_tokens.clear()
+        if self._controller:
+            try:
+                self._controller.close()
+            except Exception:
+                pass
+        self._controller = self._webview = None
+        self._initialized = False
 
     def _report_init_error(self, message: str) -> None:
         """Surface an initialisation failure so the UI can show it.
@@ -283,16 +326,4 @@ class WebView(WebViewBase):
 
     def close(self) -> None:
         self._closed = True
-        for source, remove_name, token in self._event_tokens:
-            try:
-                getattr(source, remove_name)(token)
-            except Exception:
-                pass
-        self._event_tokens.clear()
-        if self._controller:
-            try:
-                self._controller.close()
-            except Exception:
-                pass
-        self._controller = self._webview = None
-        self._initialized = False
+        self._release_controller()
