@@ -39,6 +39,20 @@ QtObject {
     readonly property string clearAll:   "\uE74D"
     readonly property string clearItem:  "\uE738"
     readonly property string playlist:   "\uE90B"
+
+    // M3U grouping and source management.  These names describe their meaning
+    // in Halcyon; each codepoint is the matching Fluent/MDL2 symbol (rather
+    // than borrowing an unrelated icon such as Settings).
+    readonly property string category:   "\uE8EC"   // Tag
+    readonly property string country:    "\uE7C1"   // Flag
+    readonly property string language:   "\uF2B7"   // LocaleLanguage
+    readonly property string noGroup:    "\uE8FD"   // BulletedList
+    readonly property string link:       "\uE71B"
+    readonly property string load:       "\uE7AC"   // OpenWith
+    readonly property string edit:       "\uE70F"
+    readonly property string cancel:     "\uE711"
+    readonly property string save:       "\uE74E"
+
     readonly property string infoPanel:  "\uE8A0"   // right dock toggle
 
     // chrome
