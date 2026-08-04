@@ -1,38 +1,82 @@
 import QtQuick
-import Halcyon.Ui
 
-// The centre stage — §P1.2.
+// The centre stage slot.
 //
-// Loads `ModeSpec.stage_qml`, which defaults to the video surface and is
-// overridden by Web mode to a WebEngineView (§P3.3). Because both are
-// QQuickItems, the shell does not care which it got: same slot, same
-// compositing, same overlays on top.
+// A normal mode owns its stage only while active.  A mode can opt into
+// `keepStageAlive` (Web does) and its Loader then stays constructed but hidden
+// while another mode is active.  This is intentionally generic: the shell does
+// not know which mode is being parked, only the capability declared by its
+// ModeSpec.
 Item {
     id: root
 
-    property string source: ""
-    property bool osdEnabled: false
-    readonly property alias item: loader.item
+    property var modeSpecs: []
+    property string activeMode: ""
 
-    // Aurora background — visible whenever the stage content is transparent or
-    // letterboxed (§7).
+    // Aurora remains behind every stage.  A Web page is a native child HWND and
+    // fills only its own page rectangle; it never overlaps this scene-graph
+    // background or any chrome above it.
     AuroraBackground {
         anchors.fill: parent
     }
 
-    Loader {
-        id: loader
-        anchors.fill: parent
-        source: root.source
-        onStatusChanged: {
-            if (status === Loader.Error)
-                console.warn("Stage: failed to load", root.source);
+    Repeater {
+        id: stageRepeater
+        model: root.modeSpecs
+
+        delegate: Item {
+            id: stageSlot
+            required property var modelData
+            required property int index
+
+            anchors.fill: parent
+            property bool isCurrent: modelData.id === root.activeMode
+            property bool wasActivated: false
+            property bool shouldStayLoaded: isCurrent || (modelData.keepStageAlive && wasActivated)
+            readonly property var loadedItem: stageLoader.item
+
+            // The Web page itself is native, so hiding the QML loader alone is
+            // not enough.  WebStage exposes `stageActive`; this generic bridge
+            // calls it when present before the slot disappears.
+            function setChildStageActive(active) {
+                if (stageLoader.item && "stageActive" in stageLoader.item)
+                    stageLoader.item.stageActive = active
+            }
+
+            onIsCurrentChanged: {
+                if (isCurrent)
+                    wasActivated = true
+                setChildStageActive(isCurrent)
+            }
+            Component.onCompleted: {
+                if (isCurrent)
+                    wasActivated = true
+            }
+
+            visible: isCurrent
+            enabled: isCurrent
+
+            Loader {
+                id: stageLoader
+                anchors.fill: parent
+                active: stageSlot.shouldStayLoaded
+                source: modelData.stageQml || ""
+                asynchronous: false
+
+                onLoaded: {
+                    stageSlot.setChildStageActive(stageSlot.isCurrent)
+                }
+                onStatusChanged: {
+                    if (status === Loader.Error)
+                        console.warn("Stage: failed to load", source)
+                }
+            }
         }
     }
 
-    // Overlay layer: OSD and transient chrome live above the stage content but
-    // below the transport bar. Only possible because the stage is a scene-graph
-    // item (§0.3).
+    // The mode's transport bar is injected by Main.qml here.  It remains above
+    // the active stage, but Web supplies no transport URL, so no bottom shell is
+    // rendered in Web mode.
     default property alias overlay: overlayArea.data
     Item {
         id: overlayArea

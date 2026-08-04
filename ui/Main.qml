@@ -58,6 +58,12 @@ Shell {
     //
     // For M3U, the channel name is shown instead of file metadata.
     title: {
+        // A mode may contribute an OS-level title through App's generic
+        // protocol.  Web uses this for the active page title without making
+        // this shared shell name/import the Web mode directly.
+        var modeTitle = App.modeWindowTitle || "";
+        if (modeTitle !== "")
+            return modeTitle + "  \u00B7  Halcyon";
         var channelName = window.modeChannelName();
         if (channelName !== "")
             return channelName + "  \u00B7  Halcyon";
@@ -272,6 +278,10 @@ Shell {
         }
         function exitFullscreen()  { if (window.fullscreen) toggleFullscreen() }
         function toggleLeftPanel() {
+            // Web is a full-width browser, not a player with an empty dock.
+            // Keep Local/M3U's remembered state intact, but never let Ctrl+L
+            // resurrect a placeholder panel while the active mode opted out.
+            if (!window.leftPanelAvailable()) return;
             window.leftPanelOpen = !window.leftPanelOpen;
             Settings.set("window.leftPanelVisible", window.leftPanelOpen);
         }
@@ -323,6 +333,16 @@ Shell {
     // rich media panels; future modes make the same decision in their spec.
     function rightDockAvailable() {
         return !!modeSpec && modeSpec.rightDockEnabled;
+    }
+
+    // A mode can own no left dock at all.  This is distinct from an open/closed
+    // preference: Web has no panel to open, while Local/M3U keep their normal
+    // remembered dock state.
+    function leftPanelAvailable() {
+        // Do not render a dock until a real ModeSpec has explicitly opted in.
+        // This prevents a transient Local placeholder from flashing in Web
+        // while the active mode binding settles at startup.
+        return !!modeSpec && !!modeSpec.panelEnabled;
     }
 
     function shortToastName(name) {
@@ -467,8 +487,11 @@ Shell {
             // Gated on `chromeVisible` so that when the bar fades out under
             // auto-hide (§P1.4) the panels reclaim the full height instead of
             // leaving a dead strip where the bar used to be.
+            readonly property bool hasTransport:
+                !!window.modeSpec && !!window.modeSpec.transportQml
             readonly property real transportInset:
-                (transportLoader.active && window.chromeVisible) ? transportLoader.height : 0
+                (hasTransport && transportLoader.active && window.chromeVisible)
+                ? transportLoader.height : 0
 
             // Stage takes full width — panels float on top
             Stage {
@@ -477,7 +500,11 @@ Shell {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                source: window.modeSpec ? window.modeSpec.stageQml : ""
+                // Stage caches only modes that explicitly request it. Web uses
+                // this to keep live WebView2 tabs/pages alive across a mode
+                // switch; Local and M3U continue to unload normally.
+                modeSpecs: Modes.list
+                activeMode: window.activeMode
 
                 // The mode's own bar, floating over the video (§B.4).
                 Loader {
@@ -485,10 +512,10 @@ Shell {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
-                    source: window.modeSpec ? window.modeSpec.transportQml : ""
-                    active: source !== ""
+                    source: body.hasTransport ? window.modeSpec.transportQml : ""
+                    active: body.hasTransport
                     opacity: window.chromeVisible ? 1 : 0
-                    visible: opacity > 0
+                    visible: body.hasTransport && opacity > 0
 
                     Behavior on opacity {
                         NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
@@ -512,7 +539,9 @@ Shell {
                     anchors.bottom: parent.bottom
                     width: parent.width * (Player ? Player.position : 0)
                     height: 2
-                    visible: window.fullscreen && !window.chromeVisible
+                    // A browser never inherits the player's progress hairline,
+                    // even if the OS/window enters fullscreen by another path.
+                    visible: window.usesPlayer() && window.fullscreen && !window.chromeVisible
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
                         GradientStop { position: 0.0; color: Theme.accent }
@@ -530,8 +559,11 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
-                open: !window.fullscreen && window.leftPanelOpen
-                source: window.modeSpec ? window.modeSpec.panelQml : ""
+                open: !window.fullscreen && window.leftPanelOpen && window.leftPanelAvailable()
+                // Clearing the source matters as well as width: a native Web
+                // stage must not leave Web's placeholder panel instantiated
+                // behind an invisible zero-width dock.
+                source: window.leftPanelAvailable() && window.modeSpec ? window.modeSpec.panelQml : ""
                 blurSource: stage
                 z: 10
 
@@ -818,7 +850,11 @@ Shell {
 
             if (ctrl) {
                 switch (event.key) {
-                case Qt.Key_O: Actions.addFiles();       event.accepted = true; return;
+                // These are player/dock commands, not browser shortcuts. In
+                // Web they are inert: no media dialog and no empty dock.
+                case Qt.Key_O:
+                    if (window.usesPlayer()) Actions.addFiles();
+                    event.accepted = true; return;
                 case Qt.Key_E: Actions.showEqualizer();  event.accepted = true; return;
                 case Qt.Key_L: Actions.toggleLeftPanel();  event.accepted = true; return;
                 case Qt.Key_I: Actions.toggleRightPanel(); event.accepted = true; return;
@@ -860,6 +896,10 @@ Shell {
     DropArea {
         anchors.fill: parent
         onDropped: function(drop) {
+            // A file dropped on Web belongs to the browser/page, not Halcyon's
+            // media queue.  Local/M3U retain their existing one append path.
+            if (!window.usesPlayer())
+                return;
             if (drop.hasUrls) {
                 var paths = [];
                 for (var i = 0; i < drop.urls.length; i++)

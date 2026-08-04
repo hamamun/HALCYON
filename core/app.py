@@ -66,6 +66,11 @@ class ModeList(QObject):
             "rightDockEnabled": spec.right_dock_enabled,
             "mediaKeysEnabled": spec.media_keys_enabled,
             "usesPlayer": spec.uses_player,
+            # Generic shell capabilities.  They must cross the Python/QML
+            # boundary or a mode merely *declares* its separation while the
+            # shared shell continues to render the old chrome.
+            "panelEnabled": spec.panel_enabled,
+            "keepStageAlive": spec.keep_stage_alive,
         }
 
 
@@ -73,6 +78,10 @@ class AppController(QObject):
     """Behaviour behind the Actions."""
 
     activeModeChanged = Signal()
+    # Mode-neutral title contribution.  A context that has a title (Web's
+    # active page, for example) publishes it through this generic protocol;
+    # Local and M3U remain free to return an empty string.
+    modeWindowTitleChanged = Signal()
     subtitleDelayChanged = Signal()
     tracksChanged = Signal()
     resumePrompted = Signal(str, int)
@@ -140,6 +149,12 @@ class AppController(QObject):
     # ---------------------------------------------------------- registration ---
     def register_context(self, mode_id: str, context: QObject) -> None:
         self._contexts[mode_id] = context
+        # Contexts may optionally expose a `windowTitleChanged` Qt signal.  The
+        # shared controller deliberately does not import/know a concrete mode;
+        # it simply forwards this small display protocol to QML.
+        changed = getattr(context, "windowTitleChanged", None)
+        if changed is not None and hasattr(changed, "connect"):
+            changed.connect(self.modeWindowTitleChanged.emit)
 
     def context(self, mode_id: str | None = None) -> QObject | None:
         return self._contexts.get(mode_id or self._active_mode)
@@ -153,6 +168,24 @@ class AppController(QObject):
     @Property(str, notify=activeModeChanged)
     def activeMode(self) -> str:  # noqa: N802 - QML-facing
         return self._active_mode
+
+    @Property(str, notify=modeWindowTitleChanged)
+    def modeWindowTitle(self) -> str:  # noqa: N802 - QML-facing
+        """Optional active-mode title for the OS taskbar/window list.
+
+        The protocol intentionally accepts either a Python method or a Qt/QML
+        property-like value, so the chassis stays independent of every mode.
+        """
+        context = self.context()
+        if context is None:
+            return ""
+        value = getattr(context, "window_title", "")
+        try:
+            value = value() if callable(value) else value
+        except Exception:
+            log.debug("mode %r window title failed", self._active_mode, exc_info=True)
+            return ""
+        return str(value or "")
 
     @Slot(str)
     def setActiveMode(self, mode_id: str) -> None:  # noqa: N802 - QML-facing
@@ -174,6 +207,7 @@ class AppController(QObject):
         self._active_mode = mode_id
         self._settings.set("ui.mode", mode_id)
         self.activeModeChanged.emit()
+        self.modeWindowTitleChanged.emit()
         log.info("mode -> %s", mode_id)
 
     # -------------------------------------------------------------- playlist ---

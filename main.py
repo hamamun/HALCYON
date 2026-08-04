@@ -119,6 +119,18 @@ def main(argv: list[str] | None = None) -> int:
     if debug:
         log.debug("debug mode on — Qt/QML messages are routed through logging")
 
+    # WebView2 uses COM on the GUI thread.  Initialise pythonnet's bridge before
+    # Qt creates any view; failure is deliberately non-fatal because Local/M3U
+    # remain usable and WebStage presents the precise unavailable state later.
+    if sys.platform == "win32":
+        try:
+            from modes.web.webview2_runtime import init_pythonnet_com
+
+            if not init_pythonnet_com():
+                log.debug("WebView2 bridge was not ready at startup; Web mode will explain why")
+        except Exception:
+            log.debug("WebView2 bootstrap failed; continuing without Web mode runtime", exc_info=True)
+
     # --- graphics API, before anything Qt exists ---------------------------
     from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
 

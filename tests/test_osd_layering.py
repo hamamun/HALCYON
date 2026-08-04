@@ -50,13 +50,25 @@ def window(gui_app):
     ctx = qml_engine.rootContext()
     for name in ("App", "Player", "Metadata", "Lyrics", "Library", "Equalizer"):
         ctx.setContextProperty(name, stub)
+    modes = ModeList()
+    playlist = PlaylistModel()
     ctx.setContextProperty("Settings", settings)
-    ctx.setContextProperty("Modes", ModeList())
-    ctx.setContextProperty("LocalPlaylist", PlaylistModel())
+    ctx.setContextProperty("Modes", modes)
+    ctx.setContextProperty("LocalPlaylist", playlist)
 
     qml_engine.load(QUrl.fromLocalFile(str(ROOT / "ui" / "Main.qml")))
     roots = qml_engine.rootObjects()
     assert roots, "ui/Main.qml failed to load"
+    # Let PanelHost's documented 220 ms open animation settle before measuring
+    # scene coordinates.  Without this a just-created window is sampled at its
+    # animation's initial zero width rather than its requested open state.
+    from PySide6.QtTest import QTest
+    QTest.qWait(260)
+    # Context properties are non-owning references.  Retain the Python objects
+    # for the test's entire QML lifetime, exactly as main.py does in
+    # _KEEP_ALIVE; otherwise Modes can be collected and turn the dock test into
+    # a null-context race.
+    roots[0]._refs = (qml_engine, stub, settings, modes, playlist)
     yield roots[0]
     del qml_engine
 
