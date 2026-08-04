@@ -1,266 +1,233 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import Halcyon.Ui
 
-// Address bar (§P3.1, §P3.4, §P3.5).
-// Icon-only nav buttons: Back · Forward · Reload/Stop · Home · ★ star · ⋮ menu.
-// Text URL/search field: shows current URL, select-all on focus, Enter navigates,
-// non-URL input searches Google.
+// Browser navigation chrome.  This is intentionally not a player transport:
+// every action below changes browser history/page state only.
 Rectangle {
-    id: addressBar
-    height: 42
-    color: "transparent"
+    id: root
+    height: Theme.toolbarRowHeight
+    color: Theme.baseElevated
 
-    property var browser: modeContext_web
+    property var browser: null
+
+    function currentUrl() {
+        return browser && browser.activeTab ? (browser.activeTab.url || "") : ""
+    }
+
+    function syncUrlField() {
+        if (!urlInput.activeFocus)
+            urlInput.text = currentUrl()
+    }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 4
+        anchors.leftMargin: Theme.spaceSm
+        anchors.rightMargin: Theme.spaceSm
+        spacing: Theme.spaceXs
 
         IconButton {
-            id: backBtn
-            text: "←"
+            glyph: Glyphs.back
             tooltip: "Back"
-            onClicked: {
-                if (addressBar.browser && addressBar.browser.activeTab) {
-                    // Back handled by active tab controller
-                }
-            }
+            enabled: root.browser && root.browser.activeTab.canGoBack
+            onClicked: if (root.browser) root.browser.goBack()
         }
 
         IconButton {
-            id: forwardBtn
-            text: "→"
+            glyph: Glyphs.forward
             tooltip: "Forward"
-            onClicked: {
-                if (addressBar.browser && addressBar.browser.activeTab) {
-                    // Forward handled by active tab controller
-                }
-            }
+            enabled: root.browser && root.browser.activeTab.canGoForward
+            onClicked: if (root.browser) root.browser.goForward()
         }
 
         IconButton {
-            id: reloadStopBtn
-            text: (addressBar.browser && addressBar.browser.activeTab && addressBar.browser.activeTab.loading) ? "✕" : "↻"
-            tooltip: (addressBar.browser && addressBar.browser.activeTab && addressBar.browser.activeTab.loading) ? "Stop" : "Reload"
-            onClicked: {
-                if (addressBar.browser && addressBar.browser.activeTab) {
-                    // Reload or stop handled by active tab controller
-                }
-            }
+            glyph: root.browser && root.browser.activeTab.loading ? Glyphs.cancel : Glyphs.refresh
+            tooltip: root.browser && root.browser.activeTab.loading ? "Stop" : "Reload"
+            enabled: root.browser && root.browser.tabCount > 0 && !root.browser.activeTab.internal
+            onClicked: if (root.browser) root.browser.reloadOrStop()
         }
 
         IconButton {
-            id: homeBtn
-            text: "⌂"
+            glyph: Glyphs.home
             tooltip: "Home (site homepage or Google)"
-            onClicked: {
-                if (addressBar.browser) {
-                    addressBar.browser.navigateHome()
-                }
-            }
+            onClicked: if (root.browser) root.browser.navigateHome()
         }
 
-        // URL / search text input field (§P3.1, §P3.4)
-        Rectangle {
-            id: urlContainer
+        GlassField {
+            id: urlInput
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.topMargin: 5
-            Layout.bottomMargin: 5
-            radius: 8
-            color: "rgba(255, 255, 255, 0.08)"
-            border.color: urlInput.activeFocus ? "#5EEAD4" : "rgba(255, 255, 255, 0.16)"
-            border.width: 1
-
-            TextInput {
-                id: urlInput
-                anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                verticalAlignment: TextInput.AlignVCenter
-                color: "#FFFFFF"
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-                selectByMouse: true
-                clip: true
-                text: (addressBar.browser && addressBar.browser.activeTab)
-                      ? (addressBar.browser.activeTab.url || "")
-                      : ""
-
-                onActiveFocusChanged: {
-                    if (activeFocus) {
-                        selectAll()
-                    }
-                }
-
-                onAccepted: {
-                    if (addressBar.browser) {
-                        addressBar.browser.navigateActive(text)
-                    }
-                }
+            Layout.preferredHeight: 32
+            placeholderText: root.browser && root.browser.tabCount === 0
+                             ? "Search Google or enter an address"
+                             : "Search or enter address"
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    selectAll()
+                else
+                    root.syncUrlField()
+            }
+            onAccepted: {
+                if (!root.browser)
+                    return
+                root.browser.navigateActive(text)
+                text = root.currentUrl()
+                selectAll()
             }
         }
 
-        // Bookmark star button (§P3.5)
-        // Empty star = not bookmarked -> Add popup; filled star = bookmarked -> Edit/Remove popup
         IconButton {
-            id: starBtn
-            property bool isSaved: (addressBar.browser && addressBar.browser.bookmarks && addressBar.browser.activeTab)
-                                   ? addressBar.browser.bookmarks.isBookmarked(addressBar.browser.activeTab.url)
-                                   : false
-            text: isSaved ? "★" : "☆"
-            tooltip: isSaved ? "Edit or remove bookmark" : "Bookmark this page"
+            id: starButton
+            property bool saved: root.browser && root.browser.activeTabBookmarked
+            glyph: saved ? Glyphs.bookmarkFilled : Glyphs.bookmark
+            tooltip: saved ? "Edit or remove bookmark" : "Bookmark this page"
+            enabled: root.browser && root.browser.tabCount > 0
+                     && !!root.browser.activeTab.url && !root.browser.activeTab.internal
+            active: saved
             onClicked: {
-                if (!addressBar.browser || !addressBar.browser.activeTab) return
-                if (isSaved) {
-                    editBookmarkPopup.open()
-                } else {
-                    addBookmarkPopup.open()
-                }
+                if (saved)
+                    editBookmarkPopup.showBelow(starButton, root.Window.window)
+                else
+                    addBookmarkPopup.showBelow(starButton, root.Window.window)
             }
         }
 
-        // Menu / bookmarks dropdown icon (§P3.5)
         IconButton {
-            id: menuBtn
-            text: "⋮"
-            tooltip: "Bookmarks and menu"
+            id: menuButton
+            glyph: Glyphs.more
+            tooltip: "Bookmarks"
             onClicked: {
-                bookmarksDropdown.visible = !bookmarksDropdown.visible
+                if (bookmarksDropdown.visible)
+                    bookmarksDropdown.hidePopup()
+                else
+                    bookmarksDropdown.openFor(menuButton, root.Window.window)
             }
         }
     }
 
-    // Add bookmark popup (§P3.5)
-    Popup {
+    // Empty-star flow: title can be changed, URL remains the active page.
+    BrowserPopup {
         id: addBookmarkPopup
-        width: 320
-        height: 160
-        anchors.centerIn: parent
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: "#161B24"
-            radius: 12
-            border.color: "rgba(255, 255, 255, 0.2)"
-            border.width: 1
+        width: 340
+        height: 164
+        onVisibleChanged: {
+            if (visible)
+                bookmarkTitleInput.text = root.browser && root.browser.activeTab
+                                          ? (root.browser.activeTab.title || root.browser.activeTab.url) : ""
         }
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 14
-            spacing: 10
+            anchors.margins: Theme.spaceLg
+            spacing: Theme.spaceSm
 
             Text {
                 text: "Add Bookmark"
-                color: "#FFFFFF"
+                color: Theme.text
                 font.family: Theme.fontFamily
-                font.pixelSize: 15
-                font.bold: true
+                font.pixelSize: Theme.fontSizeLarge
+                font.weight: Theme.weightBold
             }
 
-            TextField {
+            GlassField {
                 id: bookmarkTitleInput
                 Layout.fillWidth: true
                 placeholderText: "Title"
-                text: (addressBar.browser && addressBar.browser.activeTab)
-                      ? (addressBar.browser.activeTab.title || addressBar.browser.activeTab.url)
-                      : ""
+                onAccepted: saveBookmarkButton.clicked()
             }
 
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                spacing: 8
-                Button {
-                    text: "Cancel"
-                    onClicked: addBookmarkPopup.close()
-                }
-                Button {
+                spacing: Theme.spaceSm
+                TextButton { text: "Cancel"; onClicked: addBookmarkPopup.hidePopup() }
+                TextButton {
+                    id: saveBookmarkButton
                     text: "Save"
+                    primary: true
                     onClicked: {
-                        if (addressBar.browser && addressBar.browser.bookmarks && addressBar.browser.activeTab) {
-                            addressBar.browser.bookmarks.addBookmark(bookmarkTitleInput.text, addressBar.browser.activeTab.url)
-                        }
-                        addBookmarkPopup.close()
+                        if (root.browser)
+                            root.browser.addBookmark(bookmarkTitleInput.text, root.currentUrl())
+                        addBookmarkPopup.hidePopup()
                     }
                 }
             }
         }
     }
 
-    // Edit/Remove bookmark popup (§P3.5)
-    Popup {
+    // Filled-star flow.  The saved page URL intentionally stays fixed: a user
+    // is editing its bookmark label, not changing the page they are viewing.
+    BrowserPopup {
         id: editBookmarkPopup
-        width: 320
-        height: 180
-        anchors.centerIn: parent
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: "#161B24"
-            radius: 12
-            border.color: "rgba(255, 255, 255, 0.2)"
-            border.width: 1
+        width: 340
+        height: 164
+        onVisibleChanged: {
+            if (!visible || !root.browser)
+                return
+            var saved = root.browser.bookmarks.getByUrl(root.currentUrl())
+            editTitleInput.text = saved ? (saved.title || "") : ""
         }
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 14
-            spacing: 10
+            anchors.margins: Theme.spaceLg
+            spacing: Theme.spaceSm
 
             Text {
                 text: "Edit Bookmark"
-                color: "#FFFFFF"
+                color: Theme.text
                 font.family: Theme.fontFamily
-                font.pixelSize: 15
-                font.bold: true
+                font.pixelSize: Theme.fontSizeLarge
+                font.weight: Theme.weightBold
             }
 
-            TextField {
+            GlassField {
                 id: editTitleInput
                 Layout.fillWidth: true
                 placeholderText: "Title"
-                text: {
-                    if (!addressBar.browser || !addressBar.browser.bookmarks || !addressBar.browser.activeTab) return ""
-                    var b = addressBar.browser.bookmarks.getByUrl(addressBar.browser.activeTab.url)
-                    return b ? (b.title || "") : ""
-                }
+                onAccepted: updateBookmarkButton.clicked()
             }
 
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                spacing: 8
-                Button {
+                spacing: Theme.spaceSm
+                TextButton {
                     text: "Remove"
                     onClicked: {
-                        if (addressBar.browser && addressBar.browser.bookmarks && addressBar.browser.activeTab) {
-                            addressBar.browser.bookmarks.removeBookmark(addressBar.browser.activeTab.url)
-                        }
-                        editBookmarkPopup.close()
+                        if (root.browser)
+                            root.browser.removeBookmark(root.currentUrl())
+                        editBookmarkPopup.hidePopup()
                     }
                 }
-                Button {
-                    text: "Cancel"
-                    onClicked: editBookmarkPopup.close()
-                }
-                Button {
+                TextButton { text: "Cancel"; onClicked: editBookmarkPopup.hidePopup() }
+                TextButton {
+                    id: updateBookmarkButton
                     text: "Save"
+                    primary: true
                     onClicked: {
-                        if (addressBar.browser && addressBar.browser.bookmarks && addressBar.browser.activeTab) {
-                            addressBar.browser.bookmarks.updateBookmark(addressBar.browser.activeTab.url, editTitleInput.text, addressBar.browser.activeTab.url)
-                        }
-                        editBookmarkPopup.close()
+                        if (root.browser)
+                            root.browser.updateBookmark(root.currentUrl(), editTitleInput.text,
+                                                        root.currentUrl())
+                        editBookmarkPopup.hidePopup()
                     }
                 }
             }
         }
     }
+
+    BookmarksDropdown {
+        id: bookmarksDropdown
+        browser: root.browser
+    }
+
+    Connections {
+        target: root.browser
+        enabled: target !== null
+        function onActiveTabChanged() { root.syncUrlField() }
+        function onAddressFocusRequested() {
+            urlInput.forceActiveFocus()
+            urlInput.selectAll()
+        }
+    }
+
+    Component.onCompleted: syncUrlField()
 }

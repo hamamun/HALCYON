@@ -36,6 +36,23 @@ def test_web_mode_setup_hook_returns_browser_context():
     assert isinstance(ctx, BrowserContext)
 
 
+def test_web_page_title_flows_through_mode_neutral_window_title_protocol():
+    mock_engine = MagicMock()
+    mock_settings = MagicMock()
+    mock_settings.get.return_value = "local"
+    app = AppController(
+        mock_engine, mock_settings, MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    browser = BrowserContext()
+    app.register_context("web", browser)
+    browser.navigateActive("example.com")
+    app.setActiveMode("web")
+
+    assert app.modeWindowTitle == "https://example.com"
+    browser._on_host_title(browser.activeTab["id"], "Example")
+    assert app.modeWindowTitle == "Example"
+
+
 def test_web_mode_switch_stops_player_one_tuner():
     """Switching to Web mode must stop video playback cleanly (§P3.3 one-tuner rule)."""
     mock_engine = MagicMock()

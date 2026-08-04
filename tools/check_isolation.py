@@ -86,6 +86,9 @@ PHASE3_DISCLOSED = [
     "ui/Main.qml",
     "ui/shell/Stage.qml",
     "ui/shell/PanelHost.qml",
+    # Generic Fluent icon names (add/back/forward/more/bookmark state) are
+    # needed so Web uses the shared IconButton vocabulary rather than raw text.
+    "ui/components/Glyphs.qml",
 ]
 
 

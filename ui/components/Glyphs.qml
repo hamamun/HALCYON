@@ -67,6 +67,14 @@ QtObject {
     readonly property string chevronDown:  "\uE70D"
     readonly property string chevronUp:    "\uE70E"
     readonly property string search:     "\uE721"
+    // Generic browser/chrome actions.  Keeping these here means Web uses the
+    // same IconButton vocabulary as every existing Halcyon control rather than
+    // drawing raw Unicode text that the icon font cannot render.
+    readonly property string add:        "\uE710"
+    readonly property string more:       "\uE712"
+    readonly property string back:       "\uE72B"
+    readonly property string forward:    "\uE72A"
+    readonly property string bookmarkFilled: "\uE735"
 
     // panels
     readonly property string info:       "\uE946"

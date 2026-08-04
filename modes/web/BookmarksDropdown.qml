@@ -1,67 +1,51 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import Halcyon.Ui
 
-// Edge-style bookmarks dropdown (§P3.5).
-// Anchored under the menu icon; closes on same icon, outside click, or Esc.
-// Manage Bookmarks pinned at top. Text rows (title + URL); click navigates.
-Popup {
-    id: bookmarksDropdown
-    width: 280
-    height: Math.min(360, 48 + 50 * (bookmarksModel ? bookmarksModel.count : 0))
-    modal: false
-    focus: true
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+// Edge-style bookmark menu.  BrowserPopup is a native owned popup so it stays
+// above the WebView2 child HWND where a scene-graph Popup cannot.
+BrowserPopup {
+    id: root
+    width: 300
+    height: Math.min(380, Math.max(104, 60 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
 
-    property var browser: modeContext_web
-    property var bookmarksModel: browser ? browser.bookmarks : null
+    property var browser: null
 
-    background: Rectangle {
-        color: "#131720"
-        radius: 12
-        border.color: "rgba(255, 255, 255, 0.2)"
-        border.width: 1
+    function openFor(anchorItem, ownerWindow) {
+        showBelow(anchorItem, ownerWindow)
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 4
+        anchors.margins: Theme.spaceSm
+        spacing: Theme.spaceXs
 
-        // Manage Bookmarks pinned at top (§P3.5)
-        Rectangle {
+        TextButton {
             Layout.fillWidth: true
-            height: 34
-            radius: 8
-            color: manageArea.containsMouse ? "rgba(255, 255, 255, 0.12)" : "transparent"
-
-            Text {
-                anchors.centerIn: parent
-                text: "⚙  Manage Bookmarks"
-                color: "#5EEAD4"
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-                font.bold: true
-            }
-
-            MouseArea {
-                id: manageArea
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: {
-                    if (bookmarksDropdown.browser) {
-                        bookmarksDropdown.browser.navigateActive("halcyon://bookmarks")
-                    }
-                    bookmarksDropdown.close()
-                }
+            text: "Manage Bookmarks"
+            glyph: Glyphs.bookmark
+            onClicked: {
+                if (root.browser)
+                    root.browser.openBookmarksManager()
+                root.hidePopup()
             }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            height: 1
-            color: "rgba(255, 255, 255, 0.12)"
+            Layout.preferredHeight: 1
+            color: Theme.glassBorder
+        }
+
+        Text {
+            Layout.fillWidth: true
+            Layout.margins: Theme.spaceMd
+            visible: !root.browser || root.browser.bookmarkItems.length === 0
+            text: "No bookmarks yet — use ★ to save this page."
+            wrapMode: Text.WordWrap
+            color: Theme.textMuted
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
         }
 
         ListView {
@@ -69,35 +53,40 @@ Popup {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: bookmarksDropdown.bookmarksModel ? bookmarksDropdown.bookmarksModel.getAll() : []
+            visible: root.browser && root.browser.bookmarkItems.length > 0
+            model: root.browser ? root.browser.bookmarkItems : []
+            spacing: Theme.spaceXs
 
             delegate: Rectangle {
+                id: bookmarkRow
+                required property var modelData
                 width: bookmarksList.width
-                height: 44
-                radius: 6
-                color: rowArea.containsMouse ? "rgba(255, 255, 255, 0.08)" : "transparent"
+                height: 48
+                radius: Theme.radiusSmall
+                color: rowArea.containsMouse ? Theme.glassFillHover : "transparent"
 
-                ColumnLayout {
+                Column {
                     anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 2
+                    anchors.leftMargin: Theme.spaceMd
+                    anchors.rightMargin: Theme.spaceMd
+                    anchors.topMargin: Theme.spaceXs
+                    anchors.bottomMargin: Theme.spaceXs
+                    spacing: 1
 
                     Text {
-                        Layout.fillWidth: true
-                        text: modelData.title || modelData.url
-                        color: "#FFFFFF"
+                        width: parent.width
+                        text: bookmarkRow.modelData.title || bookmarkRow.modelData.url
+                        color: Theme.text
                         font.family: Theme.fontFamily
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.fontSizeSmall
                         elide: Text.ElideRight
                     }
-
                     Text {
-                        Layout.fillWidth: true
-                        text: modelData.url
-                        color: "rgba(255, 255, 255, 0.55)"
+                        width: parent.width
+                        text: bookmarkRow.modelData.url
+                        color: Theme.textMuted
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.fontSizeTiny
                         elide: Text.ElideRight
                     }
                 }
@@ -106,11 +95,11 @@ Popup {
                     id: rowArea
                     anchors.fill: parent
                     hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (bookmarksDropdown.browser) {
-                            bookmarksDropdown.browser.navigateActive(modelData.url)
-                        }
-                        bookmarksDropdown.close()
+                        if (root.browser)
+                            root.browser.navigateActive(bookmarkRow.modelData.url)
+                        root.hidePopup()
                     }
                 }
             }

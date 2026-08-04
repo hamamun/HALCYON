@@ -1,13 +1,9 @@
-"""Browser context and tab manager for Web mode (§P3.1, §P3.4).
+"""Tab model and QML-facing controller for Halcyon's Web mode.
 
-Manages:
-  • Tab model (maximum 15 tabs; "Maximum 15 tabs reached." in-chrome message).
-  • No tabs on entry (+ only); typing in address bar creates first tab (§P3.1).
-  • Active tab navigation, Back, Forward, Reload/Stop, Home (§P3.4).
-  • Intercepted popup/new-window routing -> new Halcyon tab (§P3.4).
-  • Bookmarks store integration (star states, dropdown, manager tab, §P3.5).
-  • Tab persistence across mode switches (keep_stage_alive=True), never saved
-    after restart (§P3.1).
+This is the missing join between browser chrome and ``WebViewHost``: every
+external tab owns one native controller, while this object owns visibility,
+geometry, history state, popup routing and bookmark state.  QML only receives
+plain QVariant maps; it never has to know about pythonnet or HWNDs.
 """
 
 from __future__ import annotations
@@ -15,9 +11,10 @@ from __future__ import annotations
 import logging
 import urllib.parse
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from modes.web import webview2_runtime
 from modes.web.bookmarks import BookmarksStore
@@ -26,37 +23,107 @@ from modes.web.webview2_host import WebViewHost
 logger = logging.getLogger("modes.web.browser")
 
 MAX_TABS = 15
+BOOKMARKS_URL = "halcyon://bookmarks"
+
+
+@dataclass
+class _BrowserTab:
+    id: str
+    url: str = ""
+    title: str = "New Tab"
+    loading: bool = False
+    can_go_back: bool = False
+    can_go_forward: bool = False
+    host: WebViewHost | None = None
+
+    @property
+    def internal(self) -> bool:
+        return self.url == BOOKMARKS_URL
+
+    def as_map(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title or self.url or "New Tab",
+            "url": self.url,
+            "loading": self.loading,
+            "canGoBack": self.can_go_back,
+            "canGoForward": self.can_go_forward,
+            "internal": self.internal,
+        }
 
 
 class BrowserContext(QObject):
-    """The central Web mode controller exposed to QML as modeContext_web (§A.2)."""
+    """The complete browser state exposed as ``modeContext_web``.
+
+    ``host_factory`` and ``runtime_check`` are injectable for deterministic
+    non-Windows tests.  Production uses the direct WebView2 host and the real
+    registry/CLR probe.
+    """
 
     tabsChanged = Signal()
     activeTabIndexChanged = Signal()
     activeTabChanged = Signal()
     tabLimitMessageVisibleChanged = Signal()
     bookmarksChanged = Signal()
+    runtimeAvailableChanged = Signal()
+    runtimeMessageChanged = Signal()
+    runtimeCheckedChanged = Signal()
+    addressFocusRequested = Signal()
+    windowTitleChanged = Signal()
 
-    def __init__(self, bookmarks: BookmarksStore | None = None, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        bookmarks: BookmarksStore | None = None,
+        parent: QObject | None = None,
+        *,
+        host_factory: Callable[..., WebViewHost] | None = None,
+        runtime_check: Callable[[], tuple[bool, str]] | None = None,
+        environment_getter: Callable[[], Any] | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._tabs: list[dict[str, Any]] = []
-        self._active_index: int = -1
-        self._tab_limit_message_visible: bool = False
-        self._bookmarks = bookmarks or BookmarksStore()
-        self._bookmarks.bookmarksChanged.connect(self.bookmarksChanged.emit)
+        self._tabs: list[_BrowserTab] = []
+        self._active_index = -1
+        self._tab_limit_message_visible = False
+        self._bookmarks = bookmarks or BookmarksStore(parent=self)
+        if self._bookmarks.parent() is None:
+            self._bookmarks.setParent(self)
+        self._bookmarks.bookmarksChanged.connect(self._on_bookmarks_changed)
 
+        self._host_factory = host_factory or WebViewHost
+        self._runtime_check = runtime_check or webview2_runtime.check_webview2_available
+        self._environment_getter = environment_getter or webview2_runtime.get_shared_environment
+        self._runtime_checked = False
+        self._runtime_available = False
+        self._runtime_message = "Starting WebView2…"
+
+        self._host_window: QObject | None = None
+        self._parent_hwnd = 0
+        self._attach_attempts = 0
+        self._stage_active = False
+        # Physical pixels relative to the QQuickWindow client area.  QML passes
+        # device-pixel-ratio-adjusted values, so WebView2 receives the same
+        # coordinate system as Win32 Bounds.
+        self._viewport = (0, 0, 0, 0)
+
+        self._limit_timer = QTimer(self)
+        self._limit_timer.setSingleShot(True)
+        self._limit_timer.setInterval(3500)
+        self._limit_timer.timeout.connect(self.dismissTabLimitMessage)
+
+    # ---------------------------------------------------------------- QML data
     @Property(int, notify=tabsChanged)
-    def tabCount(self) -> int:
+    def tabCount(self) -> int:  # noqa: N802 - QML API
         return len(self._tabs)
 
     @Property(int, notify=activeTabIndexChanged)
-    def activeTabIndex(self) -> int:
+    def activeTabIndex(self) -> int:  # noqa: N802 - QML API
         return self._active_index
 
     @Property("QVariantMap", notify=activeTabChanged)
-    def activeTab(self) -> dict[str, Any]:
-        if 0 <= self._active_index < len(self._tabs):
-            return dict(self._tabs[self._active_index])
+    def activeTab(self) -> dict[str, Any]:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        if tab is not None:
+            return tab.as_map()
         return {
             "id": "",
             "title": "",
@@ -64,143 +131,479 @@ class BrowserContext(QObject):
             "loading": False,
             "canGoBack": False,
             "canGoForward": False,
+            "internal": False,
         }
+
+    @Property(str, notify=windowTitleChanged)
+    def windowTitle(self) -> str:  # noqa: N802 - QML API
+        return self.window_title()
+
+    def window_title(self) -> str:
+        """Title contribution consumed by the generic AppController protocol."""
+        tab = self._active_tab()
+        if tab is None:
+            return ""
+        return tab.title or tab.url or "New Tab"
 
     @Property("QVariantList", notify=tabsChanged)
     def tabs(self) -> list[dict[str, Any]]:
-        return [dict(t) for t in self._tabs]
+        return [tab.as_map() for tab in self._tabs]
 
     @Property(bool, notify=tabsChanged)
-    def isAtMaxTabs(self) -> bool:
+    def isAtMaxTabs(self) -> bool:  # noqa: N802 - QML API
         return len(self._tabs) >= MAX_TABS
 
     @Property(bool, notify=tabLimitMessageVisibleChanged)
-    def tabLimitMessageVisible(self) -> bool:
+    def tabLimitMessageVisible(self) -> bool:  # noqa: N802 - QML API
         return self._tab_limit_message_visible
 
     @Property(QObject, notify=bookmarksChanged)
     def bookmarks(self) -> BookmarksStore:
         return self._bookmarks
 
-    @Slot(str, result=bool)
-    def addTab(self, url: str = "") -> bool:
-        """Create a new tab (§P3.1, §P3.4).
+    @Property("QVariantList", notify=bookmarksChanged)
+    def bookmarkItems(self) -> list[dict[str, Any]]:  # noqa: N802 - QML API
+        return self._bookmarks.getAll()
 
-        Enforces MAX_TABS (15). If reached, disables + and displays the in-chrome
-        message 'Maximum 15 tabs reached.' in the tabs row without opening tab.
-        """
+    @Property(bool, notify=activeTabChanged)
+    def activeTabBookmarked(self) -> bool:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        return bool(tab and tab.url and not tab.internal and self._bookmarks.isBookmarked(tab.url))
+
+    @Property(bool, notify=runtimeAvailableChanged)
+    def runtimeAvailable(self) -> bool:  # noqa: N802 - QML API
+        return self._runtime_available
+
+    @Property(bool, notify=runtimeCheckedChanged)
+    def runtimeChecked(self) -> bool:  # noqa: N802 - QML API
+        return self._runtime_checked
+
+    @Property(str, notify=runtimeMessageChanged)
+    def runtimeMessage(self) -> str:  # noqa: N802 - QML API
+        return self._runtime_message
+
+    # -------------------------------------------------------- stage attachment
+    @Slot(QObject)
+    def attachToWindow(self, window: QObject | None) -> None:  # noqa: N802 - QML API
+        """Attach controllers to the main QQuickWindow once it owns an HWND."""
+        if window is None:
+            return
+
+        changed_window = window is not self._host_window
+        if changed_window:
+            self._host_window = window
+            self._parent_hwnd = 0
+            self._attach_attempts = 0
+            try:
+                window.destroyed.connect(self._on_host_window_destroyed)
+            except Exception:
+                pass
+            # A controller cannot be rebound to another parent HWND.  Preserve
+            # URLs/tabs but release any old native children before retrying.
+            for tab in self._tabs:
+                if tab.host is not None:
+                    tab.host.release_controller()
+
+        self.ensureRuntime()
+        self._attach_when_window_is_ready()
+
+    @Slot(int, int, int, int)
+    def setViewport(self, x: int, y: int, width: int, height: int) -> None:  # noqa: N802
+        """Receive the page rectangle in physical pixels from WebStage.qml."""
+        rect = (int(x), int(y), max(0, int(width)), max(0, int(height)))
+        if rect != self._viewport:
+            self._viewport = rect
+            self._sync_hosts()
+
+    @Slot(bool)
+    def setStageActive(self, active: bool) -> None:  # noqa: N802 - QML API
+        active = bool(active)
+        if active != self._stage_active:
+            self._stage_active = active
+            self._sync_hosts()
+
+    @Slot()
+    def detachStage(self) -> None:  # noqa: N802 - QML API
+        """Hide every native child before a non-Web stage becomes visible."""
+        self.setStageActive(False)
+
+    @Slot()
+    def ensureRuntime(self) -> None:  # noqa: N802 - QML API
+        """Run the actual WebView2 bridge probe once per application session."""
+        if self._runtime_checked:
+            return
+        try:
+            available, message = self._runtime_check()
+        except Exception as exc:
+            logger.warning("WebView2 availability check raised unexpectedly: %s", exc)
+            available, message = False, webview2_runtime.get_stage_error_message()
+
+        self._runtime_checked = True
+        self._set_runtime_available(bool(available), str(message or ""))
+        self.runtimeCheckedChanged.emit()
+        if self._runtime_available:
+            self._attach_when_window_is_ready()
+
+    def _attach_when_window_is_ready(self) -> None:
+        if not self._runtime_available or self._host_window is None:
+            return
+        hwnd = self._window_hwnd(self._host_window)
+        if hwnd <= 0:
+            if self._attach_attempts < 20:
+                self._attach_attempts += 1
+                QTimer.singleShot(50, self._attach_when_window_is_ready)
+            return
+
+        self._parent_hwnd = hwnd
+        self._attach_attempts = 0
+        self._ensure_controllers()
+        self._sync_hosts()
+
+    @staticmethod
+    def _window_hwnd(window: QObject) -> int:
+        try:
+            win_id = getattr(window, "winId")
+            return int(win_id() if callable(win_id) else win_id)
+        except Exception:
+            return 0
+
+    def _on_host_window_destroyed(self, *_args: Any) -> None:
+        self._stage_active = False
+        self._parent_hwnd = 0
+        self._host_window = None
+        for tab in self._tabs:
+            if tab.host is not None:
+                tab.host.set_visible(False)
+
+    # --------------------------------------------------------------- tab model
+    @Slot(str, result=bool)
+    def addTab(self, url: str = "") -> bool:  # noqa: N802 - QML API
+        """Add an empty, internal, or ordinary browser tab (maximum 15)."""
         if len(self._tabs) >= MAX_TABS:
-            self._set_tab_limit_message_visible(True)
-            logger.info("MAX_TABS (15) reached — blocking addTab request.")
+            self._show_tab_limit_message()
             return False
 
-        clean_url = (url or "").strip()
-        if clean_url:
-            clean_url = webview2_runtime.resolve_url_or_search(clean_url)
+        raw = (url or "").strip()
+        if raw == BOOKMARKS_URL:
+            tab = _BrowserTab(id=uuid.uuid4().hex, url=BOOKMARKS_URL, title="Bookmarks Manager")
+        elif raw:
+            resolved = webview2_runtime.resolve_url_or_search(raw)
+            tab = _BrowserTab(id=uuid.uuid4().hex, url=resolved, title=resolved)
+        else:
+            tab = _BrowserTab(id=uuid.uuid4().hex)
 
-        tab_id = uuid.uuid4().hex
-        tab = {
-            "id": tab_id,
-            "title": clean_url or "New Tab",
-            "url": clean_url,
-            "loading": False,
-            "canGoBack": False,
-            "canGoForward": False,
-        }
         self._tabs.append(tab)
-        self._active_index = len(self._tabs) - 1
-        self.tabsChanged.emit()
-        self.activeTabIndexChanged.emit()
-        self.activeTabChanged.emit()
+        self._set_active_index(len(self._tabs) - 1, emit_tabs=True)
+        if tab.url and not tab.internal:
+            self._navigate_tab(tab, tab.url, emit=False)
+        else:
+            self._sync_hosts()
+            self.addressFocusRequested.emit()
         return True
 
     @Slot(int, result=bool)
-    def closeTab(self, index: int) -> bool:
-        """Close tab at index (§P3.4)."""
-        if index < 0 or index >= len(self._tabs):
+    def closeTab(self, index: int) -> bool:  # noqa: N802 - QML API
+        if not 0 <= index < len(self._tabs):
             return False
 
-        self._tabs.pop(index)
-        if len(self._tabs) < MAX_TABS and self._tab_limit_message_visible:
-            self._set_tab_limit_message_visible(False)
+        removed = self._tabs.pop(index)
+        if removed.host is not None:
+            removed.host.close()
 
-        if len(self._tabs) == 0:
-            self._active_index = -1
-        elif self._active_index >= len(self._tabs):
-            self._active_index = len(self._tabs) - 1
+        if not self._tabs:
+            next_index = -1
         elif index < self._active_index:
-            self._active_index -= 1
+            next_index = self._active_index - 1
+        elif index == self._active_index:
+            next_index = min(index, len(self._tabs) - 1)
+        else:
+            next_index = self._active_index
 
-        self.tabsChanged.emit()
-        self.activeTabIndexChanged.emit()
-        self.activeTabChanged.emit()
+        if len(self._tabs) < MAX_TABS:
+            self.dismissTabLimitMessage()
+        self._set_active_index(next_index, emit_tabs=True)
+        self._sync_hosts()
         return True
 
     @Slot(int)
-    def setActiveTab(self, index: int) -> None:
-        """Switch active tab."""
+    def setActiveTab(self, index: int) -> None:  # noqa: N802 - QML API
         if 0 <= index < len(self._tabs) and index != self._active_index:
-            self._active_index = index
-            self.activeTabIndexChanged.emit()
-            self.activeTabChanged.emit()
+            self._set_active_index(index)
+            self._sync_hosts()
 
     @Slot(str)
-    def navigateActive(self, url_or_search: str) -> None:
-        """Navigate active tab, or create first tab if none exist (§P3.1, §P3.4)."""
-        resolved = webview2_runtime.resolve_url_or_search(url_or_search)
-        if self._active_index < 0 or len(self._tabs) == 0:
+    def navigateActive(self, url_or_search: str) -> None:  # noqa: N802 - QML API
+        raw = (url_or_search or "").strip()
+        if raw == BOOKMARKS_URL:
+            self.openBookmarksManager()
+            return
+        resolved = webview2_runtime.resolve_url_or_search(raw)
+        tab = self._active_tab()
+        if tab is None:
             self.addTab(resolved)
             return
-
-        tab = self._tabs[self._active_index]
-        tab["url"] = resolved
-        tab["title"] = resolved
-        self.tabsChanged.emit()
-        self.activeTabChanged.emit()
+        self._navigate_tab(tab, resolved)
 
     @Slot()
-    def navigateHome(self) -> None:
-        """Navigate to loaded site homepage, or Google on a blank/no tab (§P3.4)."""
-        if self._active_index < 0 or len(self._tabs) == 0:
-            self.addTab("https://www.google.com")
-            return
-
-        url = self._tabs[self._active_index].get("url", "")
-        if not url or url == "New Tab":
+    def navigateHome(self) -> None:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        if tab is None or tab.internal or not tab.url:
             self.navigateActive("https://www.google.com")
             return
-
         try:
-            parts = urllib.parse.urlsplit(url)
-            if parts.scheme and parts.netloc:
-                home_url = f"{parts.scheme}://{parts.netloc}"
-                self.navigateActive(home_url)
-            else:
-                self.navigateActive("https://www.google.com")
+            parts = urllib.parse.urlsplit(tab.url)
+            home = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
         except Exception:
-            self.navigateActive("https://www.google.com")
+            home = ""
+        self.navigateActive(home or "https://www.google.com")
+
+    @Slot()
+    def goBack(self) -> None:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        if tab is not None and tab.host is not None:
+            tab.host.go_back()
+
+    @Slot()
+    def goForward(self) -> None:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        if tab is not None and tab.host is not None:
+            tab.host.go_forward()
+
+    @Slot()
+    def reloadOrStop(self) -> None:  # noqa: N802 - QML API
+        tab = self._active_tab()
+        if tab is None or tab.host is None:
+            return
+        if tab.loading:
+            tab.host.stop()
+        else:
+            tab.host.reload()
 
     @Slot(str)
-    def onPopupRequested(self, url: str) -> None:
-        """Route site popup / new window request to a new Halcyon tab (§P3.4)."""
-        logger.info("Routing popup/new-window to Halcyon tab: %s", url)
+    def onPopupRequested(self, url: str) -> None:  # noqa: N802 - QML API
+        # WebViewHost already marked the .NET request as handled.  This method
+        # only decides whether a new Halcyon tab fits under the 15-tab cap.
         self.addTab(url)
 
     @Slot()
-    def dismissTabLimitMessage(self) -> None:
-        """Hide the 15-tab limit in-chrome message pill."""
-        self._set_tab_limit_message_visible(False)
+    def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
+        for index, tab in enumerate(self._tabs):
+            if tab.internal:
+                self.setActiveTab(index)
+                return
+        self.addTab(BOOKMARKS_URL)
 
-    def _set_tab_limit_message_visible(self, visible: bool) -> None:
-        if self._tab_limit_message_visible != visible:
-            self._tab_limit_message_visible = visible
+    @Slot()
+    def dismissTabLimitMessage(self) -> None:  # noqa: N802 - QML API
+        self._limit_timer.stop()
+        if self._tab_limit_message_visible:
+            self._tab_limit_message_visible = False
             self.tabLimitMessageVisibleChanged.emit()
 
+    def _show_tab_limit_message(self) -> None:
+        if not self._tab_limit_message_visible:
+            self._tab_limit_message_visible = True
+            self.tabLimitMessageVisibleChanged.emit()
+        self._limit_timer.start()
+        logger.info("Web tab cap (%d) reached", MAX_TABS)
+
+    def _set_active_index(self, index: int, *, emit_tabs: bool = False) -> None:
+        changed = index != self._active_index
+        self._active_index = index
+        if emit_tabs:
+            self.tabsChanged.emit()
+        if changed:
+            self.activeTabIndexChanged.emit()
+        # A changed tab snapshot must be published both for a new tab and after
+        # a close where the numeric index happens to remain the same.
+        self.activeTabChanged.emit()
+        self.windowTitleChanged.emit()
+
+    def _active_tab(self) -> _BrowserTab | None:
+        if 0 <= self._active_index < len(self._tabs):
+            return self._tabs[self._active_index]
+        return None
+
+    def _tab_by_id(self, tab_id: str) -> _BrowserTab | None:
+        return next((tab for tab in self._tabs if tab.id == tab_id), None)
+
+    # -------------------------------------------------------------- WebView2 IO
+    def _navigate_tab(self, tab: _BrowserTab, resolved: str, *, emit: bool = True) -> None:
+        tab.url = resolved
+        tab.title = resolved
+        tab.loading = False
+        tab.can_go_back = False
+        tab.can_go_forward = False
+        host = self._ensure_tab_host(tab)
+        if host is not None:
+            host.navigate(resolved)
+        if emit:
+            self._emit_tab_change(tab)
+        self._sync_hosts()
+
+    def _ensure_tab_host(self, tab: _BrowserTab) -> WebViewHost | None:
+        if tab.internal:
+            return None
+        if tab.host is None:
+            try:
+                tab.host = self._host_factory(parent=self)
+            except TypeError:
+                # Tiny fake hosts in unit tests may not accept a QObject parent.
+                tab.host = self._host_factory()  # type: ignore[call-arg]
+                if tab.host.parent() is None:
+                    tab.host.setParent(self)
+            self._connect_host(tab.id, tab.host)
+        if self._runtime_available and self._parent_hwnd > 0 and not tab.host.isReady:
+            self._init_host(tab)
+        return tab.host
+
+    def _ensure_controllers(self) -> None:
+        for tab in self._tabs:
+            if tab.internal:
+                continue
+            host = self._ensure_tab_host(tab)
+            if host is not None:
+                self._init_host(tab)
+
+    def _init_host(self, tab: _BrowserTab) -> bool:
+        host = tab.host
+        if host is None or self._parent_hwnd <= 0:
+            return False
+        if host.isReady and host.parent_hwnd == self._parent_hwnd:
+            return True
+        environment = self._environment_getter()
+        if environment is None:
+            self._set_runtime_available(False, webview2_runtime.get_stage_error_message())
+            return False
+        ok = host.init_controller(self._parent_hwnd, environment)
+        if not ok:
+            self._set_runtime_available(False, host.errorMessage or webview2_runtime.get_stage_error_message())
+            return False
+        # A host created before the stage acquired an HWND already holds its
+        # URL as pending navigation; init_controller flushes it exactly once.
+        # The caller that creates a host after attachment performs navigation
+        # immediately after this method returns.
+        return True
+
+    def _sync_hosts(self) -> None:
+        active = self._active_tab()
+        x, y, width, height = self._viewport
+        usable = self._stage_active and self._runtime_available and width > 0 and height > 0
+        for tab in self._tabs:
+            host = tab.host
+            if host is None:
+                continue
+            should_show = bool(usable and tab is active and not tab.internal)
+            if should_show:
+                if not host.isReady:
+                    self._init_host(tab)
+                host.set_bounds(x, y, width, height)
+            host.set_visible(should_show and host.isReady)
+
+    def _connect_host(self, tab_id: str, host: WebViewHost) -> None:
+        host.urlChanged.connect(lambda url, ident=tab_id: self._on_host_url(ident, url))
+        host.titleChanged.connect(lambda title, ident=tab_id: self._on_host_title(ident, title))
+        host.loadingChanged.connect(lambda loading, ident=tab_id: self._on_host_loading(ident, loading))
+        host.historyChanged.connect(
+            lambda back, forward, ident=tab_id: self._on_host_history(ident, back, forward)
+        )
+        host.newWindowRequested.connect(self.onPopupRequested)
+        host.errorOccurred.connect(lambda message, ident=tab_id: self._on_host_error(ident, message))
+
+    def _on_host_url(self, tab_id: str, url: str) -> None:
+        tab = self._tab_by_id(tab_id)
+        if tab is None:
+            return
+        tab.url = url
+        if not tab.title or tab.title == "New Tab" or tab.title.startswith(("http://", "https://")):
+            tab.title = url
+        self._emit_tab_change(tab)
+
+    def _on_host_title(self, tab_id: str, title: str) -> None:
+        tab = self._tab_by_id(tab_id)
+        if tab is None:
+            return
+        tab.title = title or tab.url or "New Tab"
+        self._emit_tab_change(tab)
+
+    def _on_host_loading(self, tab_id: str, loading: bool) -> None:
+        tab = self._tab_by_id(tab_id)
+        if tab is None:
+            return
+        tab.loading = bool(loading)
+        self._emit_tab_change(tab)
+
+    def _on_host_history(self, tab_id: str, back: bool, forward: bool) -> None:
+        tab = self._tab_by_id(tab_id)
+        if tab is None:
+            return
+        tab.can_go_back = bool(back)
+        tab.can_go_forward = bool(forward)
+        self._emit_tab_change(tab)
+
+    def _on_host_error(self, _tab_id: str, message: str) -> None:
+        # A controller failure after a positive registry/CLR probe still needs a
+        # user-visible stage, not a black rectangle.  Hiding every child makes
+        # the QML fallback immediately visible.
+        self._set_runtime_available(False, message or webview2_runtime.get_stage_error_message())
+        self._sync_hosts()
+
+    def _emit_tab_change(self, tab: _BrowserTab) -> None:
+        self.tabsChanged.emit()
+        if tab is self._active_tab():
+            self.activeTabChanged.emit()
+            self.windowTitleChanged.emit()
+
+    def _set_runtime_available(self, available: bool, message: str) -> None:
+        if available != self._runtime_available:
+            self._runtime_available = available
+            self.runtimeAvailableChanged.emit()
+        message = message or ("OK" if available else webview2_runtime.get_stage_error_message())
+        if message != self._runtime_message:
+            self._runtime_message = message
+            self.runtimeMessageChanged.emit()
+
+    # --------------------------------------------------------------- bookmarks
+    @staticmethod
+    def _bookmark_url(url: str) -> str:
+        text = (url or "").strip()
+        return webview2_runtime.resolve_url_or_search(text) if text else ""
+
+    @Slot(str, str, result=bool)
+    def addBookmark(self, title: str, url: str) -> bool:  # noqa: N802 - QML API
+        return self._bookmarks.addBookmark(title, self._bookmark_url(url))
+
+    @Slot(str, str, str, result=bool)
+    def updateBookmark(self, old_url: str, title: str, url: str) -> bool:  # noqa: N802
+        return self._bookmarks.updateBookmark(old_url, title, self._bookmark_url(url))
+
+    @Slot(str, result=bool)
+    def removeBookmark(self, url: str) -> bool:  # noqa: N802 - QML API
+        return self._bookmarks.removeBookmark(url)
+
+    @Slot(int, int, result=bool)
+    def reorderBookmarks(self, from_index: int, to_index: int) -> bool:  # noqa: N802
+        return self._bookmarks.reorder(from_index, to_index)
+
+    def _on_bookmarks_changed(self) -> None:
+        self.bookmarksChanged.emit()
+        self.activeTabChanged.emit()
+
+    # --------------------------------------------------------------- lifecycle
     def reset_for_restart(self) -> None:
-        """Clear tabs for fresh restart (tabs never saved across restart, §P3.1)."""
+        """Clear session-only tabs; bookmark storage intentionally remains."""
+        for tab in self._tabs:
+            if tab.host is not None:
+                tab.host.close()
         self._tabs.clear()
         self._active_index = -1
-        self._tab_limit_message_visible = False
+        self.dismissTabLimitMessage()
         self.tabsChanged.emit()
         self.activeTabIndexChanged.emit()
         self.activeTabChanged.emit()
+        self.windowTitleChanged.emit()
+
+    def shutdown(self) -> None:
+        """Close every native child before Qt destroys the parent window."""
+        self.reset_for_restart()
+        webview2_runtime.shutdown_pythonnet_com()

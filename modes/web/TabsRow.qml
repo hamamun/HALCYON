@@ -1,24 +1,21 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import Halcyon.Ui
 
-// Tab strip + '+' button (§P3.1, §P3.4).
-// No tabs on entry (+ only); typing in address bar creates first tab.
-// Maximum 15 tabs; at 15, '+' greys out and 'Maximum 15 tabs reached.'
-// appears inside the tabs row as a glass pill (never over the page).
+// Browser tab strip.  No page tab exists on entry: the strip shows only the +
+// button until the user opens one or enters an address.
 Rectangle {
-    id: tabsRow
-    height: 38
-    color: "transparent"
+    id: root
+    height: Theme.toolbarRowHeight
+    color: Theme.baseElevated
 
-    property var browser: modeContext_web
+    property var browser: null
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 4
+        anchors.leftMargin: Theme.spaceSm
+        anchors.rightMargin: Theme.spaceSm
+        spacing: Theme.spaceXs
 
         ListView {
             id: tabsList
@@ -26,133 +23,98 @@ Rectangle {
             Layout.fillHeight: true
             orientation: ListView.Horizontal
             clip: true
-            model: tabsRow.browser ? tabsRow.browser.tabs : []
+            spacing: Theme.spaceXs
+            model: root.browser ? root.browser.tabs : []
 
             delegate: Rectangle {
                 id: tabItem
-                width: Math.min(200, Math.max(120, tabsList.width / Math.max(1, tabsList.count)))
-                height: tabsList.height - 4
+                required property var modelData
+                required property int index
+
+                width: Math.min(220, Math.max(132,
+                    (tabsList.width - Theme.hitTarget - Theme.spaceXs) / Math.max(1, tabsList.count)))
+                height: tabsList.height - Theme.spaceSm
                 anchors.verticalCenter: parent.verticalCenter
-                radius: 8
-                color: (tabsRow.browser && tabsRow.browser.activeTabIndex === index)
-                       ? "rgba(255, 255, 255, 0.12)"
-                       : "rgba(255, 255, 255, 0.04)"
-                border.width: 1
-                border.color: (tabsRow.browser && tabsRow.browser.activeTabIndex === index)
-                              ? "rgba(255, 255, 255, 0.24)"
-                              : "transparent"
+                radius: Theme.radiusSmall
+                color: root.browser && root.browser.activeTabIndex === index
+                       ? Theme.glassFillHover : Theme.glassFill
+                border.width: root.browser && root.browser.activeTabIndex === index ? 1 : 0
+                border.color: Theme.accentDim
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 6
-                    spacing: 4
+                    z: 1
+                    anchors.leftMargin: Theme.spaceMd
+                    anchors.rightMargin: Theme.spaceXs
+                    spacing: Theme.spaceXs
 
                     Text {
                         Layout.fillWidth: true
-                        text: modelData.title || modelData.url || "New Tab"
-                        color: "#FFFFFF"
+                        text: tabItem.modelData.title || tabItem.modelData.url || "New Tab"
+                        color: Theme.text
                         font.family: Theme.fontFamily
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.fontSizeSmall
                         elide: Text.ElideRight
                     }
 
-                    Rectangle {
-                        width: 18
-                        height: 18
-                        radius: 9
-                        color: closeArea.containsMouse ? "rgba(255, 255, 255, 0.2)" : "transparent"
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "×"
-                            color: "#FFFFFF"
-                            font.pixelSize: 13
-                        }
-
-                        MouseArea {
-                            id: closeArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: {
-                                if (tabsRow.browser) {
-                                    tabsRow.browser.closeTab(index)
-                                }
-                            }
-                        }
+                    IconButton {
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        glyph: Glyphs.close
+                        iconSize: Theme.iconSize - 5
+                        tooltip: "Close tab"
+                        showRing: true
+                        onClicked: if (root.browser) root.browser.closeTab(tabItem.index)
                     }
                 }
 
                 MouseArea {
                     anchors.fill: parent
-                    anchors.rightMargin: 24
-                    onClicked: {
-                        if (tabsRow.browser) {
-                            tabsRow.browser.setActiveTab(index)
-                        }
-                    }
+                    anchors.rightMargin: Theme.spaceLg + Theme.spaceXs
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: if (root.browser) root.browser.setActiveTab(tabItem.index)
                 }
             }
         }
 
-        // '+' Button
-        Rectangle {
+        IconButton {
             id: addTabButton
-            width: 32
-            height: 32
-            radius: 8
-            color: addTabArea.containsMouse ? "rgba(255, 255, 255, 0.12)" : "transparent"
-            opacity: (tabsRow.browser && tabsRow.browser.isAtMaxTabs) ? 0.35 : 1.0
-
-            Text {
-                anchors.centerIn: parent
-                text: "+"
-                color: "#FFFFFF"
-                font.pixelSize: 18
-            }
-
-            MouseArea {
-                id: addTabArea
-                anchors.fill: parent
-                hoverEnabled: true
-                enabled: !(tabsRow.browser && tabsRow.browser.isAtMaxTabs)
-                onClicked: {
-                    if (tabsRow.browser) {
-                        tabsRow.browser.addTab("")
-                    }
-                }
-            }
+            Layout.preferredWidth: Theme.hitTarget
+            Layout.preferredHeight: Theme.hitTarget
+            glyph: Glyphs.add
+            tooltip: root.browser && root.browser.isAtMaxTabs
+                     ? "Maximum 15 tabs reached" : "New tab"
+            enabled: !root.browser || !root.browser.isAtMaxTabs
+            onClicked: if (root.browser) root.browser.addTab("")
         }
     }
 
-    // In-chrome glass pill for 15-tab cap (§P3.1, §P3.2, §P3.4)
-    // Renders inside the tabs row chrome, never over the page.
+    // The cap message belongs to browser chrome.  It never overlays a native
+    // page, which would be physically impossible/reliability-hostile anyway.
     Rectangle {
-        id: limitPill
         anchors.centerIn: parent
-        width: 230
-        height: 28
-        radius: 14
-        color: "#1E2430"
-        border.color: "rgba(255, 255, 255, 0.25)"
+        width: limitText.implicitWidth + Theme.spaceXl
+        height: Theme.toolbarRowHeight - Theme.spaceSm
+        radius: Theme.radiusPill
+        color: Theme.baseElevated
         border.width: 1
-        visible: tabsRow.browser ? tabsRow.browser.tabLimitMessageVisible : false
+        border.color: Theme.glassBorderStrong
+        visible: root.browser && root.browser.tabLimitMessageVisible
+        z: 2
 
         Text {
+            id: limitText
             anchors.centerIn: parent
             text: "Maximum 15 tabs reached."
-            color: "#FFFFFF"
+            color: Theme.text
             font.family: Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSizeSmall
         }
 
         MouseArea {
             anchors.fill: parent
-            onClicked: {
-                if (tabsRow.browser) {
-                    tabsRow.browser.dismissTabLimitMessage()
-                }
-            }
+            cursorShape: Qt.PointingHandCursor
+            onClicked: if (root.browser) root.browser.dismissTabLimitMessage()
         }
     }
 }

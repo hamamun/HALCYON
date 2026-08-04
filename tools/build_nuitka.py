@@ -5,8 +5,7 @@ Packages Halcyon (Phase 1 Local + Phase 2 M3U + Phase 3 Web) into a standalone
 Windows build including:
   • Bundled libVLC plugins directory (--include-data-dir=vendor/vlc/plugins=vendor/vlc/plugins).
   • Vendored WebView2 SDK bridge files (--include-data-dir=vendor/webview2=vendor/webview2, §P3.2).
-  • Pre-compiled QSB shaders (--include-data-dir=ui/shaders=ui/shaders).
-  • QML resources and theme assets.
+  • UI/QML tree, including pre-compiled QSB shaders and theme assets.
 """
 
 from __future__ import annotations
@@ -31,6 +30,10 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "--include-package=ui",
         "--include-package=core",
         "--include-package=engine",
+        # WebView2 is reached through pythonnet at runtime, so Nuitka cannot
+        # infer these lazy imports from static analysis alone.
+        "--include-module=clr",
+        "--include-package=pythonnet",
         f"--output-dir={output_dir}",
     ]
 
@@ -49,9 +52,13 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
     if webview2_vendor.exists():
         args.append(f"--include-data-dir={webview2_vendor}=vendor/webview2")
 
-    shaders_dir = ROOT / "ui" / "shaders"
-    if shaders_dir.exists():
-        args.append(f"--include-data-dir={shaders_dir}=ui/shaders")
+    # Dynamic QML Loaders resolve source-mode components from disk in a source
+    # checkout and from the same relative tree in a frozen build.  Include both
+    # the mode QML and the Halcyon URI/qmldir bridge explicitly; otherwise the
+    # Web chip can exist while WebStage.qml is absent from the distribution.
+    for directory in (ROOT / "modes", ROOT / "ui", ROOT / "Halcyon"):
+        if directory.exists():
+            args.append(f"--include-data-dir={directory}={directory.name}")
 
     args.append(str(ROOT / "main.py"))
     return args

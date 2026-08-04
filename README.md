@@ -39,6 +39,15 @@ modes touch nothing frozen without disclosure.
 py -3.12 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-phase1.txt
+# Required for the Web mode as well. Quote it so PowerShell/CMD do not treat
+# the greater-than sign as output redirection.
+pip install "pythonnet>=3.0"
+```
+
+Or install all development dependencies at once:
+
+```bash
+pip install -r requirements-dev-full.txt
 ```
 
 ### Fetching libVLC (not committed — ~60 MB)
@@ -68,6 +77,25 @@ system-wide VLC installation is neither needed nor used.
 
 On Linux/macOS (development only) Halcyon falls back to the system libVLC if
 `vendor/vlc/` is absent.
+
+### WebView2 bridge files (Windows Web mode)
+
+Place these files with these **exact names** in `vendor/webview2/`:
+
+```text
+vendor/webview2/
+├── Microsoft.Web.WebView2.Core.dll
+└── WebView2Loader.dll
+```
+
+They come from the official `Microsoft.Web.WebView2` NuGet package and are only
+the pythonnet bridge. The actual Edge WebView2 Runtime is supplied by Windows
+11 and most supported Windows 10 installations; Halcyon shows an in-app
+`WebView2 is not available` message if Windows does not have a usable runtime.
+
+Downloads use WebView2's normal secure save prompt. Certificate problems are
+left to Edge/WebView2's secure error page; Halcyon never auto-accepts an invalid
+certificate.
 
 ---
 
