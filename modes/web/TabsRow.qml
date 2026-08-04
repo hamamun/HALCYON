@@ -17,6 +17,19 @@ Rectangle {
         anchors.rightMargin: Theme.spaceSm
         spacing: Theme.spaceXs
 
+        // New-tab button sits at the very left edge; page tabs grow rightwards
+        // from it, mirroring the address bar's left-to-right reading order.
+        IconButton {
+            id: addTabButton
+            Layout.preferredWidth: Theme.hitTarget
+            Layout.preferredHeight: Theme.hitTarget
+            glyph: Glyphs.add
+            tooltip: root.browser && root.browser.isAtMaxTabs
+                     ? "Maximum 15 tabs reached" : "New tab"
+            enabled: !root.browser || !root.browser.isAtMaxTabs
+            onClicked: if (root.browser) root.browser.addTab("")
+        }
+
         ListView {
             id: tabsList
             Layout.fillWidth: true
@@ -32,7 +45,7 @@ Rectangle {
                 required property int index
 
                 width: Math.min(220, Math.max(132,
-                    (tabsList.width - Theme.hitTarget - Theme.spaceXs) / Math.max(1, tabsList.count)))
+                    tabsList.width / Math.max(1, tabsList.count)))
                 height: tabsList.height - Theme.spaceSm
                 anchors.verticalCenter: parent.verticalCenter
                 radius: Theme.radiusSmall
@@ -75,17 +88,6 @@ Rectangle {
                     onClicked: if (root.browser) root.browser.setActiveTab(tabItem.index)
                 }
             }
-        }
-
-        IconButton {
-            id: addTabButton
-            Layout.preferredWidth: Theme.hitTarget
-            Layout.preferredHeight: Theme.hitTarget
-            glyph: Glyphs.add
-            tooltip: root.browser && root.browser.isAtMaxTabs
-                     ? "Maximum 15 tabs reached" : "New tab"
-            enabled: !root.browser || !root.browser.isAtMaxTabs
-            onClicked: if (root.browser) root.browser.addTab("")
         }
     }
 

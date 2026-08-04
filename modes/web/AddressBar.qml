@@ -76,6 +76,20 @@ Rectangle {
             }
         }
 
+        // Mouse-click alternative to pressing Enter in the address field.
+        IconButton {
+            glyph: Glyphs.chevronRight
+            tooltip: "Go"
+            enabled: urlInput.text.trim().length > 0
+            onClicked: {
+                if (!root.browser)
+                    return
+                root.browser.navigateActive(urlInput.text)
+                urlInput.text = root.currentUrl()
+                urlInput.selectAll()
+            }
+        }
+
         IconButton {
             id: starButton
             property bool saved: root.browser && root.browser.activeTabBookmarked
@@ -139,11 +153,15 @@ Rectangle {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 spacing: Theme.spaceSm
-                TextButton { text: "Cancel"; onClicked: addBookmarkPopup.hidePopup() }
-                TextButton {
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    onClicked: addBookmarkPopup.hidePopup()
+                }
+                IconButton {
                     id: saveBookmarkButton
-                    text: "Save"
-                    primary: true
+                    glyph: Glyphs.save
+                    tooltip: "Save"
                     onClicked: {
                         if (root.browser)
                             root.browser.addBookmark(bookmarkTitleInput.text, root.currentUrl())
@@ -190,19 +208,24 @@ Rectangle {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 spacing: Theme.spaceSm
-                TextButton {
-                    text: "Remove"
+                IconButton {
+                    glyph: Glyphs.deleteItem
+                    tooltip: "Remove bookmark"
                     onClicked: {
                         if (root.browser)
                             root.browser.removeBookmark(root.currentUrl())
                         editBookmarkPopup.hidePopup()
                     }
                 }
-                TextButton { text: "Cancel"; onClicked: editBookmarkPopup.hidePopup() }
-                TextButton {
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    onClicked: editBookmarkPopup.hidePopup()
+                }
+                IconButton {
                     id: updateBookmarkButton
-                    text: "Save"
-                    primary: true
+                    glyph: Glyphs.save
+                    tooltip: "Save"
                     onClicked: {
                         if (root.browser)
                             root.browser.updateBookmark(root.currentUrl(), editTitleInput.text,
