@@ -1,4 +1,4 @@
 # Phase 1 — Local mode only.
-# Phase 3 adds PySide6-Addons (QtWebEngine). Install per phase: smaller surface, easier debugging.
+# Phase 3 adds pythonnet + the vendored Microsoft.Web.WebView2.Core.dll connector (direct WebView2, Route A). Install per phase: smaller surface, easier debugging.
 PySide6==6.11.1
 python-vlc==3.0.21203

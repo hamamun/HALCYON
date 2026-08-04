@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v3.5** — 3 August 2026 |
+| **Version** | Plan **v4.0** — 4 August 2026 |
+| **Changes in v4.0** | **Phase 3 final design (owner decision, 4 Aug 2026), engine = Route A.** Web becomes a real browser **inside the main window** on Windows' built-in **Edge WebView2**, reached **directly via pythonnet** + the vendored 788 KB `Microsoft.Web.WebView2.Core.dll` connector (the same proven approach as the owner's Smart Player) — **no Qt WebView, no QtWebEngine, nothing bundled**. Qt WebView was dropped because its Windows backend silently **blocks all popup/new-window requests** (`qwebview2webview.cpp` — "FIXME actually handle new windows"); direct WebView2's `add_NewWindowRequested` routes site popups to **new Halcyon tabs**, never an outside window. Startup **detection** (registry + import test); missing runtime → the stage shows *"WebView2 is not available"*; profile lives in `%LOCALAPPDATA%\Halcyon\webview2_data`. Layout: title bar → **tabs row** → **address bar** → page. Tabs: none on entry (+ only), typing creates the first tab, **max 15** (in-chrome message "Maximum 15 tabs reached." — no toast), survive mode switches, never saved on exit. Bookmarks: **quick star** (empty→Add popup; filled→Edit/Remove/Cancel) + **Edge-style dropdown** (menu icon; closes on same icon/outside/Esc; text title+URL rows; a Halcyon-owned frameless popup window, §P3.2) + **Bookmarks Manager** internal tab (manual add title+URL / edit / delete / reorder / search; permanent store). Search default is **Google**; **Home** goes to the loaded site's homepage (Google's home page on a blank tab); bookmarks start **completely blank** — no defaults. **No left bookmark drawer** — Web has no dock panel; **no media controls, media panels, OSD or PiP**; site videos use their own controls. Two owner-approved generic capability changes (§A.3 rule 1): `panel_enabled` (Web hides the left dock) and `keep_stage_alive` (Web's stage is parked on mode switch so tabs/pages survive). |
 | **Changes in v3.5** | **M3U polish (owner decision):** the channel filter gets a one-click clear ×, and M3U shows the shared transport toast for Play/Pause, Next/Previous (with the friendly channel name), volume, mute and fullscreen. Toast capability and the Local-only Info/Lyrics/Equalizer dock are now separate mode flags, so M3U gains feedback without gaining a right dock. |
 | **Changes in v3.4** | **One-tuner rule (owner decision):** one engine plays one thing — switching the chip stops whatever is playing; there is never background audio. Entering M3U stops Local (playlist + position preserved; Local's resume prompt brings you back). Leaving M3U stops the stream (list and last channel intact; nothing auto-plays). Enforced from M3U's own `setup` hook — no Phase 1 file is edited. The earlier right-dock/OSD coupling is superseded by v3.5's distinct right-dock flag. |
 | **Changes in v3.3** | **Owner decisions (2 Aug 2026):** M3U bar = **seven controls, one row** — stop joins, volume+mute retained. **M3U has no right panel** — Ctrl+I inert, EQ not offered in M3U (the §P1.5 EQ note is technically still true, but superseded: it's simply not exposed there). **Channel grouping selector:** By category (default) / By country / No group. **Playing channel stays highlighted and scrolled into view.** Chip label confirmed: **M3U.** |
@@ -31,7 +32,7 @@ This document is now organised as **three sequential chapters**. Each ends with 
 |---|---|---|---|
 | **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ✅ Complete / signed off |
 | **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | 🟡 In progress — kicked off 2 Aug 2026 (foundation frozen at tag `v0.1.0-local`) |
-| **Phase 3** | `Halcyon Complete` — Web added, **in-window** | §P3.6 (plus P1+P2 regression) | ⬜ Blocked on P2 sign-off |
+| **Phase 3** | `Halcyon Complete` — Web added, **in-window** (v4.0 design: Edge WebView2 browser) | §P3.6 (plus P1+P2 regression) | 🟡 Design finalised v4.0 — awaiting P2 sign-off |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
 
@@ -80,6 +81,9 @@ class ModeSpec:
     transport_qml: str      # the mode's own bar, built from shared parts (§B.4)
     osd_enabled:   bool     # transient feedback / §6.2
     right_dock_enabled: bool # Info / Lyrics / Equalizer availability
+    # v4.0 owner-approved generic capabilities (changelogged · §A.3 rule 1):
+    panel_enabled: bool = True       # Web hides the left dock entirely (§P3.3)
+    keep_stage_alive: bool = False   # Web's stage is parked, not destroyed (§P3.3)
 ```
 
 Phase 2 adds `modes/m3u/` containing its own `ModeSpec`, panel, and parser, then appends one line to a registration list. Phase 3 does the same for `modes/web/`.
@@ -151,7 +155,7 @@ A play button in M3U is **the same `IconButton` with the same icon, size, and ho
 - Control bar **height differs** — Local ~72px (two rows: seek bar above buttons), M3U ~52px (one row), Web has a nav bar instead.
 - Control bar **grouping and order differ** — M3U doesn't inherit Local's left/centre/right clusters. It's laid out for its seven controls, centred and balanced, as if designed for seven from the start.
 - **No reserved gaps. No ghost slots. No "where the seek bar would have been."** M3U's bar is designed for M3U, not Local's bar with holes punched in it.
-- Panel toolbars differ — four buttons in Local, one in M3U, three in Web — each spaced properly for its own count.
+- Panel toolbars differ — four buttons in Local, one in M3U — each spaced properly for its own count. **Web has no dock panel** (v4.0 owner decision): its chrome is a tabs row + address bar inside the stage (§P3.4).
 
 **The invariant is not "same positions." It is "same parts, same feel."** Switching modes should feel like changing bands on one radio: the machine is unmistakably the same, the panel is arranged for what this band does.
 
@@ -160,7 +164,7 @@ A play button in M3U is **the same `IconButton` with the same icon, size, and ho
 Not a pixel-overlay comparison — that would enforce exactly the wrong thing. Instead:
 
 - [ ] Screenshot all three modes side by side. Do they look like **one product**? Same glass, same icon weight, same corner radii, same type, same accent.
-- [ ] Is any control drawn by a component that exists **only** for one mode? *(Should be no — except genuinely mode-unique things like the address bar and PiP.)*
+- [ ] Is any control drawn by a component that exists **only** for one mode? *(Should be no — except genuinely mode-unique things like the tabs row, the address bar and PiP.)*
 - [ ] Does any mode define its own colour, blur value, corner radius, or animation duration outside `Theme.qml`? *(Should be no.)*
 - [ ] Does each bar look **designed for its own contents** — balanced, no awkward gaps, no cramping?
 - [ ] Does switching modes feel like the **same app changing channel**, not like a different app loading?
@@ -708,101 +712,200 @@ Always-on-top borderless window, default 480×270, resizable, corner-snapping, b
 # PHASE 3 — Web Mode
 
 > **Ship target:** `v1.0.0` · **Estimate:** 5–6 working days
-> **Additive only.** Doesn't use the video pipeline — but renders in the same window, in the same scene graph (§P3.2).
+> **Additive only.** Web is a real browser **inside the main window** on Windows' built-in **Edge WebView2**, reached **directly via pythonnet** (Route A, owner decision, 4 Aug 2026) — no Qt WebView, no QtWebEngine, nothing bundled (§P3.2).
 
-## P3.1 Scope
+## P3.1 Scope — the final design (owner decision, 4 Aug 2026)
 
-**In:** `modes/web/` — embedded `WebEngineView`, address bar, bookmarks panel.
-**Out:** changes to anything else.
+**In:** `modes/web/` — a full browser: **tabs row**, **address bar**, **bookmarks (quick star + dropdown + manager tab)** and page content on the Edge WebView2 engine, all inside the Halcyon window under the same glass shell.
+**Out:** anything outside `modes/web/` — plus, by explicit owner decision: no media controls, no media panels, no OSD, no PiP, no left bookmark drawer.
 
-## P3.2 Correction from earlier drafts — Web is *inside* the window
+**Layout, top to bottom:**
 
-Plans up to v3.0 said Web mode had to open a second top-level window. **That was wrong, and it's now fixed.**
+1. **Halcyon title bar** — unchanged, frozen.
+2. **Tabs row** — on entering Web there is **no page tab, only the + button**. Typing a URL/search in the address bar creates the first tab. **Maximum 15 tabs**; at the cap the **+ button greys out** and any further open attempt shows the plain-text message *"Maximum 15 tabs reached."* inside the tabs row. Tabs **survive switching Web → Local/M3U → Web** within a session (the stage is parked — §P3.3). Tabs are **never saved after app restart** — Web opens empty.
+3. **Address bar** — **icon-only buttons**: Back · Forward · Reload/Stop · Home · bookmark star · bookmarks/menu icon. Plus the **text URL/search field** (a URL, or a search — non-URL input goes to the search engine).
+4. **Page content** — the WebView2 page, filling the rest of the stage **below** all of Halcyon's chrome.
 
-The error was assuming `pywebview` (which hosts WebView2 in its own OS window) was the only route. It isn't. **Qt ships its own Chromium: `QtWebEngineQuick`.** Its `WebEngineView` is a **`QQuickItem`** — per Qt's own documentation, the web views *"tie into the scene graph as a QQuickItem… Chromium renders the web content and uploads the results as textures to the GPU."*
+**New windows / popups:** a website's popup/new-window requests open as a **new Halcyon tab** (15-cap applies). **No outside browser window ever appears.**
 
-That is **exactly the same architecture as our video surface** (§0.3). Web content becomes a scene-graph node, not a native child window. Which means:
+**Bookmarks**
+- **Quick star** — empty = current page is not bookmarked → click opens the **Add bookmark** popup. Filled = already bookmarked → click opens **Edit / Remove / Cancel**.
+- **Dropdown** — Edge-style, from the top browser bar (menu icon). Opens on click; closes on clicking the same icon again, clicking outside, or `Esc`. Rows are **text**: title + URL.
+- **Manage Bookmarks** — pinned at the top of the dropdown; opens a **Bookmarks Manager** as an **internal tab**: add manual (fields **title** + **URL**), edit, delete, reorder, search. Bookmarks are **saved permanently**.
+- **No left bookmark drawer** — Web mode has **no dock panel at all** (§P3.3).
 
-- ✅ Embeds directly in the Stage, in the same window, under the same frameless glass shell
-- ✅ QML panels, the address bar, and overlays composite **over** it correctly
-- ✅ No HWND anywhere — §0.1's rule is respected, not bent
-- ✅ True "one machine, three channels" (§A.1) with **no exception**
+**No media controls, by design (§P3.4):** no play/pause, no seek bar, no volume, no subtitles/audio menu, no repeat/shuffle, no PiP from Halcyon. No equalizer, no right Info/Lyrics/EQ panel, no media OSD. Website videos (YouTube etc.) use **their own** controls — Halcyon never draws over them.
 
-`pywebview` is **dropped from the stack entirely.**
+**Visual contract:** every button is Halcyon's `IconButton` — same glass, same theme, same title bar, same app feeling. *Web mode feels like a browser inside Halcyon.*
 
-**Cost:** QtWebEngine adds ~130 MB to the bundle (it's a full Chromium). You've said size doesn't matter — that was the only reason it was ever passed over, so the objection is gone.
+## P3.2 Engine — direct Edge WebView2 via pythonnet (Route A)
 
-**Two setup notes for the build:**
-- QtWebEngine and Qt Quick must agree on the graphics backend. If the view renders blank, force OpenGL before `QGuiApplication` is constructed: `QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)`. Known, documented, one line.
-- `QtWebEngineQuick.initialize()` must be called **before** the QML engine is created.
+**Owner decision (4 Aug 2026): Route A confirmed.** Halcyon talks to Windows' **built-in Edge WebView2 directly through pythonnet** — the approach already proven in the owner's Smart Player. No Qt WebView, no QtWebEngine, no bundling, no download.
+
+**Why not Qt WebView:** Qt's own Windows backend (`qtwebview/src/plugins/windows/qwebview2webview.cpp`) **blocks every new-window request** — its code says *"FIXME actually handle new windows when QWebView has the API for them"* — and the module exposes **no popup signal at all**. The rule *"popups open as new Halcyon tabs"* is impossible there. Direct WebView2 exposes `add_NewWindowRequested`, so popups become tabs — and we also get user-agent control, downloads, certificate handling and **one shared engine for all tabs** (Qt WebView would spin up a separate browser process per tab).
+
+**What "direct" means mechanically:**
+- **`pythonnet`** (a normal pip package) loads the WebView2 SDK's managed connector **`Microsoft.Web.WebView2.Core.dll`** (788 KB) plus its native companion **`WebView2Loader.dll`** (win-x64) — both vendored in `vendor/webview2/` (**already present on the owner's machine, 4 Aug 2026**; a one-time manual copy from the official NuGet package; not pip-installable; **not committed to git**, fetched locally like `vendor/vlc/`). They are a **bridge, not a browser**: the actual engine is the **WebView2 Runtime already built into Windows** (the same engine as Edge; ships with Windows 11, preinstalled on eligible Windows 10).
+- At first use the app **initialises COM** and creates **one shared `CoreWebView2Environment`** — user-data folder **`%LOCALAPPDATA%\Halcyon\webview2_data`** (cookies, cache, profile) — one browser engine for every tab, exactly how Edge itself runs.
+- **Each tab is a child window**: a `QWindow` (its HWND) + `CreateCoreWebView2Controller` bound to it. The page fills the stage area **below** Halcyon's chrome. This is the same child-HWND trick Qt's own backend uses — nothing new to invent, and it fits the QML shell: only the page is a native window.
+- **User agent** = current desktop Edge string with "WebView2" stripped, and `navigator.webdriver` hidden — the same login-friendly / anti-bot behaviour as Smart Player (a website can't tell it's an embedded view).
+
+**Finding the installed WebView2 (startup check):**
+- **Registry:** `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` proves the runtime is installed.
+- **Import test:** `CreateCoreWebView2Environment` succeeds → the engine actually loads.
+- If either fails (rare — enterprise-managed machines) the **stage shows "WebView2 is not available"** — a clear message, no crash, no blank page. **Never bundle, never download** (owner decision).
+
+**The native-surface rule (same physics as §0.1):** the page is a native child window, and QML cannot paint on top of native child windows. This design **complies by construction**:
+
+- Title bar, tabs row and address bar sit **above** the web area, never over it — Halcyon draws them in its own QML strip. This is why the **⋮ (three-dot) bookmarks dropdown works**: the button lives in Halcyon's address bar, above the page, so Halcyon opens its own dropdown there with no conflict.
+- The **⋮ bookmarks dropdown** and the **★ bookmark popup** are **Halcyon-owned frameless popup windows** anchored to the address bar (the one documented exception to "no second window"). They are app chrome, not website windows, and they float above the page like any menu.
+- App messages (e.g. the 15-tab limit) render as **plain text inside the tabs row** — a small glass pill — never over the page. (No toast in Web mode — owner decision.)
+- Website fullscreen (HTML5 video) is handled by the WebView2 engine itself — the page's own fullscreen, not a Halcyon window.
+
+**Setup notes for the build:**
+- COM initialisation and pythonnet wiring happen **before any WebView is created** — a one-line disclosed v4.0 `main.py` change if required (changelogged + regression-tested, §A.3 rule 1).
+- The connector DLL must be discoverable at runtime (vendored path added at startup; Nuitka includes it in M3.5).
+- No graphics-backend conflict: the app keeps its Direct3D 11 scene graph; the web page is a native child window beside it, not a scene-graph texture.
 
 ## P3.3 What gets added
 
 ```
 modes/web/
-├── __init__.py        # ModeSpec for "web"
-├── bookmarks.py       # URL store
-├── WebPanel.qml       # bookmarks list (left dock)
-├── WebStage.qml       # WebEngineView — fills the Stage
-└── AddressBar.qml     # nav chrome (in place of a transport bar)
+├── __init__.py              # ModeSpec for "web"
+├── webview2_runtime.py      # ★ detection (registry + import) + shared CoreWebView2Environment
+├── webview2_host.py         # ★ per-tab host: child HWND + CoreWebView2Controller, events, popups
+├── browser.py               # ★ BrowserContext: tab model (≤15), navigation, popups → tabs,
+│                            #   chrome messages — exposed to QML
+├── bookmarks.py             # bookmark store — JSON under %APPDATA%\Halcyon, permanent
+├── WebStage.qml             # ★ the whole browser: TabsRow + AddressBar + page area
+├── TabsRow.qml              # tab strip + "+" (no tabs on entry)
+├── AddressBar.qml           # icon-only nav buttons + text URL/search field
+├── BookmarksDropdown.qml    # Edge-style menu (frameless popup window, §P3.2)
+└── BookmarksManagerTab.qml  # internal tab: add/edit/delete/reorder/search
+
+vendor/webview2/                 # present locally (owner, 4 Aug 2026) — not committed
+├── Microsoft.Web.WebView2.Core.dll   # 788 KB managed connector (WebView2 SDK)
+└── WebView2Loader.dll                # native loader (win-x64) — finds the OS-installed runtime
 ```
 
 ```python
 SPEC = ModeSpec(
     id="web", title="Web",
-    panel_qml="qrc:/modes/web/WebPanel.qml",
-    stage_qml="qrc:/modes/web/WebStage.qml",   # ← overrides video stage
-    transport_qml="qrc:/modes/web/AddressBar.qml",
-    osd_enabled=False,
+    panel_qml="qrc:/modes/web/WebPanel.qml",    # placeholder — never shown (§P3.1)
+    stage_qml="qrc:/modes/web/WebStage.qml",    # the whole browser
+    transport_qml="",                           # no bottom bar — the frozen docstring
+                                                # already anticipates this (§B.4)
+    osd_enabled=False,          # no media OSD; only in-chrome messages like the 15-tab limit (§P3.4)
+    right_dock_enabled=False,   # no Info/Lyrics/EQ dock
+    media_keys_enabled=False,   # Space scrolls the page — hotkeys inert
+    uses_player=False,          # Web does not drive libVLC
+    panel_enabled=False,        # ★ v4.0 capability — no left dock in Web
+    keep_stage_alive=True,      # ★ v4.0 capability — stage parked on switch
+    setup=build_web_context,    # publishes BrowserContext as modeContext_web
 )
 ```
 
-`stage_qml` is the one addition to `ModeSpec` that Phase 3 needs. **It is declared in Phase 1** (defaulting to the video stage) precisely so Phase 3 stays additive — a good example of why the foundation is designed before it's needed.
+`stage_qml` was declared in Phase 1 (defaulting to the video surface) precisely so Phase 3 stays additive — that still holds; Web overrides it with the whole browser.
 
-## P3.4 No media controls — by design
+**Two owner-approved generic capability changes (v4.0, §A.3 rule 1 — same class as v3.5's `right_dock_enabled` split; both changelogged and covered by regression tests):**
 
-The page owns its own playback UI. Drawing ours over it would be exactly the duplication §4.1 forbids, and the two would fight over state. Streaming sites ship their own player; we don't second-guess it.
+1. **`panel_enabled: bool = True`** on `ModeSpec`, gating the left dock. Web sets `False`: the dock hides, `Ctrl+L` is inert, and the browser gets the full window width. `panel_qml` stays mandatory — the placeholder satisfies validation and is never loaded.
+2. **`keep_stage_alive: bool = False`** on `ModeSpec`, gating `Stage.qml`. Web sets `True`: switching away **parks** the stage component (hidden, not destroyed) and switching back restores it — which is what makes *"tabs stay while switching Web → Local/M3U → Web"* literally true: the pages are still loaded, scrolled where you left them. No other mode opts in.
 
-**The address bar is not a transport bar.** Back · Forward · Reload · Home · URL field · loading indicator. That's *navigation* — a different role, no overlap. It occupies the same screen region as Local's transport bar and is built from the same `IconButton` vocabulary (§B.1), but it is its own component with its own job.
+**Video engine:** `uses_player=False`, on top of the one-tuner machinery, means switching to Web **stops and releases** whatever VLC was playing; switching back to Local/M3U behaves exactly as before. Deleting `modes/web/` must leave Local + M3U perfect (§A.2 mechanical test).
 
-## P3.5 Bookmarks panel
+## P3.4 Browser chrome — tabs, address bar, no media controls
 
-Toolbar: **Add Bookmark** (captures current URL + title) · **Edit** · **Delete**. Body: saved URLs, click to navigate, drag to reorder. Folders deferred.
+**The address bar is not a transport bar** (§B.4's shared vocabulary, but its own job). It sits at the top of the stage, built from the same `IconButton` parts:
 
-Third and final panel in the one dock slot. Three panels, one slot, zero duplication.
+- **Back · Forward · Reload/Stop · Home** — navigation only. Reload becomes **Stop** while a page loads (that is the only "progress" indicator — the owner's icon-only rule leaves no room for a separate progress bar). **Home** navigates the active tab to the **home page of the currently loaded site**; on a blank tab (or with no tab) it opens **Google** (google.com) — owner decision, 4 Aug 2026.
+- **Bookmark star** and **bookmarks/menu icon** — §P3.5.
+- **URL/search field** — plain text field: shows the active tab's URL, selects all on focus, `Enter` navigates; non-URL input goes to the search engine (default **Google** — owner decision, 4 Aug 2026). No autocomplete in v1.0.
+- The active tab's page title is reflected in the window title.
 
-*Optional v1.1:* a "Play in Halcyon" action that pipes a resolved stream URL into libVLC and switches to Local — full EQ and subtitle support on a web stream.
+**Tabs row:**
+- Entering Web mode: **no tabs, only the + button**; typing in the address bar creates the first tab.
+- **+** creates a new (empty) tab and focuses the URL field.
+- Each tab shows the page title (falling back to the URL) with a close **×**; the active tab is highlighted.
+- **Maximum 15 tabs.** At 15 the + button disables and any further open attempt (+, a site popup) shows *"Maximum 15 tabs reached."* as a small glass pill **inside the tabs row** — the row is chrome, not page (§P3.2) — sliding in over the tabs and fading after a few seconds or as soon as a tab closes. No toast, nothing over the page. (Owner decision, 4 Aug 2026.)
+- **Persistence:** tabs (order, URLs, titles, active tab — and, thanks to `keep_stage_alive`, the live pages themselves) survive Web → Local/M3U → Web. **Nothing is saved on exit**: restarting Halcyon opens Web empty, as decided.
+
+**New windows / popups:** a site's `window.open` / `target=_blank` request arrives at WebView2's `add_NewWindowRequested`; Halcyon routes it to a **new tab** (subject to the 15-cap; at the cap it is blocked with the in-chrome message). **No outside browser window ever appears** — this is exactly why we use direct WebView2 instead of Qt WebView (Route A, §P3.2).
+
+**No media controls, by design:** no play/pause, no seek, no volume, no track/subtitle menu, no repeat/shuffle, no PiP. No media OSD (`osd_enabled=False`). Media hotkeys inert (`media_keys_enabled=False`) — `Space` scrolls the page, seek keys do nothing. The page owns its playback UI; Halcyon never draws over it.
+
+## P3.5 Bookmarks — quick star, dropdown, manager tab
+
+**Store:** `modes/web/bookmarks.py` — `bookmarks.json` under `%APPDATA%\Halcyon`, **permanent** (survives restart; only the user or the app deletes entries). Owned by Web alone (§A.1 — deleting the mode deletes its store, nothing else notices). *(The browser's own profile — cookies, cache, history — lives separately in `%LOCALAPPDATA%\Halcyon\webview2_data`, §P3.2.)*
+
+**Blank start:** the store is created **completely empty — no default bookmarks** (owner decision, 4 Aug 2026).
+
+**Quick star** (address bar):
+- **Empty star** = the current page is not bookmarked → click opens the **Add bookmark** popup (title prefilled from the page, URL fixed).
+- **Filled star** = already bookmarked → click opens **Edit / Remove / Cancel**.
+- The star's state follows the active tab's URL as you navigate.
+
+**Dropdown** (menu icon) — Edge-style, anchored under the button:
+- **Opens** on the menu icon. **Closes** on: clicking the same icon again, clicking outside, or `Esc`.
+- **Manage Bookmarks** pinned at the top.
+- Rows are **text** (title + URL); clicking a row navigates the active tab. Other chrome controls remain icon-style (§B.1). Empty state: *"No bookmarks yet — use ★ to save this page."*
+
+**Bookmarks Manager — an internal tab** (a Halcyon tab, not a website):
+- **Add manual** bookmark: fields **title** + **URL**.
+- **Edit** (title/URL) · **Delete** (with confirm) · **Reorder** (drag) · **Search** (filters as you type).
+- Everything persists immediately to the store.
+
+**No left bookmark drawer.** The one dock slot hosts only Local's queue and M3U's channels; Web uses the dropdown + manager tab (owner decision, 4 Aug 2026).
 
 ## P3.6 Acceptance test — Phase 3
 
 **Regression first**
 - [ ] **§P1.7 and §P2.6 both re-run and passing**
 - [ ] Deleting `modes/web/` leaves Local + M3U fully working
-- [ ] No Phase 1 or Phase 2 file edited except the one `core/modes.py` line
+- [ ] No Phase 1 or Phase 2 file edited except the one `core/modes.py` line and the **disclosed v4.0 changes** (see `PHASE3_DISCLOSED` in `tools/check_isolation.py`): `panel_enabled` + `keep_stage_alive` in `core/mode_api.py`, the shell's dock/stage gating in `ui/Main.qml` / `ui/shell/Stage.qml`, the COM/pythonnet init line in `main.py` if required — each changelogged and covered by a regression test
 - [ ] `tools/check_isolation.py` passes
 
-**Web**
-- [ ] **Web renders INSIDE the main window** — no second window appears anywhere
-- [ ] Chromium content displays correctly; page scrolls, links work, text input works
-- [ ] The frameless glass shell, title bar, and left panel remain visible and correct around it
-- [ ] Address bar: navigate, back, forward, reload, home
-- [ ] HTML5 video plays with the page's own controls
-- [ ] Bookmarks add / edit / delete / reorder / navigate, persist across restart
+**Engine & layout**
+- [ ] ★ **Web renders INSIDE the main window — no second window appears anywhere** (page content included)
+- [ ] It is the **Edge WebView2** engine (confirm via `navigator.userAgent` on a page), reached **directly via pythonnet + the vendored connector DLL** (Route A)
+- [ ] **Startup detection:** runtime missing → the stage shows *"WebView2 is not available"* — no crash, no blank page
+- [ ] Browser profile lives under `%LOCALAPPDATA%\Halcyon\webview2_data` (cookies persist)
+- [ ] Layout top→bottom: Halcyon title bar · tabs row · address bar · page
+- [ ] Frameless glass shell, title bar and theme correct around the browser; **no dock panel** in Web
+- [ ] Pages scroll, links work, text input works; HTML5 video plays with the page's own controls
 
-**Controls**
-- [ ] **No transport bar renders in Web mode**
-- [ ] **No OSD fires**
-- [ ] Media hotkeys are inert in Web mode
-- [ ] Closing the browser window returns cleanly to the previous mode
+**Tabs**
+- [ ] Entering Web shows **no tab, only +**; typing a URL/search creates the first tab
+- [ ] + opens a new tab and focuses the URL field; close **×** works; active tab highlighted
+- [ ] **Max 15 tabs; the 16th shows "Maximum 15 tabs reached."** as an in-chrome glass pill in the tabs row (greyed +; fades on its own or on closing a tab) — never over the page
+- [ ] Tabs survive Web → Local/M3U → Web (order, URLs, titles, active tab; pages still loaded)
+- [ ] **Tabs are not saved after restart** — Web opens empty
 
-**Final integration**
+**Address bar**
+- [ ] Back · Forward · Reload/Stop · Home all work
+- [ ] URL field shows the current URL, selects all on focus, `Enter` navigates; non-URL text searches
+- [ ] No transport bar, no seek bar, no volume — **absent, not greyed**
+
+**Popups**
+- [ ] A site's popup/new-window request opens as a **new Halcyon tab** (WebView2 `NewWindowRequested`); at 15 tabs it is blocked with the in-chrome message
+- [ ] **No outside browser window appears for any site request**
+
+**Bookmarks**
+- [ ] ★ Empty star = not bookmarked → Add popup; filled star = bookmarked → Edit / Remove / Cancel; state follows navigation
+- [ ] Dropdown opens on the menu icon; closes on same icon, outside click and `Esc`
+- [ ] Dropdown rows show title + URL text; click navigates; **Manage Bookmarks** pinned on top
+- [ ] Manager tab: add manual (title + URL), edit, delete (confirm), reorder, search — all persist
+- [ ] Bookmarks survive restart; **no left drawer** anywhere in Web
+
+**Controls & integration**
+- [ ] No media OSD fires in Web; media hotkeys inert (`Space` scrolls)
+- [ ] Switching away from Web returns cleanly; video engine released (one-tuner)
 - [ ] All three chips render; switching in any order is stable
 - [ ] Three separate lists — local queue, M3U channels, bookmarks — never cross-contaminate
-- [ ] Settings, theme, and window geometry consistent across all modes
-- [ ] Clean shutdown from any mode
-- [ ] Installer produces a working build on a clean Windows machine with no VLC installed
+- [ ] Settings, theme, window geometry consistent across all modes; clean shutdown from any mode
+- [ ] Installer works on a clean Windows machine — no VLC, no Python, **no extra web runtime installed**
 
----
+**→ Merge to `main`, tag `v1.0.0`. 🎉**
 
 ## 7. Visual Design *(applies to all phases — set in Phase 1)*
 
@@ -838,6 +941,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | **Mobile remote + QR** | Was Phase-scoped in v2.0; it's a whole second UI with its own server, and it must mirror each mode's control set — which doesn't stabilise until Phase 3. Building it earlier means building it twice. **Own phase after v1.0.** |
 | Seek-bar frame thumbnails | Needs a second decoder instance; nice-to-have |
 | Bookmark folders | v1 flat list is enough |
+| Tab favicons | v1 flat list is enough; WebView2 exposes favicons (`FaviconChanged`) — easy post-v1.0 if wanted |
 | "Play in Halcyon" from Web | Depends on per-site URL resolution |
 | libVLC 4 GPU path | Blocked on upstream release (§0.5) |
 | Chromecast / DLNA | Out of scope |
@@ -860,14 +964,16 @@ Deliberately excluded from all three phases to keep each shippable:
 | Shader fails on old iGPU | Low | RV32 + `Format_RGBX8888` fallback (VLC RV32 is host-order RGB, **not** BGRA — see §0.4) |
 | Nuitka misses VLC plugins | Med | Explicit `--include-data-dir`; set `VLC_PLUGIN_PATH` at startup |
 | HiDPI fractional scaling blur | Low | `PassThrough` rounding, DPR-aware texture sizing |
-| QtWebEngine blank / backend mismatch | Med | Force `GraphicsApi.OpenGL` before app construction; call `QtWebEngineQuick.initialize()` first (§P3.2) |
-| QtWebEngine + Nuitka packaging | Med | Ships a helper process + resources; needs explicit inclusion. Budget extra time in Milestone 1.9 / Phase 3 |
+| WebView2 overlay limit (native child window) | Med | The page is a native child HWND — QML cannot paint over it (§0.1 physics). All chrome lives above the web area; the ⋮/★ popups are Halcyon-owned frameless popup windows; app messages render as plain text in the tabs row (§P3.2/§P3.4). Design complies by construction |
+| COM / pythonnet interop bugs | Med | Use the proven Smart Player recipe: one shared CoreWebView2Environment, hard-referenced event handlers, COM init per thread. Spike first in M3.1 (§P3.2) |
+| WebView2 runtime missing (rare) | Low | Evergreen Runtime ships with Windows 11 and eligible Windows 10 (§P3.2). Startup registry + import check; if absent the stage shows "WebView2 is not available" — no crash, no bundling |
+| pythonnet + Nuitka packaging | Low | Vendor the WebView2 SDK bridge files (Microsoft.Web.WebView2.Core.dll + WebView2Loader.dll win-x64) in vendor/webview2/ and make them discoverable in the frozen build. Verify in M3.5 (§10) |
 
 ---
 
 ## 10. Bundle & Licensing
 
-**Size:** libvlc + libvlccore ≈ 8 MB; VLC plugins ≈ 55 MB; PySide6 core ≈ 45 MB; **QtWebEngine ≈ 130 MB** (full Chromium). **Installer ≈ 240–270 MB.** Larger than v3.0's estimate — that's the cost of embedding the browser properly instead of shelling out to a second window, and you've confirmed size is not a concern.
+**Size:** libvlc + libvlccore ≈ 8 MB; VLC plugins ≈ 55 MB; PySide6 core ≈ 45 MB; the web engine is **Edge WebView2 — OS-provided, nothing bundled** (v4.0, Route A). **Installer ≈ 110–145 MB** — the only additions are `pythonnet` (≈ 2 MB) and the **WebView2 SDK bridge files** (≈ 1.5 MB total: `Microsoft.Web.WebView2.Core.dll` 788 KB + `WebView2Loader.dll` win-x64 — bridge files, not a browser; vendored in `vendor/webview2/`). Dropping QtWebEngine's ~130 MB Chromium is the point of the owner's WebView2 decision (4 Aug 2026): the same official Edge engine, zero bundling, smaller installer. The Evergreen WebView2 Runtime ships with Windows 11 and has been installed on eligible Windows 10 machines; the app detects it at startup and shows a clear message if absent.
 
 **Licensing:** libVLC is LGPL-2.1, plugins are mixed LGPL/GPL. For a **personal, non-distributed** player this is entirely unencumbered — those obligations attach to *distribution*, and there is none.
 
@@ -899,10 +1005,11 @@ Deliberately excluded from all three phases to keep each shippable:
 | **M3U playlist: clear playlist only** | 2 | ✅ |
 | M3U / M3U8 / HLS | 2 | ✅ |
 | Picture-in-Picture | 2 | ✅ shared buffer |
-| **Web: no media controls** | 3 | ✅ nav bar only |
-| **Web embedded in main window** | 3 | ✅ §P3.2 — QQuickItem, no second window |
-| **Web panel: bookmark URL list** | 3 | ✅ |
-| Web browsing | 3 | ✅ **QtWebEngine, embedded in main window** |
+| **Web: no media controls** | 3 | ✅ §P3.4 — tabs + address bar only |
+| **Web embedded in main window** | 3 | ✅ §P3.2 — Edge WebView2 inside the window |
+| **Web tabs (≤15) + bookmarks (star, menu, manager)** | 3 | ✅ §P3.4 / §P3.5 |
+| **Web popups → new Halcyon tabs** | 3 | ✅ WebView2 `NewWindowRequested` → tab · §P3.4 |
+| Web browsing | 3 | ✅ **Direct Edge WebView2 via pythonnet — built-in engine, embedded in main window** |
 | **No duplicated actions** | all | ✅ §4.1 + `Actions` |
 | **Separate playlists per mode** | all | ✅ one slot, three panels |
 | **Modes independently testable** | all | ✅ §A + per-phase acceptance |
@@ -923,7 +1030,7 @@ py -3.12 -m venv .venv && .venv\Scripts\activate
 pip install PySide6 python-vlc
 ```
 
-*(`PySide6-Addons` supplies QtWebEngine and isn't needed until Phase 3; `aiohttp`/`qrcode` not until the remote. Install per phase — a smaller surface is easier to debug.)*
+*(Phase 3 adds `pythonnet` — the bridge to Windows' built-in Edge WebView2 — plus the vendored WebView2 SDK bridge files (`Microsoft.Web.WebView2.Core.dll` + `WebView2Loader.dll`, §P3.2). `aiohttp`/`qrcode` not until the remote. Install per phase — a smaller surface is easier to debug.)*
 
 Then build **Milestone 1.0** and nothing else. Prove the glass sits over the video at 60 fps before writing a single line of application UI.
 

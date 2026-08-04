@@ -16,8 +16,21 @@
 # standard library only (HALCYON_PLAN.md §P2.4). Verified 2026-08-02.
 
 # --- Phase 3 Additions (Web Mode) ---
-# QtWebEngineQuick is required for embedding Chromium inside the main window.
-PySide6-Addons==6.11.1
+# pythonnet — the COM bridge to Windows' built-in Edge WebView2 (Route A,
+# owner decision, 2026-08-04). The WebView2 Runtime is OS-provided — built into
+# Windows 11, preinstalled on eligible Windows 10 — so nothing is bundled.
+pythonnet>=3.0
+# One non-pip step: the WebView2 SDK bridge files are NOT pip packages. Fetch
+# once from the official NuGet package "Microsoft.Web.WebView2" (stable
+# 1.0.4129.50, direct download):
+#   https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4129.50/microsoft.web.webview2.1.0.4129.50.nupkg
+# Rename to .zip, extract, and copy into vendor/webview2/:
+#   - lib/net45/Microsoft.Web.WebView2.Core.dll   (managed bridge, 788 KB)
+#   - runtimes/win-x64/native/WebView2Loader.dll   (native loader — required)
+# Both are bridge files, not a browser — the engine is Windows' built-in runtime.
+# (PySide6-Addons / Qt WebView is deliberately NOT used: Qt WebView cannot route
+#  popups/new-windows to tabs — its Windows backend blocks them. Direct WebView2
+#  via pythonnet gives us NewWindowRequested → new Halcyon tab.)
 
 # --- Testing & Quality ---
 pytest>=8.0
