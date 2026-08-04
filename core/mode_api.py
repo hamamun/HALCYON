@@ -64,6 +64,16 @@ class ModeSpec:
     #: Whether this mode drives the shared libVLC player. Web does not.
     uses_player: bool = True
 
+    #: Whether this mode displays the left dock panel. Defaults to True. Web
+    #: mode hides the left dock entirely (§P3.3 — v4.0 generic capability).
+    panel_enabled: bool = True
+
+    #: Whether the stage component is parked (hidden, not destroyed) when
+    #: switching away from this mode. Defaults to False. Web mode sets True so
+    #: open tabs and live pages survive mode switches within a session (§P3.3 —
+    #: v4.0 generic capability).
+    keep_stage_alive: bool = False
+
     #: Optional per-mode Python setup, called once at startup with the app
     #: context. Returns an object exposed to QML as ``modeContext_<id>``, or
     #: ``None``. Keeps mode-specific wiring out of ``main.py``.

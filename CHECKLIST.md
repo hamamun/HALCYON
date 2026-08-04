@@ -23,8 +23,8 @@ file; both were replaced).*
 | 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
-| 3 — Web | 0 / 5 | 0 / 62 | 0 / 56 | `v1.0.0` |
-| **Total** | — | **233 / 303** | **104 / 222** | |
+| 3 — Web | 1 / 5 built | 14 / 62 | 0 / 56 | `v1.0.0` |
+| **Total** | — | **247 / 303** | **104 / 222** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -625,20 +625,20 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 3.1 — WebView2: detection + direct bridge · 1–2 d
 
-- [ ] `pip install pythonnet` — the COM bridge to WebView2 · §P3.2
+- [x] `pip install pythonnet` — the COM bridge to WebView2 · §P3.2
 - [x] Vendor the WebView2 SDK bridge files into `vendor/webview2/`: `Microsoft.Web.WebView2.Core.dll` (788 KB) **+** `WebView2Loader.dll` (win-x64) — bridges, not a browser · §P3.2 *(✓ present locally, 4 Aug 2026 — not committed, like vendor/vlc)*
-- [ ] ★ Startup **detection**: registry check (`HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`) + import/`CreateCoreWebView2Environment` test · §P3.2
-- [ ] ★ Runtime missing → the stage shows **"WebView2 is not available"** — clear message, no crash, no blank page; **no bundling, no download** · §P3.2
-- [ ] ★ COM initialisation + pythonnet wiring **before** any view is created (disclosed v4.0 `main.py` line if required) · §P3.2
-- [ ] ★ Create **one shared `CoreWebView2Environment`** — user data folder `%LOCALAPPDATA%\Halcyon\webview2_data` (cookies, cache, profile) — one engine for all tabs · §P3.2
-- [ ] `modes/web/webview2_host.py` — per-tab host: a child HWND (`QWindow`) + `CreateCoreWebView2Controller`; the page is a native child window **below** Halcyon's chrome · §P3.2
-- [ ] ★ **Verify it renders inside the main window** — no second window anywhere
-- [ ] ★ Verify **popup routing**: `add_NewWindowRequested` → **new Halcyon tab** (15-cap applies); no outside window · §P3.4
-- [ ] User agent = current desktop Edge string (strip "WebView2"); hide `navigator.webdriver` (anti-bot — as in Smart Player)
-- [ ] Sensible settings: JS on, local storage on, autoplay policy, PDF viewer
-- [ ] Website fullscreen (HTML5 video) works — engine-handled, no Halcyon window · §P3.2
-- [ ] Download handling — save prompt (or documented fallback)
-- [ ] Certificate error handling (or documented fallback)
+- [x] ★ Startup **detection**: registry check (`HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`) + import/`CreateCoreWebView2Environment` test · §P3.2
+- [x] ★ Runtime missing → the stage shows **"WebView2 is not available"** — clear message, no crash, no blank page; **no bundling, no download** · §P3.2
+- [x] ★ COM initialisation + pythonnet wiring **before** any view is created (disclosed v4.0 `main.py` line if required) · §P3.2
+- [x] ★ Create **one shared `CoreWebView2Environment`** — user data folder `%LOCALAPPDATA%\Halcyon\webview2_data` (cookies, cache, profile) — one engine for all tabs · §P3.2
+- [x] `modes/web/webview2_host.py` — per-tab host: a child HWND (`QWindow`) + `CreateCoreWebView2Controller`; the page is a native child window **below** Halcyon's chrome · §P3.2
+- [x] ★ **Verify it renders inside the main window** — no second window anywhere
+- [x] ★ Verify **popup routing**: `add_NewWindowRequested` → **new Halcyon tab** (15-cap applies); no outside window · §P3.4
+- [x] User agent = current desktop Edge string (strip "WebView2"); hide `navigator.webdriver` (anti-bot — as in Smart Player)
+- [x] Sensible settings: JS on, local storage on, autoplay policy, PDF viewer
+- [x] Website fullscreen (HTML5 video) works — engine-handled, no Halcyon window · §P3.2
+- [x] Download handling — save prompt (or documented fallback)
+- [x] Certificate error handling (or documented fallback)
 
 ◻ ★ Web renders inside the main window · ◻ Detection: missing runtime → clear "not available" message · ◻ Pages scroll, links work, text input works · ◻ HTML5 video plays · ◻ Popup → new tab, no outside window · ◻ Nothing QML is drawn over the page
 

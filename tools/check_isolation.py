@@ -74,6 +74,20 @@ PHASE2_DISCLOSED = [
     "engine/surface.py",
 ]
 
+#: Disclosed Phase-3 additions to frozen Phase 1 paths — generic v4.0 mode
+#: capability changes (§P3.3, §A.3 rule 1): ``panel_enabled`` (no left dock in
+#: Web) and ``keep_stage_alive`` (stage parked on switch so web tabs/pages
+#: survive mode changes), plus COM/pythonnet bootstrap in main.py and shell UI
+#: integration. Each change is documented in the v4.0 changelog and covered by
+#: regression tests.
+PHASE3_DISCLOSED = [
+    "core/mode_api.py",
+    "main.py",
+    "ui/Main.qml",
+    "ui/shell/Stage.qml",
+    "ui/shell/PanelHost.qml",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -238,7 +252,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen
