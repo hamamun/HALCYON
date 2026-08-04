@@ -63,6 +63,12 @@ QtObject {
     readonly property string restore:    "\uE923"
     readonly property string close:      "\uE8BB"
     readonly property string chevronLeft:  "\uE76B"
+    // WARNING: E76C is only "ChevronRight" in Segoe MDL2 Assets (Windows 10).
+    // In Segoe Fluent Icons (Windows 11) the same codepoint maps to a
+    // different, euro-like glyph.  If you need a right-pointing chevron
+    // that must look right on Windows 11, use the plain text character
+    // "\u203A" (›) with IconButton.plainTextGlyph instead — it renders in
+    // the regular text font and is identical everywhere.
     readonly property string chevronRight: "\uE76C"
     readonly property string chevronDown:  "\uE70D"
     readonly property string chevronUp:    "\uE70E"

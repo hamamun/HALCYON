@@ -11,6 +11,16 @@ AbstractButton {
     id: root
 
     property string glyph: ""              // see ui/components/Glyphs.qml
+    // True when `glyph` is a plain Unicode text character (e.g. "›" U+203A)
+    // rather than an icon-font codepoint.  The label then renders in the
+    // regular UI text font instead of the icon font.  Needed because some
+    // codepoints map to *different* glyphs in Segoe MDL2 Assets and Segoe
+    // Fluent Icons — E76C is "ChevronRight" in MDL2 (Windows 10) but a
+    // euro-like symbol in Fluent Icons (Windows 11) — while a standard text
+    // character such as "›" renders as the same clean shape everywhere.
+    // Bold + ~4/3 size keeps it optically balanced with the surrounding
+    // icon-font glyphs (same treatment as the M3U section-header arrow).
+    property bool plainTextGlyph: false
     property string tooltip: ""
     property bool active: false            // "on" state, e.g. shuffle enabled
     property real iconSize: Theme.iconSize
@@ -51,8 +61,10 @@ AbstractButton {
         Text {
             anchors.centerIn: parent
             text: root.glyph
-            font.family: Theme.fontFamilyIcons
-            font.pixelSize: root.iconSize
+            font.family: root.plainTextGlyph ? Theme.fontFamily : Theme.fontFamilyIcons
+            font.pixelSize: root.plainTextGlyph ? Math.round(root.iconSize * 4 / 3)
+                                                : root.iconSize
+            font.weight: root.plainTextGlyph ? Font.Bold : Font.Normal
             color: root.active ? root.activeColor
                  : root.hovered ? Theme.text
                  : Qt.rgba(Theme.text.r, Theme.text.g, Theme.text.b, Theme.opacityRest)

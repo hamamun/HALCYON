@@ -77,8 +77,15 @@ Rectangle {
         }
 
         // Mouse-click alternative to pressing Enter in the address field.
+        //
+        // Deliberately NOT Glyphs.chevronRight: that icon-font codepoint
+        // (E76C) means "ChevronRight" in Segoe MDL2 Assets but maps to a
+        // euro-like glyph in Segoe Fluent Icons (Windows 11).  The plain
+        // text character "›" (U+203A) renders as the same clean chevron in
+        // every font, with no icon-font dependency at all.
         IconButton {
-            glyph: Glyphs.chevronRight
+            glyph: "\u203A"
+            plainTextGlyph: true
             tooltip: "Go"
             enabled: urlInput.text.trim().length > 0
             onClicked: {
