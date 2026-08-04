@@ -16,6 +16,9 @@ dist/
 # bundled libVLC binaries (see README — fetched, never committed)
 vendor/vlc/
 
+# WebView2 SDK bridge files — fetched locally, never committed (see README / §P3.2)
+vendor/webview2/
+
 # compiled shaders are generated from .frag sources
 *.qsb
 

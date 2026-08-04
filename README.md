@@ -29,6 +29,7 @@ mode touches nothing frozen — it diffs against the `v0.1.0-local` tag.
 - Windows 10 / 11 x64 (the app targets Windows; the pure-Python parts run anywhere)
 - Python 3.12 (3.11 also works)
 - libVLC 3.0.21 x64 binaries in `vendor/vlc/` — **not committed**, see below
+- **Phase 3:** WebView2 SDK bridge files (`Microsoft.Web.WebView2.Core.dll` + `WebView2Loader.dll`) in `vendor/webview2/` — **not committed**, fetched locally (see §Web Phase / plan §P3.2)
 
 ---
 
@@ -125,6 +126,7 @@ ui/                     shell, theme, shared components  ← shared, frozen afte
 modes/<id>/             everything mode-specific
 tools/                  isolation guard + dev utilities
 vendor/vlc/             bundled libVLC (fetched, gitignored)
+vendor/webview2/         WebView2 SDK bridge files — Core.dll + WebView2Loader.dll (fetched locally, not committed, §P3.2)
 config/                 first-run defaults, copied to %APPDATA%\Halcyon
 ```
 
