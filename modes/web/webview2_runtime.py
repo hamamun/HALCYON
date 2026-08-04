@@ -95,13 +95,17 @@ def _check_runtime_registry() -> bool:
 
 def _setup_vendor_path() -> None:
     """Add vendor/webview2 to sys.path and PATH so bridge DLLs can be found."""
-    if VENDOR_WEBVIEW2_DIR.exists():
-        vendor_str = str(VENDOR_WEBVIEW2_DIR)
-        if vendor_str not in sys.path:
-            sys.path.insert(0, vendor_str)
-        path_env = os.environ.get("PATH", "")
-        if vendor_str not in path_env.split(os.pathsep):
-            os.environ["PATH"] = f"{vendor_str}{os.pathsep}{path_env}"
+    candidate_dirs = [VENDOR_WEBVIEW2_DIR]
+    if getattr(sys, "frozen", False):
+        candidate_dirs.append(Path(sys.executable).resolve().parent / "vendor" / "webview2")
+    for d in candidate_dirs:
+        if d.exists():
+            vendor_str = str(d)
+            if vendor_str not in sys.path:
+                sys.path.insert(0, vendor_str)
+            path_env = os.environ.get("PATH", "")
+            if vendor_str not in path_env.split(os.pathsep):
+                os.environ["PATH"] = f"{vendor_str}{os.pathsep}{path_env}"
 
 
 def check_webview2_available() -> tuple[bool, str]:

@@ -17,7 +17,9 @@ from core.mode_api import ModeSpec
 
 def build_web_context(engine, controller, settings):
     """The ``setup`` hook (§A.2). Publishes browser context as modeContext_web."""
-    return None
+    from modes.web.browser import BrowserContext
+
+    return BrowserContext()
 
 
 SPEC = ModeSpec(

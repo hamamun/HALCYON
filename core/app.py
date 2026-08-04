@@ -161,8 +161,16 @@ class AppController(QObject):
         Each mode keeps its own data, so switching away and back leaves a
         playlist exactly as it was. Nothing is cleared and nothing crosses over.
         """
-        if mode_id == self._active_mode or mode_registry.find(mode_id) is None:
+        if mode_id == self._active_mode:
             return
+        target_spec = mode_registry.find(mode_id)
+        if target_spec is None:
+            return
+        # One-tuner rule for non-player modes (Web mode, §P3.3): stop video engine
+        if not target_spec.uses_player:
+            self._engine.stop()
+            self._metadata.load("")
+            self._lyrics.load("")
         self._active_mode = mode_id
         self._settings.set("ui.mode", mode_id)
         self.activeModeChanged.emit()

@@ -112,6 +112,26 @@ Dialog {
             font.pixelSize: Theme.fontSizeTiny
             color: Theme.textFaint
         }
+
+        Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
+
+        Column {
+            width: parent.width
+            spacing: 2
+            Text {
+                text: "Halcyon v1.0.0 — Every format. One pane of glass."
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: Theme.weightBold
+                color: Theme.text
+            }
+            Text {
+                text: "Personal, non-commercial media player. Powered by libVLC 3.0.21 & Edge WebView2."
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeTiny
+                color: Theme.textFaint
+            }
+        }
     }
 
     footer: Item {

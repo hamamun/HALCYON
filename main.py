@@ -245,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             _KEEP_ALIVE.append(context_object)
             controller.register_context(spec.id, context_object)
             ctx.setContextProperty(_context_name(spec.id), context_object)
+            if spec.context_property != _context_name(spec.id):
+                ctx.setContextProperty(spec.context_property, context_object)
 
     # --- load the UI -------------------------------------------------------
     # Warnings are logged always, not only in debug. A QML warning means a

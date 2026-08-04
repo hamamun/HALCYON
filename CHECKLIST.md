@@ -23,8 +23,8 @@ file; both were replaced).*
 | 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
-| 3 — Web | 1 / 5 built | 14 / 62 | 0 / 56 | `v1.0.0` |
-| **Total** | — | **247 / 303** | **104 / 222** | |
+| 3 — Web | 5 / 5 built | 62 / 62 | 0 / 56 | `v1.0.0` |
+| **Total** | — | **295 / 303** | **104 / 222** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -646,16 +646,16 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 3.2 — Mode Registration · 0.5 d
 
-- [ ] `modes/web/__init__.py` — `ModeSpec` for `"web"` · §P3.3
-- [ ] `stage_qml` → `WebStage.qml` (overrides the video stage)
-- [ ] `transport_qml` → `""` — **no bottom bar** · §B.2
-- [ ] `osd_enabled=False` · `right_dock_enabled=False` · `media_keys_enabled=False` · `uses_player=False`
-- [ ] ★ v4.0 generic capability `panel_enabled=False` — no left dock in Web (changelogged + regression test) · §A.3 rule 1
-- [ ] ★ v4.0 generic capability `keep_stage_alive=True` — stage parked, not destroyed, on mode switch (changelogged + regression test) · §A.3 rule 1
-- [ ] `setup` hook publishes the browser context as `modeContext_web` — no `main.py` edit
-- [ ] ★ Append one entry to `core/modes.py` — **the only permitted earlier-phase edit besides the disclosed v4.0 capabilities**
-- [ ] ★ Video engine **stops/releases cleanly** when switching to Web (one-tuner)
-- [ ] Third chip appears with no `TitleBar.qml` edit
+- [x] `modes/web/__init__.py` — `ModeSpec` for `"web"` · §P3.3
+- [x] `stage_qml` → `WebStage.qml` (overrides the video stage)
+- [x] `transport_qml` → `""` — **no bottom bar** · §B.2
+- [x] `osd_enabled=False` · `right_dock_enabled=False` · `media_keys_enabled=False` · `uses_player=False`
+- [x] ★ v4.0 generic capability `panel_enabled=False` — no left dock in Web (changelogged + regression test) · §A.3 rule 1
+- [x] ★ v4.0 generic capability `keep_stage_alive=True` — stage parked, not destroyed, on mode switch (changelogged + regression test) · §A.3 rule 1
+- [x] `setup` hook publishes the browser context as `modeContext_web` — no `main.py` edit
+- [x] ★ Append one entry to `core/modes.py` — **the only permitted earlier-phase edit besides the disclosed v4.0 capabilities**
+- [x] ★ Video engine **stops/releases cleanly** when switching to Web (one-tuner)
+- [x] Third chip appears with no `TitleBar.qml` edit
 
 ◻ Three chips render · ◻ Switching in any order is stable · ◻ Video engine releases · ◻ Left dock hidden in Web, back to normal in Local/M3U
 
@@ -663,24 +663,24 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 3.3 — Tabs & Address Bar · 1–1.5 d
 
-- [ ] `modes/web/TabsRow.qml` — tab strip + **+** button
-- [ ] ★ Web opens with **no tabs, only +**; typing in the address bar creates the first tab · §P3.4
-- [ ] + opens an empty tab and focuses the URL field
-- [ ] Tab shows page title (fallback: URL) + close **×**; active tab highlighted
-- [ ] ★ **Maximum 15 tabs**; at 15, + greys out and further attempts show *"Maximum 15 tabs reached."* as a small glass pill in the tabs row · §P3.4
-- [ ] ★ Message renders **inside the tabs row** (chrome, not page — a small glass pill over the tabs), never over the page; fades after a few seconds or on closing a tab · §P3.2
-- [ ] ★ Tabs survive Web → Local/M3U → Web — order, URLs, titles, active tab; pages still loaded (`keep_stage_alive`)
-- [ ] ★ Tabs are **not saved after restart** — Web opens empty
-- [ ] ★ Site popups / new windows open as **new Halcyon tabs** (`add_NewWindowRequested`; 15-cap applies); no outside window · §P3.4
-- [ ] `modes/web/AddressBar.qml` — built from the same `IconButton` vocabulary · §B.1
-- [ ] **Icon-only buttons:** Back · Forward · Reload/Stop · Home · bookmark star · bookmarks/menu icon
-- [ ] URL field: text-based, shows current URL, selects all on focus, `Enter` navigates
-- [ ] Non-URL input goes to the search engine (**Google**)
-- [ ] Reload becomes **Stop** while loading; **Home → the loaded site's homepage; on a blank tab → Google**
-- [ ] Active tab's page title reflected in the window title
-- [ ] ★ **No media controls render in Web mode** — no play/pause, seek, volume, track menu, repeat/shuffle, PiP
-- [ ] ★ **No media OSD fires in Web mode**
-- [ ] ★ Media hotkeys inert (`Space` scrolls the page)
+- [x] `modes/web/TabsRow.qml` — tab strip + **+** button
+- [x] ★ Web opens with **no tabs, only +**; typing in the address bar creates the first tab · §P3.4
+- [x] + opens an empty tab and focuses the URL field
+- [x] Tab shows page title (fallback: URL) + close **×**; active tab highlighted
+- [x] ★ **Maximum 15 tabs**; at 15, + greys out and further attempts show *"Maximum 15 tabs reached."* as a small glass pill in the tabs row · §P3.4
+- [x] ★ Message renders **inside the tabs row** (chrome, not page — a small glass pill over the tabs), never over the page; fades after a few seconds or on closing a tab · §P3.2
+- [x] ★ Tabs survive Web → Local/M3U → Web — order, URLs, titles, active tab; pages still loaded (`keep_stage_alive`)
+- [x] ★ Tabs are **not saved after restart** — Web opens empty
+- [x] ★ Site popups / new windows open as **new Halcyon tabs** (`add_NewWindowRequested`; 15-cap applies); no outside window · §P3.4
+- [x] `modes/web/AddressBar.qml` — built from the same `IconButton` vocabulary · §B.1
+- [x] **Icon-only buttons:** Back · Forward · Reload/Stop · Home · bookmark star · bookmarks/menu icon
+- [x] URL field: text-based, shows current URL, selects all on focus, `Enter` navigates
+- [x] Non-URL input goes to the search engine (**Google**)
+- [x] Reload becomes **Stop** while loading; **Home → the loaded site's homepage; on a blank tab → Google**
+- [x] Active tab's page title reflected in the window title
+- [x] ★ **No media controls render in Web mode** — no play/pause, seek, volume, track menu, repeat/shuffle, PiP
+- [x] ★ **No media OSD fires in Web mode**
+- [x] ★ Media hotkeys inert (`Space` scrolls the page)
 
 ◻ All navigation works · ◻ Search fallback works · ◻ 15-tab cap + in-chrome message works · ◻ Tabs persist across mode switches, not restarts · ◻ No transport bar, no OSD, hotkeys inert
 
@@ -688,18 +688,18 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 3.4 — Bookmarks · 1 d
 
-- [ ] `modes/web/bookmarks.py` — JSON store in `%APPDATA%\Halcyon`, **permanent** · §P3.5
-- [ ] ★ **Bookmarks start completely blank** — no default bookmarks · §P3.5
-- [ ] ★ Quick star: **empty = not bookmarked** → click opens Add popup (title prefilled); **filled = bookmarked** → click opens **Edit / Remove / Cancel**
-- [ ] Star state follows the active tab's URL
-- [ ] `modes/web/BookmarksDropdown.qml` — Edge-style, anchored under the menu icon (frameless popup window, §P3.2)
-- [ ] Opens on the menu icon; closes on same icon again, outside click, `Esc`
-- [ ] **Manage Bookmarks** pinned at the top; rows are **text** (title + URL), click navigates; empty-state message
-- [ ] `modes/web/BookmarksManagerTab.qml` — an **internal tab**, not a website
-- [ ] Add manual bookmark: **title + URL** fields
-- [ ] Edit · Delete (with confirm) · Reorder (drag) · Search (filter as you type)
-- [ ] Everything persists immediately; survives restart
-- [ ] ★ **No left bookmark drawer** — Web has no dock panel · §P3.1
+- [x] `modes/web/bookmarks.py` — JSON store in `%APPDATA%\Halcyon`, **permanent** · §P3.5
+- [x] ★ **Bookmarks start completely blank** — no default bookmarks · §P3.5
+- [x] ★ Quick star: **empty = not bookmarked** → click opens Add popup (title prefilled); **filled = bookmarked** → click opens **Edit / Remove / Cancel**
+- [x] Star state follows the active tab's URL
+- [x] `modes/web/BookmarksDropdown.qml` — Edge-style, anchored under the menu icon (frameless popup window, §P3.2)
+- [x] Opens on the menu icon; closes on same icon again, outside click, `Esc`
+- [x] **Manage Bookmarks** pinned at the top; rows are **text** (title + URL), click navigates; empty-state message
+- [x] `modes/web/BookmarksManagerTab.qml` — an **internal tab**, not a website
+- [x] Add manual bookmark: **title + URL** fields
+- [x] Edit · Delete (with confirm) · Reorder (drag) · Search (filter as you type)
+- [x] Everything persists immediately; survives restart
+- [x] ★ **No left bookmark drawer** — Web has no dock panel · §P3.1
 
 ◻ Star states + popup actions work · ◻ Dropdown open/close rules work · ◻ Manager add/edit/delete/reorder/search all persist · ◻ No left drawer anywhere in Web
 
@@ -707,14 +707,14 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ## Milestone 3.5 — Final Integration & Release · 1–2 d
 
-- [ ] ★ Nuitka packaging with **pythonnet + the vendored connector DLL** — no Chromium to bundle, WebView2 is OS-provided · §10
-- [ ] Verify WebView2 works in the frozen build (connector DLL discoverable)
-- [ ] Full `Theme.qml` consistency pass across all three modes · §B.3
-- [ ] Settings dialog covers all modes
-- [ ] About dialog with version and licence notices
-- [ ] Final animation pass
-- [ ] Update `README.md`
-- [ ] Build installer, tag `v1.0.0`
+- [x] ★ Nuitka packaging with **pythonnet + the vendored connector DLL** — no Chromium to bundle, WebView2 is OS-provided · §10
+- [x] Verify WebView2 works in the frozen build (connector DLL discoverable)
+- [x] Full `Theme.qml` consistency pass across all three modes · §B.3
+- [x] Settings dialog covers all modes
+- [x] About dialog with version and licence notices
+- [x] Final animation pass
+- [x] Update `README.md`
+- [x] Build installer, tag `v1.0.0`
 
 ### ◻ §B.3 — "One machine" review
 - ◻ Screenshots of all three modes side by side look like **one product**

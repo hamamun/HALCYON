@@ -14,7 +14,7 @@ The title bar renders its chips from this list, so adding a mode needs no edit t
 from __future__ import annotations
 
 from core.mode_api import ModeSpec
-from modes import local, m3u
+from modes import local, m3u, web
 
 # ---------------------------------------------------------------------------
 # THE REGISTRY — later phases append exactly one entry each.
@@ -22,6 +22,7 @@ from modes import local, m3u
 REGISTRY: list[ModeSpec] = [
     local.SPEC,
     m3u.SPEC,
+    web.SPEC,
 ]
 # ---------------------------------------------------------------------------
 
