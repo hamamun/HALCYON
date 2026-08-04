@@ -113,3 +113,43 @@ def test_webview2_runtime_windows_mock_detection(monkeypatch):
     assert available is True
     assert message == "OK"
 
+
+def test_webview2_wait_for_task_completed():
+    """Verify _wait_for_task returns immediately when IsCompleted is True."""
+    class MockAwaiter:
+        def GetResult(self):
+            return "mock-controller"
+
+    class MockTask:
+        IsCompleted = True
+        def GetAwaiter(self):
+            return MockAwaiter()
+
+    result = webview2_runtime._wait_for_task(MockTask())
+    assert result == "mock-controller"
+
+
+def test_webview2_wait_for_task_async_completion():
+    """Verify _wait_for_task loops until IsCompleted becomes True."""
+    class MockAwaiter:
+        def GetResult(self):
+            return "mock-async-result"
+
+    class MockAsyncTask:
+        def __init__(self):
+            self.checks = 0
+
+        @property
+        def IsCompleted(self):
+            self.checks += 1
+            return self.checks >= 3
+
+        def GetAwaiter(self):
+            return MockAwaiter()
+
+    task = MockAsyncTask()
+    result = webview2_runtime._wait_for_task(task, timeout_s=1.0)
+    assert result == "mock-async-result"
+    assert task.checks >= 3
+
+

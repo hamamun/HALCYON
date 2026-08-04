@@ -36,6 +36,7 @@ DEFAULT_EDGE_USER_AGENT = (
 )
 
 _SHARED_ENVIRONMENT: Any = None
+_SHARED_ENVIRONMENT_TASK: Any = None
 _COM_INITIALIZED = False
 _COM_OWNED_BY_HALCYON = False
 _DLL_DIRECTORY_HANDLES: list[Any] = []
@@ -216,8 +217,9 @@ def init_pythonnet_com() -> bool:
 
 def shutdown_pythonnet_com() -> None:
     """Release the environment and the COM apartment owned by Halcyon."""
-    global _SHARED_ENVIRONMENT, _COM_INITIALIZED, _COM_OWNED_BY_HALCYON
+    global _SHARED_ENVIRONMENT, _SHARED_ENVIRONMENT_TASK, _COM_INITIALIZED, _COM_OWNED_BY_HALCYON
     _SHARED_ENVIRONMENT = None
+    _SHARED_ENVIRONMENT_TASK = None
     if sys.platform == "win32" and _COM_OWNED_BY_HALCYON:
         try:
             ctypes.windll.ole32.CoUninitialize()
@@ -271,8 +273,36 @@ def get_stage_error_message() -> str:
     return "WebView2 is not available"
 
 
-def _wait_for_task(task: Any) -> Any:
-    """Synchronously obtain a .NET Task result across pythonnet runtimes."""
+def _wait_for_task(task: Any, timeout_s: float = 15.0) -> Any:
+    """Synchronously obtain a .NET Task result across pythonnet runtimes.
+
+    WebView2 async creation methods require Windows message pumping on the STA
+    GUI thread. Pumping Qt events while waiting prevents UI thread deadlocks.
+    """
+    import time
+
+    try:
+        from PySide6.QtCore import QCoreApplication
+    except ImportError:
+        QCoreApplication = None
+
+    if hasattr(task, "IsCompleted"):
+        start_time = time.monotonic()
+        try:
+            while not bool(getattr(task, "IsCompleted", False)):
+                app = QCoreApplication.instance() if QCoreApplication is not None else None
+                if app is not None:
+                    app.processEvents()
+                else:
+                    time.sleep(0.01)
+
+                if time.monotonic() - start_time > timeout_s:
+                    raise TimeoutError("WebView2 task did not complete within timeout")
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            logger.debug("error checking task.IsCompleted: %s", exc)
+
     try:
         return task.GetAwaiter().GetResult()
     except AttributeError:
@@ -282,7 +312,7 @@ def _wait_for_task(task: Any) -> Any:
 
 def get_shared_environment() -> Any:
     """Create and return the one profile-sharing CoreWebView2Environment."""
-    global _SHARED_ENVIRONMENT
+    global _SHARED_ENVIRONMENT, _SHARED_ENVIRONMENT_TASK
     if _SHARED_ENVIRONMENT is not None:
         return _SHARED_ENVIRONMENT
 
@@ -291,14 +321,21 @@ def get_shared_environment() -> Any:
         return None
 
     try:
+        if _SHARED_ENVIRONMENT_TASK is not None:
+            return _wait_for_task(_SHARED_ENVIRONMENT_TASK)
+
         _add_core_reference()
         from Microsoft.Web.WebView2.Core import CoreWebView2Environment  # type: ignore[import-not-found]
 
         profile = get_user_data_dir()
         profile.mkdir(parents=True, exist_ok=True)
         task = CoreWebView2Environment.CreateAsync(None, str(profile), None)
-        _SHARED_ENVIRONMENT = _wait_for_task(task)
-        return _SHARED_ENVIRONMENT
+        _SHARED_ENVIRONMENT_TASK = task
+        try:
+            _SHARED_ENVIRONMENT = _wait_for_task(task)
+            return _SHARED_ENVIRONMENT
+        finally:
+            _SHARED_ENVIRONMENT_TASK = None
     except Exception as exc:
         logger.warning("failed to create the shared WebView2 environment: %s", exc)
         return None

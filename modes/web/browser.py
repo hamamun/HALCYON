@@ -471,6 +471,8 @@ class BrowserContext(QObject):
             return False
         if host.isReady and host.parent_hwnd == self._parent_hwnd:
             return True
+        if getattr(host, "is_initializing", False):
+            return True
         environment = self._environment_getter()
         if environment is None:
             self._set_runtime_available(False, webview2_runtime.get_stage_error_message())
@@ -495,7 +497,7 @@ class BrowserContext(QObject):
                 continue
             should_show = bool(usable and tab is active and not tab.internal)
             if should_show:
-                if not host.isReady:
+                if not host.isReady and not getattr(host, "is_initializing", False):
                     self._init_host(tab)
                 host.set_bounds(x, y, width, height)
             host.set_visible(should_show and host.isReady)

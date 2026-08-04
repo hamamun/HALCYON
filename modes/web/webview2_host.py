@@ -53,6 +53,7 @@ class WebViewHost(QObject):
         self._parent_hwnd = 0
         self._bounds = (0, 0, 1, 1)
         self._visible = False
+        self._initializing = False
 
         self.controller: Any = None
         self.webview: Any = None
@@ -86,6 +87,10 @@ class WebViewHost(QObject):
     def parent_hwnd(self) -> int:
         return self._parent_hwnd
 
+    @property
+    def is_initializing(self) -> bool:
+        return self._initializing
+
     # ------------------------------------------------------------------ setup
     def init_controller(self, parent_hwnd: int, env: Any = None) -> bool:
         """Create a controller as a child of ``parent_hwnd``.
@@ -104,6 +109,8 @@ class WebViewHost(QObject):
 
         if self.controller is not None and self._parent_hwnd == hwnd:
             return True
+        if self._initializing:
+            return True
         if self.controller is not None:
             self.release_controller()
 
@@ -114,6 +121,7 @@ class WebViewHost(QObject):
             self._fail(webview2_runtime.get_stage_error_message())
             return False
 
+        self._initializing = True
         try:
             environment = env if env is not None else webview2_runtime.get_shared_environment()
             if environment is None:
@@ -143,6 +151,8 @@ class WebViewHost(QObject):
             self.release_controller()
             self._fail(webview2_runtime.get_stage_error_message())
             return False
+        finally:
+            self._initializing = False
 
     def _configure_webview(self) -> None:
         """Apply only settings exposed by the installed SDK/runtime version."""
@@ -405,6 +415,7 @@ class WebViewHost(QObject):
         """
         if preserve_navigation and self._url:
             self._pending_url = self._url
+        self._initializing = False
         self._unsubscribe_events()
         controller = self.controller
         self.controller = None
