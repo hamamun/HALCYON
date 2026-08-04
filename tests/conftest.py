@@ -104,6 +104,6 @@ def _drain_probe_threadpool():
     try:
         from PySide6.QtCore import QThreadPool
 
-        QThreadPool.globalInstance().waitForDone(1000)
+        QThreadPool.globalInstance().waitForDone(2000)
     except Exception:
         pass

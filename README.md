@@ -16,11 +16,11 @@ See [`HALCYON_PLAN.md`](HALCYON_PLAN.md) for the architecture and
 | Phase | Ship | State |
 |---|---|---|
 | **1 — Local** | `v0.1.0-local` | ✅ complete / signed off — frozen at tag `v0.1.0-local` |
-| **2 — M3U** | `v0.2.0-m3u` | 🟡 in progress — additive on the frozen Phase 1 foundation |
-| **3 — Web** | `v1.0.0` | ⬜ blocked on P2 sign-off |
+| **2 — M3U** | `v0.2.0-m3u` | ✅ complete / signed off — frozen at tag `v0.2.0-m3u` |
+| **3 — Web** | `v1.0.0` | ✅ complete / signed off — full Halcyon v1.0.0 release |
 
-Phase 2 guard: `python tools/check_isolation.py --phase 2` verifies that the new
-mode touches nothing frozen — it diffs against the `v0.1.0-local` tag.
+Phase 2 & 3 guard: `python tools/check_isolation.py --phase 3` verifies that new
+modes touch nothing frozen without disclosure.
 
 ---
 
