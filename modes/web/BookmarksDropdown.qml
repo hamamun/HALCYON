@@ -7,7 +7,7 @@ import Halcyon.Ui
 BrowserPopup {
     id: root
     width: 300
-    height: Math.min(380, Math.max(104, 60 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
+    height: Math.min(380, Math.max(120, 64 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
 
     property var browser: null
 
@@ -20,10 +20,10 @@ BrowserPopup {
         anchors.margins: Theme.spaceSm
         spacing: Theme.spaceXs
 
-        TextButton {
-            Layout.fillWidth: true
-            text: "Manage Bookmarks"
+        IconButton {
+            Layout.alignment: Qt.AlignRight
             glyph: Glyphs.bookmark
+            tooltip: "Manage Bookmarks"
             onClicked: {
                 if (root.browser)
                     root.browser.openBookmarksManager()

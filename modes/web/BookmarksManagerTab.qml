@@ -36,9 +36,9 @@ Rectangle {
                 font.pixelSize: Theme.fontSizeTitle
                 font.weight: Theme.weightBold
             }
-            TextButton {
-                text: "New Tab"
+            IconButton {
                 glyph: Glyphs.add
+                tooltip: "New Tab"
                 onClicked: if (root.browser) root.browser.addTab("")
             }
         }
@@ -66,11 +66,10 @@ Rectangle {
                 placeholderText: "https://…"
                 onAccepted: addBookmarkButton.clicked()
             }
-            TextButton {
+            IconButton {
                 id: addBookmarkButton
-                text: "Add"
                 glyph: Glyphs.add
-                primary: true
+                tooltip: "Add bookmark"
                 enabled: manualUrl.text.trim().length > 0
                 onClicked: {
                     if (!root.browser || manualUrl.text.trim().length === 0)
@@ -272,10 +271,14 @@ Rectangle {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 spacing: Theme.spaceSm
-                TextButton { text: "Cancel"; onClicked: editPopup.close() }
-                TextButton {
-                    text: "Save"
-                    primary: true
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    onClicked: editPopup.close()
+                }
+                IconButton {
+                    glyph: Glyphs.save
+                    tooltip: "Save"
                     enabled: editUrl.text.trim().length > 0
                     onClicked: {
                         if (root.browser)
@@ -318,10 +321,14 @@ Rectangle {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 spacing: Theme.spaceSm
-                TextButton { text: "Cancel"; onClicked: deletePopup.close() }
-                TextButton {
-                    text: "Delete"
-                    primary: true
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    onClicked: deletePopup.close()
+                }
+                IconButton {
+                    glyph: Glyphs.deleteItem
+                    tooltip: "Delete"
                     onClicked: {
                         if (root.browser)
                             root.browser.removeBookmark(deletePopup.targetUrl)
