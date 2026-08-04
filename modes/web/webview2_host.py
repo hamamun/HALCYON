@@ -291,14 +291,42 @@ class WebViewHost(QObject):
 
     @staticmethod
     def handle_new_window_request(args: Any, emitter: Callable[[str], None]) -> None:
-        """Block an outside Edge window and route its URL to Halcyon's tab model."""
+        """Block an outside Edge window and route its URL to Halcyon's tab model.
+
+        Implements first-line popup protection:
+        - blank/about targets are dropped
+        - non-user-initiated popups (IsUserInitiated=False) are dropped
+        - remaining URLs are emitted and further throttled in BrowserContext
+          to prevent burst storms from ad sites like bilibili.tv.
+        """
         try:
             args.Handled = True
         except Exception:
             logger.debug("could not mark NewWindowRequested as handled", exc_info=True)
-        uri = getattr(args, "Uri", None) or getattr(args, "uri", "")
-        if uri:
-            emitter(str(uri))
+
+        raw_uri = getattr(args, "Uri", None) or getattr(args, "uri", "")
+        uri_str = str(raw_uri).strip() if raw_uri else ""
+
+        # Detect whether WebView2 reports this as a user gesture.
+        is_user_initiated = getattr(args, "IsUserInitiated", None)
+        if is_user_initiated is None:
+            is_user_initiated = getattr(args, "is_user_initiated", None)
+
+        if not uri_str:
+            logger.debug("Popup blocked: empty uri")
+            return
+
+        low = uri_str.lower()
+        if low.startswith("about:blank") or low.startswith("about:srcdoc") or low == "about:":
+            logger.info("Popup blocked: blank target (%s)", uri_str)
+            return
+
+        if is_user_initiated is False:
+            logger.info("Popup blocked (no user gesture): %s", uri_str)
+            return
+
+        # Passed basic checks — let BrowserContext do burst throttling.
+        emitter(uri_str)
 
     # --------------------------------------------------------------- state sync
     def _update_source(self) -> None:

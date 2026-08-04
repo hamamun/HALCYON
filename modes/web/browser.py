@@ -9,6 +9,7 @@ plain QVariant maps; it never has to know about pythonnet or HWNDs.
 from __future__ import annotations
 
 import logging
+import time
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -24,6 +25,13 @@ logger = logging.getLogger("modes.web.browser")
 
 MAX_TABS = 15
 BOOKMARKS_URL = "halcyon://bookmarks"
+
+# Popup burst protection — prevents ad-heavy sites (e.g. bilibili.tv) from
+# spawning 10+ tabs in one click and crashing WebView2 controller creation.
+POPUP_BURST_WINDOW_S = 3.0
+POPUP_MAX_PER_BURST = 1
+POPUP_MIN_INTERVAL_S = 0.8
+POPUP_BLOCKED_MESSAGE_DURATION_MS = 4000
 
 
 @dataclass
@@ -64,6 +72,8 @@ class BrowserContext(QObject):
     activeTabIndexChanged = Signal()
     activeTabChanged = Signal()
     tabLimitMessageVisibleChanged = Signal()
+    popupBlockedMessageVisibleChanged = Signal()
+    popupBlockedCountChanged = Signal()
     bookmarksChanged = Signal()
     runtimeAvailableChanged = Signal()
     runtimeMessageChanged = Signal()
@@ -109,6 +119,16 @@ class BrowserContext(QObject):
         self._limit_timer.setSingleShot(True)
         self._limit_timer.setInterval(3500)
         self._limit_timer.timeout.connect(self.dismissTabLimitMessage)
+
+        # Popup burst protection state — throttles NewWindowRequested storms.
+        self._popup_times: list[float] = []
+        self._last_popup_time: float = 0.0
+        self._popup_blocked_count: int = 0
+        self._popup_blocked_visible: bool = False
+        self._popup_blocked_timer = QTimer(self)
+        self._popup_blocked_timer.setSingleShot(True)
+        self._popup_blocked_timer.setInterval(POPUP_BLOCKED_MESSAGE_DURATION_MS)
+        self._popup_blocked_timer.timeout.connect(self.dismissPopupBlockedMessage)
 
     # ---------------------------------------------------------------- QML data
     @Property(int, notify=tabsChanged)
@@ -156,6 +176,14 @@ class BrowserContext(QObject):
     @Property(bool, notify=tabLimitMessageVisibleChanged)
     def tabLimitMessageVisible(self) -> bool:  # noqa: N802 - QML API
         return self._tab_limit_message_visible
+
+    @Property(int, notify=popupBlockedCountChanged)
+    def popupBlockedCount(self) -> int:  # noqa: N802 - QML API
+        return self._popup_blocked_count
+
+    @Property(bool, notify=popupBlockedMessageVisibleChanged)
+    def popupBlockedMessageVisible(self) -> bool:  # noqa: N802 - QML API
+        return self._popup_blocked_visible
 
     @Property(QObject, notify=bookmarksChanged)
     def bookmarks(self) -> BookmarksStore:
@@ -381,6 +409,31 @@ class BrowserContext(QObject):
 
     @Slot(str)
     def onPopupRequested(self, url: str) -> None:  # noqa: N802 - QML API
+        # Burst protection for ad-heavy sites like bilibili.tv:
+        # A single click should never spawn 10+ tabs and kill WebView2.
+        now = time.monotonic()
+        # prune old timestamps outside the burst window
+        self._popup_times = [t for t in self._popup_times if now - t < POPUP_BURST_WINDOW_S]
+
+        raw = (url or "").strip()
+        if not raw or raw.lower().startswith("about:"):
+            self._handle_blocked_popup(now, f"blank popup blocked: {url!r}")
+            return
+
+        # too fast since last allowed popup?
+        if self._last_popup_time and (now - self._last_popup_time) < POPUP_MIN_INTERVAL_S:
+            # if we already allowed one very recently, treat this as burst spam
+            if len(self._popup_times) >= 1:
+                self._handle_blocked_popup(now, f"popup throttled too fast: {url}")
+                return
+
+        if len(self._popup_times) >= POPUP_MAX_PER_BURST:
+            self._handle_blocked_popup(now, f"popup burst blocked ({len(self._popup_times)+1} in {POPUP_BURST_WINDOW_S}s): {url}")
+            return
+
+        self._popup_times.append(now)
+        self._last_popup_time = now
+
         # WebViewHost already marked the .NET request as handled.  This method
         # only decides whether a new Halcyon tab fits under the 15-tab cap.
         self.addTab(url)
@@ -400,12 +453,35 @@ class BrowserContext(QObject):
             self._tab_limit_message_visible = False
             self.tabLimitMessageVisibleChanged.emit()
 
+    @Slot()
+    def dismissPopupBlockedMessage(self) -> None:  # noqa: N802 - QML API
+        self._popup_blocked_timer.stop()
+        if self._popup_blocked_visible:
+            self._popup_blocked_visible = False
+            self.popupBlockedMessageVisibleChanged.emit()
+
     def _show_tab_limit_message(self) -> None:
         if not self._tab_limit_message_visible:
             self._tab_limit_message_visible = True
             self.tabLimitMessageVisibleChanged.emit()
         self._limit_timer.start()
         logger.info("Web tab cap (%d) reached", MAX_TABS)
+
+    def _handle_blocked_popup(self, now: float, log_msg: str) -> None:
+        # Even when blocked we update last time to keep cooldown meaningful
+        # but we do NOT push into _popup_times, so allowed count stays limited.
+        self._popup_blocked_count += 1
+        self._popup_blocked_visible = True
+        self.popupBlockedCountChanged.emit()
+        self.popupBlockedMessageVisibleChanged.emit()
+        self._popup_blocked_timer.start()
+        logger.info("Popup blocked (%d total): %s", self._popup_blocked_count, log_msg)
+
+    def _show_popup_blocked_message(self) -> None:
+        if not self._popup_blocked_visible:
+            self._popup_blocked_visible = True
+            self.popupBlockedMessageVisibleChanged.emit()
+        self._popup_blocked_timer.start()
 
     def _set_active_index(self, index: int, *, emit_tabs: bool = False) -> None:
         changed = index != self._active_index
@@ -600,6 +676,11 @@ class BrowserContext(QObject):
         self._tabs.clear()
         self._active_index = -1
         self.dismissTabLimitMessage()
+        self.dismissPopupBlockedMessage()
+        self._popup_times.clear()
+        self._last_popup_time = 0.0
+        self._popup_blocked_count = 0
+        self.popupBlockedCountChanged.emit()
         self.tabsChanged.emit()
         self.activeTabIndexChanged.emit()
         self.activeTabChanged.emit()

@@ -119,4 +119,34 @@ Rectangle {
             onClicked: if (root.browser) root.browser.dismissTabLimitMessage()
         }
     }
+
+    // Popup-burst protection feedback for ad-heavy sites (e.g. bilibili.tv).
+    // Shows when BrowserContext throttles a popup storm that would otherwise
+    // crash WebView2 controller creation.
+    Rectangle {
+        anchors.centerIn: parent
+        width: popupText.implicitWidth + Theme.spaceXl
+        height: Theme.toolbarRowHeight - Theme.spaceSm
+        radius: Theme.radiusPill
+        color: Theme.baseElevated
+        border.width: 1
+        border.color: Theme.glassBorderStrong
+        visible: root.browser && root.browser.popupBlockedMessageVisible && !root.browser.tabLimitMessageVisible
+        z: 3
+
+        Text {
+            id: popupText
+            anchors.centerIn: parent
+            text: root.browser ? (root.browser.popupBlockedCount <= 1 ? "Pop-up blocked" : "Pop-ups blocked: " + root.browser.popupBlockedCount) : "Pop-up blocked"
+            color: Theme.text
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: if (root.browser) root.browser.dismissPopupBlockedMessage()
+        }
+    }
 }
