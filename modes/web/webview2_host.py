@@ -120,7 +120,8 @@ class WebViewHost(QObject):
                 self._fail(webview2_runtime.get_stage_error_message())
                 return False
 
-            task = environment.CreateCoreWebView2ControllerAsync(hwnd)
+            import System  # type: ignore[import-not-found]
+            task = environment.CreateCoreWebView2ControllerAsync(System.IntPtr(hwnd))
             controller = webview2_runtime._wait_for_task(task)
             self.controller = controller
             self.webview = controller.CoreWebView2
