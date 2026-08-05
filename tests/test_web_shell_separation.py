@@ -47,8 +47,11 @@ def test_web_stage_attaches_real_page_area_and_has_no_hardcoded_missing_runtime(
     source = (ROOT / "modes" / "web" / "WebStage.qml").read_text(encoding="utf-8")
 
     assert "browser.attachToWindow(hostWindow)" in source
+    assert "var viewportItem = contentFullscreen ? webStage : pageArea" in source
     assert "browser.setViewport(" in source
     assert "browser.setStageActive(stageActive)" in source
+    assert "setHostWindowFullscreen(true)" in source
+    assert "visible: !webStage.contentFullscreen" in source
     assert "property bool isRuntimeMissing: true" not in source
     assert "WebView2 is not available" in source
 
@@ -78,4 +81,6 @@ def test_browser_context_creates_and_initializes_hosts_for_external_tabs():
     assert "tab.host = self._host_factory" in source
     assert "host.init_controller(self._parent_hwnd, environment)" in source
     assert "host.newWindowRequested.connect(self.onPopupRequested)" in source
+    assert "fullscreenChanged" in source
+    assert "def _on_host_fullscreen" in source
     assert "host.set_visible(should_show and host.isReady)" in source

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject
@@ -72,3 +73,14 @@ def test_webview2_host_signals():
     host.navigate("example.com")
     assert urls == ["https://example.com"]
     assert host.url == "https://example.com"
+
+
+def test_webview2_host_does_not_try_to_fullscreen_its_qobject_parent():
+    """The host's parent is BrowserContext, not the QML Window."""
+    source = Path(__file__).resolve().parent.parent.joinpath(
+        "modes", "web", "webview2_host.py"
+    ).read_text(encoding="utf-8")
+
+    assert "showFullScreen" not in source
+    assert "showNormal" not in source
+    assert "fullscreenChanged.emit" in source
