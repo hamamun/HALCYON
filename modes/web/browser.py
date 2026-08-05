@@ -462,9 +462,12 @@ class BrowserContext(QObject):
         self._popup_times.append(now)
         self._last_popup_time = now
 
-        # WebViewHost already marked the .NET request as handled.  This method
-        # only decides whether a new Halcyon tab fits under the 15-tab cap.
-        self.addTab(url)
+        # WebViewHost already marked the .NET request as handled.
+        # We must defer creating the tab to break a native WebView2 COM deadlock:
+        # Edge fires NewWindowRequested and pauses waiting for us to return. If we
+        # synchronously create the controller here, we wait for Edge while Edge
+        # waits for us, resulting in a TimeoutError. Deferring lets Edge resume.
+        QTimer.singleShot(1, lambda: self.addTab(url))
 
     @staticmethod
     def _extract_domain(url: str) -> str:
