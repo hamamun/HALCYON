@@ -86,6 +86,7 @@ class BrowserContext(QObject):
     runtimeCheckedChanged = Signal()
     addressFocusRequested = Signal()
     windowTitleChanged = Signal()
+    contentFullscreenChanged = Signal()
 
     def __init__(
         self,
@@ -118,8 +119,10 @@ class BrowserContext(QObject):
         self._stage_active = False
         # Physical pixels relative to the QQuickWindow client area.  QML passes
         # device-pixel-ratio-adjusted values, so WebView2 receives the same
-        # coordinate system as Win32 Bounds.
+        # coordinate system as Win32 Bounds.  During HTML fullscreen QML sends
+        # the whole stage/window rectangle instead of the ordinary page area.
         self._viewport = (0, 0, 0, 0)
+        self._fullscreen_tab_id = ""
 
         self._limit_timer = QTimer(self)
         self._limit_timer.setSingleShot(True)
@@ -216,6 +219,17 @@ class BrowserContext(QObject):
     def runtimeMessage(self) -> str:  # noqa: N802 - QML API
         return self._runtime_message
 
+    @Property(bool, notify=contentFullscreenChanged)
+    def contentFullscreen(self) -> bool:  # noqa: N802 - QML API
+        """True while the active web page owns HTML fullscreen.
+
+        WebView2 only expands a fullscreen element to the controller bounds.
+        QML listens to this property to hide Halcyon's browser chrome, put the
+        top-level window in real fullscreen and resize the native child to the
+        full window client area.
+        """
+        return bool(self._fullscreen_tab_id)
+
     # -------------------------------------------------------- stage attachment
     @Slot(QObject)
     def attachToWindow(self, window: QObject | None) -> None:  # noqa: N802 - QML API
@@ -254,12 +268,32 @@ class BrowserContext(QObject):
         active = bool(active)
         if active != self._stage_active:
             self._stage_active = active
+            if not active and self.contentFullscreen:
+                self.exitFullscreen()
+                self._set_content_fullscreen("")
             self._sync_hosts()
 
     @Slot()
     def detachStage(self) -> None:  # noqa: N802 - QML API
         """Hide every native child before a non-Web stage becomes visible."""
         self.setStageActive(False)
+
+    @Slot()
+    def exitFullscreen(self) -> None:  # noqa: N802 - QML API
+        """Ask the active WebView document to leave HTML fullscreen."""
+        tab = self._tab_by_id(self._fullscreen_tab_id) or self._active_tab()
+        host = tab.host if tab is not None else None
+        exit_fullscreen = getattr(host, "exit_fullscreen", None)
+        if callable(exit_fullscreen):
+            exit_fullscreen()
+
+    def _set_content_fullscreen(self, tab_id: str) -> None:
+        tab_id = str(tab_id or "")
+        if tab_id == self._fullscreen_tab_id:
+            return
+        self._fullscreen_tab_id = tab_id
+        self.contentFullscreenChanged.emit()
+        self._sync_hosts()
 
     @Slot()
     def ensureRuntime(self) -> None:  # noqa: N802 - QML API
@@ -341,8 +375,11 @@ class BrowserContext(QObject):
             return False
 
         removed = self._tabs.pop(index)
+        was_fullscreen = removed.id == self._fullscreen_tab_id
         if removed.host is not None:
             removed.host.close()
+        if was_fullscreen:
+            self._set_content_fullscreen("")
 
         if not self._tabs:
             next_index = -1
@@ -555,6 +592,11 @@ class BrowserContext(QObject):
     def _set_active_index(self, index: int, *, emit_tabs: bool = False) -> None:
         changed = index != self._active_index
         self._active_index = index
+        if self._fullscreen_tab_id:
+            active = self._active_tab()
+            if active is None or active.id != self._fullscreen_tab_id:
+                self.exitFullscreen()
+                self._set_content_fullscreen("")
         if emit_tabs:
             self.tabsChanged.emit()
         if changed:
@@ -655,7 +697,21 @@ class BrowserContext(QObject):
             lambda back, forward, ident=tab_id: self._on_host_history(ident, back, forward)
         )
         host.newWindowRequested.connect(self.onPopupRequested)
+        fullscreen_changed = getattr(host, "fullscreenChanged", None)
+        if fullscreen_changed is not None and hasattr(fullscreen_changed, "connect"):
+            fullscreen_changed.connect(
+                lambda fullscreen, ident=tab_id: self._on_host_fullscreen(ident, fullscreen)
+            )
         host.errorOccurred.connect(lambda message, ident=tab_id: self._on_host_error(ident, message))
+
+    def _on_host_fullscreen(self, tab_id: str, fullscreen: bool) -> None:
+        tab = self._tab_by_id(tab_id)
+        if bool(fullscreen):
+            if tab is not None and tab is self._active_tab() and self._stage_active:
+                self._set_content_fullscreen(tab_id)
+            return
+        if self._fullscreen_tab_id == tab_id:
+            self._set_content_fullscreen("")
 
     def _on_host_url(self, tab_id: str, url: str) -> None:
         tab = self._tab_by_id(tab_id)
@@ -692,6 +748,7 @@ class BrowserContext(QObject):
         # A controller failure after a positive registry/CLR probe still needs a
         # user-visible stage, not a black rectangle.  Hiding every child makes
         # the QML fallback immediately visible.
+        self._set_content_fullscreen("")
         self._set_runtime_available(False, message or webview2_runtime.get_stage_error_message())
         self._sync_hosts()
 
@@ -744,6 +801,7 @@ class BrowserContext(QObject):
                 tab.host.close()
         self._tabs.clear()
         self._active_index = -1
+        self._set_content_fullscreen("")
         self.dismissTabLimitMessage()
         self.dismissPopupBlockedMessage()
         self._popup_times.clear()

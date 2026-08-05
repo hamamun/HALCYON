@@ -4,9 +4,11 @@
 owns one controller and turns .NET events into ordinary Qt signals; the
 ``BrowserContext`` owns the tab model and decides which host is visible.
 
-The controller's native child HWND is bounded only to the browser page area.
-That is essential: a native child is always above Qt Quick scene-graph content,
-so it must never overlap Halcyon's title bar, tab strip, address bar or menus.
+The controller's native child HWND is normally bounded only to the browser page
+area.  That is essential: a native child is always above Qt Quick scene-graph
+content, so it must not overlap Halcyon's title bar, tab strip, address bar or
+menus during ordinary browsing.  BrowserContext/WebStage deliberately widen the
+bounds only while the page itself owns HTML fullscreen.
 """
 
 from __future__ import annotations
@@ -230,13 +232,9 @@ class WebViewHost(QObject):
         def fullscreen_changed(_sender: Any, _args: Any) -> None:
             try:
                 is_fs = bool(self.webview.ContainsFullScreenElement)
-                self.fullscreenChanged.emit(is_fs)
-                # Real host-window fullscreen, not just content-area
-                parent_win = self.parent()
-                if parent_win is not None and hasattr(parent_win, "showFullScreen"):
-                    parent_win.showFullScreen() if is_fs else parent_win.showNormal()
             except Exception:
-                pass
+                is_fs = False
+            self.fullscreenChanged.emit(is_fs)
 
         def favicon_changed(_sender: Any, _args: Any) -> None:
             try:
@@ -413,6 +411,30 @@ class WebViewHost(QObject):
                 self.webview.Stop()
         except Exception as exc:
             logger.debug("WebView2 stop failed: %s", exc)
+
+    def exit_fullscreen(self) -> None:
+        """Ask the document to leave HTML fullscreen mode, if it is active."""
+        if self.webview is None:
+            return
+        script = """
+(() => {
+    const exit = document.exitFullscreen
+        || document.webkitExitFullscreen
+        || document.mozCancelFullScreen
+        || document.msExitFullscreen;
+    if (!exit)
+        return false;
+    const result = exit.call(document);
+    if (result && typeof result.catch === 'function')
+        result.catch(() => {});
+    return true;
+})();
+"""
+        try:
+            task = self.webview.ExecuteScriptAsync(script)
+            self._pending_tasks.append(task)
+        except Exception as exc:
+            logger.debug("WebView2 exit fullscreen script failed: %s", exc)
 
     # -------------------------------------------------------------- placement
     def set_bounds(self, x: int, y: int, width: int, height: int) -> None:

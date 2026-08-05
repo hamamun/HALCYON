@@ -15,6 +15,7 @@ class FakeHost(QObject):
     loadingChanged = Signal(bool)
     historyChanged = Signal(bool, bool)
     newWindowRequested = Signal(str)
+    fullscreenChanged = Signal(bool)
     errorOccurred = Signal(str)
 
     def __init__(self, parent=None):
@@ -28,6 +29,7 @@ class FakeHost(QObject):
         self.forward_calls = 0
         self.reload_calls = 0
         self.stop_calls = 0
+        self.exit_fullscreen_calls = 0
         self.errorMessage = ""
 
     def init_controller(self, hwnd, _environment):
@@ -55,6 +57,9 @@ class FakeHost(QObject):
 
     def stop(self):
         self.stop_calls += 1
+
+    def exit_fullscreen(self):
+        self.exit_fullscreen_calls += 1
 
     def release_controller(self):
         self.isReady = False
@@ -171,6 +176,69 @@ def test_external_tab_is_wired_to_a_host_and_native_viewport():
 
     browser.goBack()
     assert host.back_calls == 1
+
+
+def test_browser_context_promotes_webview_fullscreen_to_qml_state():
+    """HTML fullscreen from WebView2 must reach QML; host alone cannot resize the shell."""
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+    fullscreen_values: list[bool] = []
+    browser.contentFullscreenChanged.connect(lambda: fullscreen_values.append(browser.contentFullscreen))
+
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(0, 88, 900, 600)
+    browser.navigateActive("https://www.youtube.com")
+
+    host = hosts[0]
+    host.fullscreenChanged.emit(True)
+    assert browser.contentFullscreen is True
+    assert fullscreen_values[-1] is True
+
+    browser.exitFullscreen()
+    assert host.exit_fullscreen_calls == 1
+
+    host.fullscreenChanged.emit(False)
+    assert browser.contentFullscreen is False
+    assert fullscreen_values[-1] is False
+
+
+def test_browser_context_clears_web_fullscreen_when_stage_deactivates():
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(0, 88, 900, 600)
+    browser.navigateActive("https://www.youtube.com")
+
+    hosts[0].fullscreenChanged.emit(True)
+    assert browser.contentFullscreen is True
+
+    browser.setStageActive(False)
+
+    assert browser.contentFullscreen is False
+    assert hosts[0].exit_fullscreen_calls == 1
+    assert hosts[0].visible_values[-1] is False
 
 
 def test_internal_bookmarks_tab_hides_native_page_and_does_not_create_host():

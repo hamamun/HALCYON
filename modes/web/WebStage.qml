@@ -5,10 +5,12 @@ import Halcyon.Ui
 
 // Web mode's entire content area.
 //
-// The tab and address strips are regular Qt Quick chrome.  Only pageArea is
-// handed to the native WebView2 child HWND, so no QML is ever painted over a
-// website.  `stageActive` is set by the generic Stage cache when this mode is
-// parked while Local/M3U is active.
+// The tab and address strips are regular Qt Quick chrome.  In ordinary browsing
+// only pageArea is handed to the native WebView2 child HWND, so no website
+// overlaps Halcyon's chrome.  When a page enters HTML fullscreen (YouTube's
+// fullscreen button), the viewport intentionally expands to this whole stage and
+// the top-level window enters real fullscreen.  `stageActive` is set by the
+// generic Stage cache when this mode is parked while Local/M3U is active.
 Rectangle {
     id: webStage
     color: Theme.base
@@ -16,6 +18,41 @@ Rectangle {
     property var browser: typeof modeContext_web !== "undefined" ? modeContext_web : null
     property bool stageActive: true
     property bool viewportSyncPending: false
+    readonly property bool contentFullscreen: !!browser && browser.contentFullscreen
+    property bool windowFullscreenEnteredForWeb: false
+
+    function hostWindowIsFullscreen() {
+        var hostWindow = webStage.Window.window
+        if (!hostWindow)
+            return false
+        return typeof hostWindow.fullscreen !== "undefined" ? hostWindow.fullscreen
+                                                            : hostWindow.visibility === Window.FullScreen
+    }
+
+    function setHostWindowFullscreen(on) {
+        var hostWindow = webStage.Window.window
+        if (!hostWindow)
+            return
+        if (typeof hostWindow.setFullscreen === "function")
+            hostWindow.setFullscreen(on)
+        else
+            hostWindow.visibility = on ? Window.FullScreen : Window.Windowed
+    }
+
+    function applyContentFullscreen() {
+        if (contentFullscreen) {
+            if (!hostWindowIsFullscreen()) {
+                windowFullscreenEnteredForWeb = true
+                setHostWindowFullscreen(true)
+            } else {
+                windowFullscreenEnteredForWeb = false
+            }
+        } else if (windowFullscreenEnteredForWeb) {
+            windowFullscreenEnteredForWeb = false
+            setHostWindowFullscreen(false)
+        }
+        scheduleBrowserSurfaceSync()
+    }
 
     function syncBrowserSurface() {
         viewportSyncPending = false
@@ -27,10 +64,12 @@ Rectangle {
             return
 
         browser.attachToWindow(hostWindow)
-        var point = pageArea.mapToItem(null, 0, 0)
+        var viewportItem = contentFullscreen ? webStage : pageArea
+        var point = viewportItem.mapToItem(null, 0, 0)
         var dpr = hostWindow.devicePixelRatio || 1
         browser.setViewport(Math.round(point.x * dpr), Math.round(point.y * dpr),
-                            Math.round(pageArea.width * dpr), Math.round(pageArea.height * dpr))
+                            Math.round(viewportItem.width * dpr),
+                            Math.round(viewportItem.height * dpr))
         browser.setStageActive(stageActive)
     }
 
@@ -41,11 +80,19 @@ Rectangle {
         Qt.callLater(syncBrowserSurface)
     }
 
-    Component.onCompleted: scheduleBrowserSurfaceSync()
+    Component.onCompleted: {
+        applyContentFullscreen()
+        scheduleBrowserSurfaceSync()
+    }
     Component.onDestruction: {
         if (browser)
             browser.detachStage()
+        if (windowFullscreenEnteredForWeb) {
+            windowFullscreenEnteredForWeb = false
+            setHostWindowFullscreen(false)
+        }
     }
+    onContentFullscreenChanged: applyContentFullscreen()
     onStageActiveChanged: scheduleBrowserSurfaceSync()
     onWidthChanged: scheduleBrowserSurfaceSync()
     onHeightChanged: scheduleBrowserSurfaceSync()
@@ -57,20 +104,23 @@ Rectangle {
         TabsRow {
             id: tabsRow
             browser: webStage.browser
+            visible: !webStage.contentFullscreen
             Layout.fillWidth: true
-            Layout.preferredHeight: Theme.toolbarRowHeight
+            Layout.preferredHeight: webStage.contentFullscreen ? 0 : Theme.toolbarRowHeight
         }
 
         AddressBar {
             id: addressBar
             browser: webStage.browser
+            visible: !webStage.contentFullscreen
             Layout.fillWidth: true
-            Layout.preferredHeight: Theme.toolbarRowHeight
+            Layout.preferredHeight: webStage.contentFullscreen ? 0 : Theme.toolbarRowHeight
         }
 
         Rectangle {
+            visible: !webStage.contentFullscreen
             Layout.fillWidth: true
-            Layout.preferredHeight: 1
+            Layout.preferredHeight: webStage.contentFullscreen ? 0 : 1
             color: Theme.glassBorder
         }
 
@@ -169,5 +219,19 @@ Rectangle {
         function onRuntimeCheckedChanged() { webStage.scheduleBrowserSurfaceSync() }
         function onRuntimeAvailableChanged() { webStage.scheduleBrowserSurfaceSync() }
         function onActiveTabChanged() { webStage.scheduleBrowserSurfaceSync() }
+    }
+
+    Connections {
+        id: hostWindowConnections
+        target: webStage.Window.window
+        enabled: target !== null
+        function onFullscreenChanged() {
+            if (webStage.contentFullscreen
+                    && webStage.windowFullscreenEnteredForWeb
+                    && !webStage.hostWindowIsFullscreen()
+                    && webStage.browser) {
+                webStage.browser.exitFullscreen()
+            }
+        }
     }
 }
