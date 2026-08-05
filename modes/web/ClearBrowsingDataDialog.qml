@@ -108,7 +108,7 @@ BrowserPopup {
             Layout.fillHeight: true
             clip: true
             contentHeight: optionsColumn.height
-            boundsFlick: false
+            boundsBehavior: Flickable.StopAtBounds
             ColumnLayout {
                 id: optionsColumn
                 width: optionsList.width
