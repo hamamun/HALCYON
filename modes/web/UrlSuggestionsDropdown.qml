@@ -142,10 +142,14 @@ BrowserPopup {
     function fetchGoogleSuggestions(q) {
         var trim = (q || "").trim()
         if (trim.length === 0) return
+        // Capture the query that triggered this fetch to discard stale results
+        var requestedQuery = trim
         var url = "https://suggestqueries.google.com/complete/search?client=firefox&q=" + encodeURIComponent(trim)
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE) {
+                // If user typed something else while this request was in flight, ignore stale result
+                if (root.queryText !== requestedQuery) return
                 if (xhr.status === 200) {
                     try {
                         var data = JSON.parse(xhr.responseText)
