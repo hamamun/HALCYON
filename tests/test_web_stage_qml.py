@@ -31,6 +31,8 @@ from modes.web.browser import BrowserContext
     "name",
     [
         "BrowserPopup.qml",
+        "CheckBoxRow.qml",
+        "ClearBrowsingDataDialog.qml",
         "TabsRow.qml",
         "AddressBar.qml",
         "BookmarksDropdown.qml",
