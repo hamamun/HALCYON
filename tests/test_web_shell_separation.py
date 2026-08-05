@@ -60,7 +60,12 @@ def test_browser_popups_are_native_windows_and_manager_supports_drag_reorder():
     popup = (ROOT / "modes" / "web" / "BrowserPopup.qml").read_text(encoding="utf-8")
     manager = (ROOT / "modes" / "web" / "BookmarksManagerTab.qml").read_text(encoding="utf-8")
 
-    assert "flags: Qt.Popup | Qt.FramelessWindowHint" in popup
+    assert "acceptsFocus" in popup
+    # Focus-taking popups (bookmark dialogs) stay native Qt.Popup windows;
+    # autocomplete-style popups (suggestions) are tooltip-style so they can
+    # never steal typing focus from the address bar.
+    assert "? Qt.Popup | Qt.FramelessWindowHint" in popup
+    assert "Qt.ToolTip | Qt.FramelessWindowHint" in popup
     assert "mapToGlobal" in popup
     assert "DragHandler" in manager
     assert "reorderBookmarks(fromIndex, targetIndex)" in manager
