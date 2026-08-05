@@ -361,6 +361,15 @@ Rectangle {
     BookmarksDropdown {
         id: bookmarksDropdown
         browser: root.browser
+        clearDialog: clearBrowsingDataDialog
+    }
+
+    ClearBrowsingDataDialog {
+        id: clearBrowsingDataDialog
+        browser: root.browser
+        onCleared: {
+            // data cleared — nothing else to do; dialog hides itself
+        }
     }
 
     // Edge-like omnibox - local + free Google suggest

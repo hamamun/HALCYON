@@ -348,6 +348,129 @@ def get_shared_environment() -> Any:
 # ---------------------------------------------------------------------------
 # Browser input helpers
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Clearing browsing data — maps the UI checkbox set to WebView2 data kinds
+# ---------------------------------------------------------------------------
+# WebView2's CoreWebView2BrowsingDataKinds flags (bitwise-combinable).
+# Names here follow the SDK; values are the published enum constants.
+try:  # pragma: no cover — only meaningful when the SDK bridge is present
+    from Microsoft.Web.WebView2.Core import CoreWebView2BrowsingDataKinds  # type: ignore[import-not-found]
+
+    _KIND_BROWSING_HISTORY = int(CoreWebView2BrowsingDataKinds.BrowsingHistory)
+    _KIND_DOWNLOAD_HISTORY = int(CoreWebView2BrowsingDataKinds.DownloadHistory)
+    _KIND_COOKIES = int(CoreWebView2BrowsingDataKinds.Cookies)
+    _KIND_CACHE = int(CoreWebView2BrowsingDataKinds.DiskCache)
+    _KIND_AUTOFILL = int(CoreWebView2BrowsingDataKinds.GeneralAutofill)
+    _KIND_PASSWORDS = int(CoreWebView2BrowsingDataKinds.PasswordAutosave)
+    _KIND_SITE_PERMISSIONS = int(CoreWebView2BrowsingDataKinds.SitePermissions)
+    _KIND_SERVICE_WORKERS = int(CoreWebView2BrowsingDataKinds.ServiceWorkers)
+    _KIND_ALL_DOM_STORAGE = int(CoreWebView2BrowsingDataKinds.AllDomStorage)
+    _HAS_DATA_KINDS = True
+except Exception:
+    _HAS_DATA_KINDS = False
+    _KIND_BROWSING_HISTORY = 1
+    _KIND_DOWNLOAD_HISTORY = 2
+    _KIND_COOKIES = 4
+    _KIND_CACHE = 8
+    _KIND_AUTOFILL = 16
+    _KIND_PASSWORDS = 32
+    _KIND_SITE_PERMISSIONS = 64
+    _KIND_SERVICE_WORKERS = 128
+    _KIND_ALL_DOM_STORAGE = 256
+
+
+# Time-range choices offered in the UI, expressed as a "minutes ago" window.
+# "All time" is represented by minutes=None.
+CLEAR_DATA_TIME_RANGES = [
+    {"label": "Last hour", "minutes": 60},
+    {"label": "Last 24 hours", "minutes": 60 * 24},
+    {"label": "Last 7 days", "minutes": 60 * 24 * 7},
+    {"label": "Last 4 weeks", "minutes": 60 * 24 * 7 * 4},
+    {"label": "All time", "minutes": None},
+]
+
+# The eight checkboxes in the Clear Browsing Data dialog, in display order.
+# ``kinds`` is the combined WebView2 flag set; ``default`` is whether it starts
+# ticked. ``destructive`` marks the row with a warning cue in the UI.
+CLEAR_DATA_OPTIONS = [
+    {"id": "browsingHistory", "label": "Browsing history",
+     "kinds": _KIND_BROWSING_HISTORY, "default": True, "destructive": False},
+    {"id": "downloadHistory", "label": "Download history",
+     "kinds": _KIND_DOWNLOAD_HISTORY, "default": False, "destructive": False},
+    {"id": "cookies", "label": "Cookies and site data",
+     "kinds": _KIND_COOKIES | _KIND_ALL_DOM_STORAGE,
+     "default": True, "destructive": True},
+    {"id": "cache", "label": "Cached images and files",
+     "kinds": _KIND_CACHE, "default": True, "destructive": False},
+    {"id": "passwords", "label": "Passwords",
+     "kinds": _KIND_PASSWORDS, "default": False, "destructive": True},
+    {"id": "autofill", "label": "Autofill form data",
+     "kinds": _KIND_AUTOFILL, "default": False, "destructive": True},
+    {"id": "sitePermissions", "label": "Site permissions",
+     "kinds": _KIND_SITE_PERMISSIONS, "default": False, "destructive": False},
+    {"id": "serviceWorkers", "label": "Service workers and offline data",
+     "kinds": _KIND_SERVICE_WORKERS, "default": False, "destructive": False},
+]
+
+
+def clear_browsing_data(options: list[str], minutes: int | None) -> None:
+    """Clear the requested browsing data from the shared WebView2 profile.
+
+    ``options`` is the list of ``id`` values the user ticked. ``minutes`` is the
+    time-window size, or ``None`` for "All time". Calls WebView2's
+    ``ClearBrowsingDataAsync`` on the shared environment's profile. Failures are
+    logged but never raised — a failed clear must not crash the browser.
+    """
+    if not _HAS_DATA_KINDS:
+        return
+    try:
+        env = get_shared_environment()
+        if env is None:
+            return
+        profile = getattr(env, "Profile", None)
+        if profile is None:
+            return
+
+        # Combine the selected checkboxes into one flag set.
+        id_to_kinds = {opt["id"]: opt["kinds"] for opt in CLEAR_DATA_OPTIONS}
+        combined = 0
+        for opt_id in options:
+            combined |= id_to_kinds.get(opt_id, 0)
+        if combined == 0:
+            return
+
+        # WebView2's ClearBrowsingDataAsync accepts an optional
+        # CoreWebView2ClearBrowsingDataTimeRange. The SDK exposes it on the
+        # profile; if the installed runtime is too old for the time-range API,
+        # fall back to clearing everything in the chosen kinds.
+        start_filetime = 0
+        end_filetime = 0
+        if minutes is not None:
+            import time as _time
+            # FILETIME is 100-ns intervals since 1601-01-01 UTC.
+            now_100ns = int((_time.time() + 11644473600) * 10_000_000)
+            delta_100ns = int(minutes) * 60 * 10_000_000
+            start_filetime = max(0, now_100ns - delta_100ns)
+            end_filetime = now_100ns
+
+        try:
+            from Microsoft.Web.WebView2.Core import CoreWebView2ClearBrowsingDataTimeRange  # type: ignore[import-not-found]
+            time_range = CoreWebView2ClearBrowsingDataTimeRange()
+            time_range.StartTime = start_filetime
+            time_range.EndTime = end_filetime
+            task = profile.ClearBrowsingDataAsync(combined, time_range)
+        except Exception:
+            # Older runtimes — clear all data of the chosen kinds.
+            task = profile.ClearBrowsingDataAsync(combined)
+
+        # Wait briefly on the GUI thread, pumping Qt events so the dialog
+        # stays responsive. The clear itself is fast.
+        _wait_for_task(task, timeout_s=10.0)
+        logger.info("Cleared browsing data (kinds=0x%04X, minutes=%s)", combined, minutes)
+    except Exception as exc:
+        logger.warning("clear_browsing_data failed: %s", exc, exc_info=True)
+
+
 def get_anti_bot_user_agent(default_ua: str = "") -> str:
     """Remove the WebView2 token while retaining a normal desktop Edge UA."""
     ua = default_ua or DEFAULT_EDGE_USER_AGENT

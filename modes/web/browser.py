@@ -543,6 +543,15 @@ class BrowserContext(QObject):
             return True
         return False
 
+    @Slot("QStringList", int)
+    def clearBrowsingData(self, options: list[str], minutes: int) -> None:  # noqa: N802
+        """Clear the selected browsing data from the shared WebView2 profile.
+
+        ``minutes`` is the time-window size; 0 means "All time".
+        """
+        window = None if minutes <= 0 else minutes
+        webview2_runtime.clear_browsing_data(list(options), window)
+
     @Slot()
     def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
         for index, tab in enumerate(self._tabs):
