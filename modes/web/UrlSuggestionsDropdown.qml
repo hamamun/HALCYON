@@ -4,6 +4,8 @@ import Halcyon.Ui
 
 // Omnibox-style suggestions: local tabs + bookmarks + free Google search suggestions.
 // Uses BrowserPopup (native Qt.Popup Window) so it stays above the WebView2 HWND.
+// The popup is tooltip-style non-activating (acceptsFocus: false): it never
+// steals focus from the address bar or the page while typing.
 BrowserPopup {
     id: root
 
@@ -17,21 +19,26 @@ BrowserPopup {
     property int maxVisible: 10
     readonly property int rowHeight: 44
 
+    // Suggestions are chrome, not a dialog: never take activation/focus
+    acceptsFocus: false
+
     width: 480
-    height: Math.min(380, Math.max(48, suggestionsList.contentHeight + Theme.spaceSm * 2))
+    // Height is driven only by updateHeight() through desiredHeight, so the
+    // declarative `height` binding is never overwritten imperatively
+    // (avoids "QML Binding: overwriting binding" warnings).
+    property int desiredHeight: 0
+    height: desiredHeight
 
     signal suggestionAccepted(string text)
 
     function updateHeight() {
         var count = suggestionsModel.count
         if (count === 0) {
-            height = 0
+            desiredHeight = 0
             return
         }
         var visibleCount = Math.min(count, maxVisible)
-        height = visibleCount * rowHeight + Theme.spaceSm * 2
-        // cap
-        if (height > 400) height = 400
+        desiredHeight = Math.min(visibleCount * rowHeight + Theme.spaceSm * 2, 400)
     }
 
     function hidePopup() {
@@ -67,7 +74,6 @@ BrowserPopup {
             updateHeight()
             visible = true
             raise()
-            requestActivate()
         } else {
             // No local yet — keep hidden until remote arrives, but still prepare to show
             visible = false
@@ -184,7 +190,6 @@ BrowserPopup {
                             if (!visible) {
                                 visible = true
                                 raise()
-                                requestActivate()
                             }
                         }
                     } catch (e) {

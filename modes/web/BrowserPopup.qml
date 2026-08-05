@@ -11,7 +11,11 @@ import Halcyon.Ui
 // without opening an external browser window.
 Window {
     id: root
-    flags: Qt.Popup | Qt.FramelessWindowHint
+    // True for dialogs that must take focus (bookmark forms with text input);
+    // false for autocomplete-style overlays that must never steal focus from
+    // the address bar or the WebView2 page (tooltip-like, no activation).
+    property bool acceptsFocus: true
+    flags: Qt.Popup | Qt.FramelessWindowHint | (acceptsFocus ? 0 : Qt.WindowDoesNotAcceptFocus)
     color: "transparent"
     visible: false
 
@@ -29,7 +33,8 @@ Window {
         y = Math.round(point.y)
         visible = true
         raise()
-        requestActivate()
+        if (acceptsFocus)
+            requestActivate()
     }
 
     function hidePopup() {
