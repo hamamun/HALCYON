@@ -90,6 +90,7 @@ QtObject {
     readonly property string audioTrack: "\uE8D6"
     readonly property string speed:      "\uEC4A"
     readonly property string download:   "\uE896"
+    readonly property string clearBrowsingData: "\uE74D"
     // Eye pair — Fluent/MDL2 "View" and "Hide", for API-key reveal toggles.
     readonly property string eyeShow:    "\uE890"
     readonly property string eyeHide:    "\uED1A"

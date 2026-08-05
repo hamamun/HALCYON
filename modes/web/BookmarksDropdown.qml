@@ -7,9 +7,10 @@ import Halcyon.Ui
 BrowserPopup {
     id: root
     width: 300
-    height: Math.min(380, Math.max(120, 64 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
+    height: Math.min(420, Math.max(140, 88 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
 
     property var browser: null
+    property var clearDialog: null
 
     function openFor(anchorItem, ownerWindow) {
         showBelow(anchorItem, ownerWindow)
@@ -20,14 +21,31 @@ BrowserPopup {
         anchors.margins: Theme.spaceSm
         spacing: Theme.spaceXs
 
-        IconButton {
-            Layout.alignment: Qt.AlignRight
-            glyph: Glyphs.bookmark
-            tooltip: "Manage Bookmarks"
-            onClicked: {
-                if (root.browser)
-                    root.browser.openBookmarksManager()
-                root.hidePopup()
+        // Pinned top row: browser-housekeeping actions (§4.1 — one home each).
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spaceXs
+
+            TextButton {
+                id: clearButton
+                text: "Clear browsing data"
+                glyph: Glyphs.clearBrowsingData
+                onClicked: {
+                    root.hidePopup()
+                    if (root.clearDialog)
+                        root.clearDialog.openFor(clearButton, root.Window.window)
+                }
+            }
+            Item { Layout.fillWidth: true }
+            TextButton {
+                id: manageButton
+                text: "Manage Bookmarks"
+                glyph: Glyphs.bookmark
+                onClicked: {
+                    if (root.browser)
+                        root.browser.openBookmarksManager()
+                    root.hidePopup()
+                }
             }
         }
 
