@@ -4,7 +4,9 @@ import QtQuick.Layouts
 import Halcyon.Ui
 
 // One row in the Clear Browsing Data dialog: a checkbox + label + optional
-// warning line for destructive items (cookies, passwords, autofill).
+// subtitle line. Destructive items (cookies, passwords, autofill) carry a
+// warning-coloured danger cue; ordinary items can carry a muted ``note`` that
+// tells the user what they will notice after clearing (§4.1 spec table).
 //
 // The parent dialog reads each row's ``checked`` property when the user hits
 // Clear — so the row exposes ``checked`` as a plain alias and ticks the box
@@ -17,6 +19,9 @@ Rectangle {
     property bool defaultTick: false
     property bool destructive: false
 
+    // Muted "what you'll notice after" line for non-destructive rows.
+    property string note: ""
+
     // The warning text shown beneath destructive rows ("You will be signed out…").
     property string warning: {
         if (!destructive) return ""
@@ -26,10 +31,13 @@ Rectangle {
         return ""
     }
 
+    readonly property string subtitle: warning.length > 0 ? warning : note
+    readonly property bool hasSubtitle: subtitle.length > 0
+
     property alias checked: box.checked
 
     Layout.fillWidth: true
-    Layout.preferredHeight: warning.length > 0 ? 52 : 36
+    Layout.preferredHeight: hasSubtitle ? 52 : 36
     color: rowArea.containsMouse ? Theme.glassFillHover : "transparent"
     radius: Theme.radiusSmall
 
@@ -85,11 +93,11 @@ Rectangle {
         Text {
             Layout.leftMargin: 26
             Layout.fillWidth: true
-            visible: root.warning.length > 0
-            text: root.warning
+            visible: root.hasSubtitle
+            text: root.subtitle
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeTiny
-            color: Theme.warning
+            color: root.warning.length > 0 ? Theme.warning : Theme.textMuted
             elide: Text.ElideRight
         }
     }

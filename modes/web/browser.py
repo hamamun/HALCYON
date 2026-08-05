@@ -552,6 +552,20 @@ class BrowserContext(QObject):
         window = None if minutes <= 0 else minutes
         webview2_runtime.clear_browsing_data(list(options), window)
 
+    @Slot(result=int)
+    def cacheSizeBytes(self) -> int:  # noqa: N802 - QML API
+        """On-disk size of the profile's caches, for the dialog's freed-space line.
+
+        Only the cache is measurable, so the Clear Browsing Data dialog shows
+        this number while "Cached images and files" is ticked.  Failures (no
+        profile yet, non-Windows dev box) simply return 0.
+        """
+        try:
+            return int(webview2_runtime.get_cache_size_bytes())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("cache size probe failed: %s", exc)
+            return 0
+
     @Slot()
     def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
         for index, tab in enumerate(self._tabs):

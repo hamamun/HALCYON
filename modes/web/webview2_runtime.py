@@ -471,6 +471,62 @@ def clear_browsing_data(options: list[str], minutes: int | None) -> None:
         logger.warning("clear_browsing_data failed: %s", exc, exc_info=True)
 
 
+# Directory names that hold WebView2's on-disk caches.  Walking the shared
+# profile and summing these gives the same number Edge shows next to
+# "Cached images and files" — the only data kind whose size we can measure,
+# so the dialog's "Freed space" estimate is driven by it.
+_CACHE_DIR_NAMES = frozenset(
+    {
+        "cache_data",       # HTTP cache (Default/Cache/Cache_Data)
+        "code cache",       # compiled JS bytecode
+        "gpucache",
+        "shadercache",
+        "grshadercache",
+        "dawncache",
+        "cachestorage",     # Service Worker cache storage
+        "scriptcache",      # Service Worker scripts
+        "backforwardcache",
+    }
+)
+
+
+def get_cache_size_bytes() -> int:
+    """Return the on-disk size of the shared profile's caches, in bytes.
+
+    WebView2 exposes no public "cache size" API, so the size is measured the
+    way Chromium-based browsers' own UIs describe it: sum the files inside the
+    profile's cache directories.  Safe everywhere — a missing profile, missing
+    runtime or permission error simply yields 0, never an exception.
+    """
+    root_dir = get_user_data_dir()
+    if not root_dir.is_dir():
+        return 0
+
+    total = 0
+    try:
+        # Absolute paths of cache roots found so far; everything below a
+        # cache root belongs to that cache (e.g. CacheStorage keeps per-origin
+        # subdirectories), so whole subtrees are counted.
+        cache_roots: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(root_dir, onerror=None):
+            absolute = os.path.abspath(dirpath)
+            if os.path.basename(dirpath).lower() in _CACHE_DIR_NAMES:
+                cache_roots.append(absolute)
+                in_cache_tree = True
+            else:
+                in_cache_tree = any(absolute.startswith(root + os.sep) for root in cache_roots)
+            if not in_cache_tree:
+                continue
+            for name in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return total
+
+
 def get_anti_bot_user_agent(default_ua: str = "") -> str:
     """Remove the WebView2 token while retaining a normal desktop Edge UA."""
     ua = default_ua or DEFAULT_EDGE_USER_AGENT

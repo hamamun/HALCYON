@@ -12,7 +12,18 @@ BrowserPopup {
     property var browser: null
     property var clearDialog: null
 
+    // The main-window anchor (the ⋯ menu button) and the main window itself,
+    // remembered from openFor().  Needed when the clear-browsing dialog opens:
+    // this dropdown is a separate popup Window, so `root.Window.window` is NOT
+    // usable here (Window.window only supports Item types) and a button inside
+    // this popup is a dead anchor once the dropdown hides.  The dialog must be
+    // parented to and anchored in the main window, Edge-style.
+    property Item _mainAnchor: null
+    property var _mainWindow: null
+
     function openFor(anchorItem, ownerWindow) {
+        _mainAnchor = anchorItem
+        _mainWindow = ownerWindow
         showBelow(anchorItem, ownerWindow)
     }
 
@@ -32,8 +43,17 @@ BrowserPopup {
                 glyph: Glyphs.clearBrowsingData
                 onClicked: {
                     root.hidePopup()
-                    if (root.clearDialog)
-                        root.clearDialog.openFor(clearButton, root.Window.window)
+                    var dialog = root.clearDialog
+                    var anchor = root._mainAnchor
+                    var owner = root._mainWindow
+                    if (!dialog || !anchor || !owner)
+                        return
+                    // Deferred one tick: showing a new Qt.Popup in the same
+                    // event that hides this one lets the dropdown's close /
+                    // deactivation handling dismiss the new popup on Windows.
+                    Qt.callLater(function() {
+                        dialog.openFor(anchor, owner)
+                    })
                 }
             }
             Item { Layout.fillWidth: true }
