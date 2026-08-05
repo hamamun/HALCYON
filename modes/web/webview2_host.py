@@ -229,7 +229,12 @@ class WebViewHost(QObject):
 
         def fullscreen_changed(_sender: Any, _args: Any) -> None:
             try:
-                self.fullscreenChanged.emit(bool(self.webview.ContainsFullScreenElement))
+                is_fs = bool(self.webview.ContainsFullScreenElement)
+                self.fullscreenChanged.emit(is_fs)
+                # Real host-window fullscreen, not just content-area
+                parent_win = self.parent()
+                if parent_win is not None and hasattr(parent_win, "showFullScreen"):
+                    parent_win.showFullScreen() if is_fs else parent_win.showNormal()
             except Exception:
                 pass
 
