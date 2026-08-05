@@ -3,22 +3,41 @@ import QtQuick.Layouts
 import QtQuick.Window
 import Halcyon.Ui
 
-// Browser navigation chrome.  This is intentionally not a player transport:
-// every action below changes browser history/page state only.
+// Browser navigation chrome - Edge-like URL behaviour (§P3.3).
+// Fixed: new tab blank, switch/close always shows correct URL, never copies old.
+// Suggestions dropdown: local tabs/bookmarks + free Google suggest (no new lib).
 Rectangle {
     id: root
     height: Theme.toolbarRowHeight
     color: Theme.baseElevated
 
     property var browser: null
+    property bool _isSyncing: false
 
     function currentUrl() {
         return browser && browser.activeTab ? (browser.activeTab.url || "") : ""
     }
 
-    function syncUrlField() {
-        if (!urlInput.activeFocus)
-            urlInput.text = currentUrl()
+    // Edge-like: force=true always overwrites, even when focused - needed for tab switch/close/new
+    function syncUrlField(force) {
+        var shouldForce = !!force
+        if (shouldForce || !urlInput.activeFocus) {
+            var url = currentUrl()
+            if (urlInput.text !== url) {
+                _isSyncing = true
+                urlInput.text = url
+                _isSyncing = false
+            }
+        }
+    }
+
+    function commitNavigation(queryText) {
+        if (!browser)
+            return
+        urlSuggestions.hidePopup()
+        browser.navigateActive(queryText)
+        // Edge moves focus to page after Enter/Go
+        urlInput.focus = false
     }
 
     RowLayout {
@@ -31,27 +50,40 @@ Rectangle {
             glyph: Glyphs.back
             tooltip: "Back"
             enabled: root.browser && root.browser.activeTab.canGoBack
-            onClicked: if (root.browser) root.browser.goBack()
+            onClicked: {
+                urlSuggestions.hidePopup()
+                if (root.browser) root.browser.goBack()
+            }
         }
 
         IconButton {
             glyph: Glyphs.forward
             tooltip: "Forward"
             enabled: root.browser && root.browser.activeTab.canGoForward
-            onClicked: if (root.browser) root.browser.goForward()
+            onClicked: {
+                urlSuggestions.hidePopup()
+                if (root.browser) root.browser.goForward()
+            }
         }
 
         IconButton {
             glyph: root.browser && root.browser.activeTab.loading ? Glyphs.cancel : Glyphs.refresh
             tooltip: root.browser && root.browser.activeTab.loading ? "Stop" : "Reload"
             enabled: root.browser && root.browser.tabCount > 0 && !root.browser.activeTab.internal
-            onClicked: if (root.browser) root.browser.reloadOrStop()
+            onClicked: {
+                urlSuggestions.hidePopup()
+                if (root.browser) root.browser.reloadOrStop()
+            }
         }
 
         IconButton {
             glyph: Glyphs.home
             tooltip: "Home (site homepage or Google)"
-            onClicked: if (root.browser) root.browser.navigateHome()
+            onClicked: {
+                urlSuggestions.hidePopup()
+                if (root.browser) root.browser.navigateHome()
+                urlInput.focus = false
+            }
         }
 
         GlassField {
@@ -61,28 +93,88 @@ Rectangle {
             placeholderText: root.browser && root.browser.tabCount === 0
                              ? "Search Google or enter an address"
                              : "Search or enter address"
+
+            // Edge: clicking address bar selects all; leaving restores if not typing
             onActiveFocusChanged: {
-                if (activeFocus)
+                if (activeFocus) {
                     selectAll()
-                else
-                    root.syncUrlField()
+                } else {
+                    root.syncUrlField(false)
+                    urlSuggestions.hidePopup()
+                }
             }
+
+            // While typing show suggestions - suppress during forced sync (tab switch)
+            onTextChanged: {
+                if (root._isSyncing)
+                    return
+                if (!activeFocus)
+                    return
+                var trimmed = text.trim()
+                if (trimmed.length > 0 && root.browser) {
+                    urlSuggestions.showFor(urlInput, root.Window.window, text)
+                } else {
+                    urlSuggestions.hidePopup()
+                }
+            }
+
+            // Keyboard handling - Edge style
+            Keys.onPressed: function(event) {
+                if (urlSuggestions.visible) {
+                    if (event.key === Qt.Key_Down) {
+                        urlSuggestions.selectNext()
+                        event.accepted = true
+                        return
+                    } else if (event.key === Qt.Key_Up) {
+                        urlSuggestions.selectPrev()
+                        event.accepted = true
+                        return
+                    }
+                }
+            }
+
+            Keys.onEscapePressed: function(event) {
+                // First Esc hides suggestions, second restores URL, third blurs
+                if (urlSuggestions.visible) {
+                    urlSuggestions.hidePopup()
+                    event.accepted = true
+                    return
+                }
+                var realUrl = root.currentUrl()
+                if (text !== realUrl) {
+                    root.syncUrlField(true)
+                    selectAll()
+                    event.accepted = true
+                    return
+                }
+                // Already restored -> blur to page (Edge behaviour)
+                focus = false
+                event.accepted = true
+            }
+
+            Keys.onReturnPressed: function(event) {
+                // Handled in onAccepted but keep for Up/Down selection
+                if (urlSuggestions.visible && urlSuggestions.hasSelection) {
+                    urlSuggestions.acceptSelection()
+                    event.accepted = true
+                    return
+                }
+                // let onAccepted handle
+            }
+
+            // Enter or Down selection via Return
             onAccepted: {
+                if (urlSuggestions.visible && urlSuggestions.hasSelection) {
+                    urlSuggestions.acceptSelection()
+                    return
+                }
                 if (!root.browser)
                     return
-                root.browser.navigateActive(text)
-                text = root.currentUrl()
-                selectAll()
+                root.commitNavigation(text)
             }
         }
 
-        // Mouse-click alternative to pressing Enter in the address field.
-        //
-        // Deliberately NOT Glyphs.chevronRight: that icon-font codepoint
-        // (E76C) means "ChevronRight" in Segoe MDL2 Assets but maps to a
-        // euro-like glyph in Segoe Fluent Icons (Windows 11).  The plain
-        // text character "›" (U+203A) renders as the same clean chevron in
-        // every font, with no icon-font dependency at all.
+        // Go button - Edge-like
         IconButton {
             glyph: "\u203A"
             plainTextGlyph: true
@@ -91,9 +183,11 @@ Rectangle {
             onClicked: {
                 if (!root.browser)
                     return
-                root.browser.navigateActive(urlInput.text)
-                urlInput.text = root.currentUrl()
-                urlInput.selectAll()
+                if (urlSuggestions.visible && urlSuggestions.hasSelection) {
+                    urlSuggestions.acceptSelection()
+                    return
+                }
+                root.commitNavigation(urlInput.text)
             }
         }
 
@@ -106,6 +200,7 @@ Rectangle {
                      && !!root.browser.activeTab.url && !root.browser.activeTab.internal
             active: saved
             onClicked: {
+                urlSuggestions.hidePopup()
                 if (saved)
                     editBookmarkPopup.showBelow(starButton, root.Window.window)
                 else
@@ -118,6 +213,7 @@ Rectangle {
             glyph: Glyphs.more
             tooltip: "Bookmarks"
             onClicked: {
+                urlSuggestions.hidePopup()
                 if (bookmarksDropdown.visible)
                     bookmarksDropdown.hidePopup()
                 else
@@ -126,7 +222,7 @@ Rectangle {
         }
     }
 
-    // Empty-star flow: title can be changed, URL remains the active page.
+    // Bookmark add/edit popups unchanged
     BrowserPopup {
         id: addBookmarkPopup
         width: 340
@@ -179,8 +275,6 @@ Rectangle {
         }
     }
 
-    // Filled-star flow.  The saved page URL intentionally stays fixed: a user
-    // is editing its bookmark label, not changing the page they are viewing.
     BrowserPopup {
         id: editBookmarkPopup
         width: 340
@@ -249,15 +343,45 @@ Rectangle {
         browser: root.browser
     }
 
+    // Edge-like omnibox - local + free Google suggest
+    UrlSuggestionsDropdown {
+        id: urlSuggestions
+        browser: root.browser
+        onSuggestionAccepted: function(text) {
+            root.commitNavigation(text)
+        }
+    }
+
     Connections {
         target: root.browser
         enabled: target !== null
-        function onActiveTabChanged() { root.syncUrlField() }
+        // Edge: switching tab always shows that tab's URL and blurs address bar
+        function onActiveTabChanged() {
+            urlSuggestions.hidePopup()
+            root.syncUrlField(true)
+            urlInput.focus = false
+        }
+        function onTabsChanged() {
+            // When last tab closed -> blank (Edge)
+            if (root.browser && root.browser.tabCount === 0) {
+                urlSuggestions.hidePopup()
+                root.syncUrlField(true)
+                urlInput.focus = false
+            }
+        }
+        function onActiveTabIndexChanged() {
+            // Some paths emit only index - force sync as safety
+            urlSuggestions.hidePopup()
+            root.syncUrlField(true)
+        }
         function onAddressFocusRequested() {
+            // New blank tab -> blank + focused + select all (Edge)
+            urlSuggestions.hidePopup()
+            root.syncUrlField(true)
             urlInput.forceActiveFocus()
             urlInput.selectAll()
         }
     }
 
-    Component.onCompleted: syncUrlField()
+    Component.onCompleted: syncUrlField(true)
 }
