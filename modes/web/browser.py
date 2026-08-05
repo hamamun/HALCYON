@@ -28,9 +28,15 @@ BOOKMARKS_URL = "halcyon://bookmarks"
 
 # Popup burst protection — prevents ad-heavy sites (e.g. bilibili.tv) from
 # spawning 10+ tabs in one click and crashing WebView2 controller creation.
+#
+# Two tiers: popups from the same domain as the active tab (legitimate video
+# pages, "watch next" links) get a generous allowance, while cross-domain
+# ad popups are throttled hard (1 per burst window).
 POPUP_BURST_WINDOW_S = 3.0
 POPUP_MAX_PER_BURST = 1
 POPUP_MIN_INTERVAL_S = 0.8
+POPUP_SAME_DOMAIN_MAX_PER_BURST = 4
+POPUP_SAME_DOMAIN_MIN_INTERVAL_S = 0.3
 POPUP_BLOCKED_MESSAGE_DURATION_MS = 4000
 
 
@@ -410,25 +416,47 @@ class BrowserContext(QObject):
     @Slot(str)
     def onPopupRequested(self, url: str) -> None:  # noqa: N802 - QML API
         # Burst protection for ad-heavy sites like bilibili.tv:
-        # A single click should never spawn 10+ tabs and kill WebView2.
+        # A single click can spawn 10+ NewWindowRequested events.  Creating a
+        # controller per request overloads WebView2 and ends in a blank stage,
+        # so popups are rate-limited with two tiers: same-domain video pages
+        # get a generous allowance, cross-domain ad popups are throttled hard.
         now = time.monotonic()
         # prune old timestamps outside the burst window
         self._popup_times = [t for t in self._popup_times if now - t < POPUP_BURST_WINDOW_S]
 
         raw = (url or "").strip()
         if not raw or raw.lower().startswith("about:"):
-            self._handle_blocked_popup(now, f"blank popup blocked: {url!r}")
+            self._handle_blocked_popup(f"blank popup blocked: {url!r}")
             return
 
-        # too fast since last allowed popup?
-        if self._last_popup_time and (now - self._last_popup_time) < POPUP_MIN_INTERVAL_S:
-            # if we already allowed one very recently, treat this as burst spam
-            if len(self._popup_times) >= 1:
-                self._handle_blocked_popup(now, f"popup throttled too fast: {url}")
+        popup_domain = self._extract_domain(raw)
+        active = self._active_tab()
+        active_domain = self._extract_domain(active.url if active else "")
+        same_domain = bool(active_domain and popup_domain) and self._is_same_domain_or_subdomain(
+            active_domain, popup_domain
+        )
+
+        if same_domain:
+            burst_max = POPUP_SAME_DOMAIN_MAX_PER_BURST
+            min_interval = POPUP_SAME_DOMAIN_MIN_INTERVAL_S
+            kind = "same-domain"
+        else:
+            burst_max = POPUP_MAX_PER_BURST
+            min_interval = POPUP_MIN_INTERVAL_S
+            kind = "cross-domain"
+
+        # too fast since the last allowed popup?
+        if self._last_popup_time and (now - self._last_popup_time) < min_interval and len(self._popup_times) >= 1:
+            # Same-domain popups may arrive back-to-back until the per-burst
+            # allowance is exhausted; cross-domain ones are blocked as spam.
+            if not same_domain or len(self._popup_times) >= burst_max:
+                self._handle_blocked_popup(f"popup throttled too fast ({kind}): {url}")
                 return
 
-        if len(self._popup_times) >= POPUP_MAX_PER_BURST:
-            self._handle_blocked_popup(now, f"popup burst blocked ({len(self._popup_times)+1} in {POPUP_BURST_WINDOW_S}s): {url}")
+        if len(self._popup_times) >= burst_max:
+            self._handle_blocked_popup(
+                f"popup burst blocked ({kind}, {len(self._popup_times) + 1} in {POPUP_BURST_WINDOW_S}s): {url}",
+            )
             return
 
         self._popup_times.append(now)
@@ -437,6 +465,43 @@ class BrowserContext(QObject):
         # WebViewHost already marked the .NET request as handled.  This method
         # only decides whether a new Halcyon tab fits under the 15-tab cap.
         self.addTab(url)
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        """Return the bare host of a URL: lowercase, no port, no 'www.' prefix.
+
+        Used to classify popups as same-domain (video pages) vs cross-domain
+        (ad networks) without being confused by scheme, port or subdomain.
+        """
+        raw = (url or "").strip()
+        if not raw:
+            return ""
+        try:
+            netloc = urllib.parse.urlsplit(raw).netloc
+            if not netloc:
+                netloc = urllib.parse.urlsplit("//" + raw).netloc
+        except Exception:
+            netloc = ""
+        host = (netloc or "").split("@")[-1]  # strip any userinfo
+        if ":" in host:  # strip port (IPv6 literals are an accepted loss)
+            host = host.split(":", 1)[0]
+        host = host.lower().strip(".")
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+
+    @staticmethod
+    def _is_same_domain_or_subdomain(a: str, b: str) -> bool:
+        """True when both domains are equal or one is a subdomain of the other."""
+        a = (a or "").lower().strip(".")
+        b = (b or "").lower().strip(".")
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        if b.endswith("." + a) or a.endswith("." + b):
+            return True
+        return False
 
     @Slot()
     def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
@@ -467,14 +532,15 @@ class BrowserContext(QObject):
         self._limit_timer.start()
         logger.info("Web tab cap (%d) reached", MAX_TABS)
 
-    def _handle_blocked_popup(self, now: float, log_msg: str) -> None:
-        # Even when blocked we update last time to keep cooldown meaningful
-        # but we do NOT push into _popup_times, so allowed count stays limited.
+    def _handle_blocked_popup(self, log_msg: str) -> None:
+        """Record a throttled popup: bump counter, surface toast, restart timer.
+
+        Blocked popups do NOT enter ``_popup_times``, so a storm can never
+        extend the per-burst allowance on its own.
+        """
         self._popup_blocked_count += 1
-        self._popup_blocked_visible = True
         self.popupBlockedCountChanged.emit()
-        self.popupBlockedMessageVisibleChanged.emit()
-        self._popup_blocked_timer.start()
+        self._show_popup_blocked_message()
         logger.info("Popup blocked (%d total): %s", self._popup_blocked_count, log_msg)
 
     def _show_popup_blocked_message(self) -> None:
