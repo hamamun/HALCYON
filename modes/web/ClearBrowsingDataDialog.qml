@@ -6,6 +6,11 @@ import Halcyon.Ui
 // Clear Browsing Data dialog — the one place every browser-data wipe lives
 // (§4.1). A native owned popup window (BrowserPopup) so it floats above the
 // WebView2 child HWND where a scene-graph Dialog would sit *under* the page.
+//
+// Opened from the bookmarks dropdown's "Clear browsing data" button.  The
+// dropdown passes the MAIN window's ⋯ menu-button anchor and the main window
+// itself (a popup Window cannot use Window.window and dies as an anchor once
+// hidden) — so this dialog opens Edge-style below the menu button.
 BrowserPopup {
     id: root
     width: 380
@@ -25,10 +30,42 @@ BrowserPopup {
     ]
     property int selectedRangeIndex: 1   // default: Last 24 hours
 
+    // On-disk cache size in bytes, probed once per open (walking the profile
+    // is cheap but not free) and again after a clear.  Only the cache is
+    // measurable, so the "Freed space" line is driven by the cache checkbox.
+    property real cacheBytes: 0
+
     signal cleared()
 
     function openFor(anchorItem, ownerWindow) {
+        // Keep the dialog inside the owner window on short screens: shrink it
+        // to the space between the anchor and the window's bottom edge.
+        if (anchorItem && ownerWindow) {
+            var anchorBottom = anchorItem.mapToGlobal(0, anchorItem.height).y + Theme.spaceXs
+            var ownerBottom = ownerWindow.y + ownerWindow.height
+            root.height = Math.max(280, Math.min(480, ownerBottom - anchorBottom))
+        }
         showBelow(anchorItem, ownerWindow)
+    }
+
+    function refreshCacheSize() {
+        cacheBytes = root.browser ? root.browser.cacheSizeBytes() : 0
+    }
+
+    function formatBytes(n) {
+        if (n <= 0)
+            return "0 MB"
+        var mb = n / (1024 * 1024)
+        if (mb >= 1024)
+            return "~" + (mb / 1024).toFixed(2) + " GB"
+        if (mb < 1)
+            return "less than 1 MB"
+        return "~" + (mb < 10 ? mb.toFixed(1) : Math.round(mb).toString()) + " MB"
+    }
+
+    onVisibleChanged: {
+        if (visible)
+            refreshCacheSize()
     }
 
     // Collect the ticked option ids and the chosen time window, then clear.
@@ -45,6 +82,7 @@ BrowserPopup {
         var minutes = timeRanges[selectedRangeIndex].minutes
         if (root.browser)
             root.browser.clearBrowsingData(picked, minutes)
+        refreshCacheSize()
         root.cleared()
         root.hidePopup()
     }
@@ -101,7 +139,7 @@ BrowserPopup {
             color: Theme.glassBorder
         }
 
-        // checkbox list — fixed 8 rows, each with optional warning line
+        // checkbox list — fixed 8 rows, each with an optional subtitle line
         Flickable {
             id: optionsList
             Layout.fillWidth: true
@@ -120,6 +158,7 @@ BrowserPopup {
                     label: "Browsing history"
                     defaultTick: true
                     destructive: false
+                    note: "Address-bar suggestions disappear, history is empty."
                 }
                 CheckBoxRow {
                     id: cb1
@@ -127,6 +166,7 @@ BrowserPopup {
                     label: "Download history"
                     defaultTick: false
                     destructive: false
+                    note: "The list clears — files already saved stay on disk."
                 }
                 CheckBoxRow {
                     id: cb2
@@ -141,6 +181,7 @@ BrowserPopup {
                     label: "Cached images and files"
                     defaultTick: true
                     destructive: false
+                    note: "The big space-saver. Pages load slowly once, then speed back up."
                 }
                 CheckBoxRow {
                     id: cb4
@@ -162,6 +203,7 @@ BrowserPopup {
                     label: "Site permissions"
                     defaultTick: false
                     destructive: false
+                    note: "Camera, location and mic reset — sites will ask again."
                 }
                 CheckBoxRow {
                     id: cb7
@@ -169,6 +211,7 @@ BrowserPopup {
                     label: "Service workers and offline data"
                     defaultTick: false
                     destructive: false
+                    note: "Offline sites re-download; can fix broken sites."
                 }
             }
         }
@@ -177,6 +220,19 @@ BrowserPopup {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
             color: Theme.glassBorder
+        }
+
+        // Freed-space estimate — updates live as the cache box is ticked.
+        // Only the cache size is measurable (history/cookies are not), so the
+        // number appears while "Cached images and files" is selected.
+        Text {
+            Layout.fillWidth: true
+            visible: cb3.checked && root.cacheBytes > 0
+            text: "Freed space: " + root.formatBytes(root.cacheBytes)
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.textMuted
+            elide: Text.ElideRight
         }
 
         // footer: Cancel + Clear

@@ -5,6 +5,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# headless test scaffolding (stub system libs for containers without libGL/X11)
+.stublibs/
+
 # builds
 build/
 dist/

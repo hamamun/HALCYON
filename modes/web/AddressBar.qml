@@ -109,8 +109,10 @@ Rectangle {
                         selectAll()
                     }
                 } else {
-                    var popupWindow = urlSuggestions.Window.window
-                    if (urlSuggestions.visible && popupWindow && popupWindow.active) {
+                    // urlSuggestions IS the popup Window (a BrowserPopup), so
+                    // test its own activation — `urlSuggestions.Window.window`
+                    // is invalid here (Window.window only supports Item types).
+                    if (urlSuggestions.visible && urlSuggestions.active) {
                         // The native suggestions window briefly took window
                         // activation (Windows quirk — should not happen with
                         // tooltip-style flags, but heal it): give typing focus
