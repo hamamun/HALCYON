@@ -22,6 +22,10 @@ BrowserPopup {
     // Suggestions are chrome, not a dialog: never take activation/focus
     acceptsFocus: false
 
+    // The address bar the popup belongs to; we re-secure typing focus there
+    // whenever the popup becomes visible (Edge keeps focus in the bar).
+    property Item anchorItemRef: null
+
     width: 480
     // Height is driven only by updateHeight() through desiredHeight, so the
     // declarative `height` binding is never overwritten imperatively
@@ -59,6 +63,7 @@ BrowserPopup {
         }
         queryText = trimmed
         selectedIndex = -1
+        anchorItemRef = anchorItem
         rebuildLocal(trimmed)
 
         // Position below anchor (url field)
@@ -73,7 +78,12 @@ BrowserPopup {
         if (suggestionsModel.count > 0) {
             updateHeight()
             visible = true
-            raise()
+            // Tooltip-style popups never activate on Windows, but re-secure
+            // focus in the address bar anyway: typing must continue
+            // uninterrupted (Edge). No raise() — raising can re-activate a
+            // native popup and steal the very focus we need to keep.
+            if (anchorItemRef)
+                anchorItemRef.forceActiveFocus()
         } else {
             // No local yet — keep hidden until remote arrives, but still prepare to show
             visible = false
@@ -189,7 +199,10 @@ BrowserPopup {
                             updateHeight()
                             if (!visible) {
                                 visible = true
-                                raise()
+                                // Same as showFor(): keep/restore typing focus
+                                // in the address bar, never re-activate.
+                                if (anchorItemRef)
+                                    anchorItemRef.forceActiveFocus()
                             }
                         }
                     } catch (e) {

@@ -14,8 +14,20 @@ Window {
     // True for dialogs that must take focus (bookmark forms with text input);
     // false for autocomplete-style overlays that must never steal focus from
     // the address bar or the WebView2 page (tooltip-like, no activation).
+    //
+    // Windows quirk (the "only one letter typed" bug): a Qt.Popup window grabs
+    // keyboard focus when it is shown, even combined with
+    // Qt.WindowDoesNotAcceptFocus — so the very first keystroke that opened the
+    // suggestions popup made the address bar lose focus and every later key
+    // went nowhere.  Tooltip-style flags are the Qt recipe for this: on
+    // Windows they map to WS_EX_NOACTIVATE, i.e. the window is shown without
+    // ever being activated, so focus stays in the address bar exactly like
+    // Edge's in-window dropdown.
     property bool acceptsFocus: true
-    flags: Qt.Popup | Qt.FramelessWindowHint | (acceptsFocus ? 0 : Qt.WindowDoesNotAcceptFocus)
+    flags: acceptsFocus
+           ? Qt.Popup | Qt.FramelessWindowHint
+           : Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+             | Qt.WindowDoesNotAcceptFocus
     color: "transparent"
     visible: false
 

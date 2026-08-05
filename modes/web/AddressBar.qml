@@ -13,6 +13,9 @@ Rectangle {
 
     property var browser: null
     property bool _isSyncing: false
+    // Set when focus is being handed back from the suggestions popup so the
+    // focus-in handler skips selectAll() (typing must continue, Edge-style).
+    property bool _refocusingFromPopup: false
 
     function currentUrl() {
         return browser && browser.activeTab ? (browser.activeTab.url || "") : ""
@@ -97,8 +100,25 @@ Rectangle {
             // Edge: clicking address bar selects all; leaving restores if not typing
             onActiveFocusChanged: {
                 if (activeFocus) {
-                    selectAll()
+                    if (root._refocusingFromPopup) {
+                        // Focus handed back from the suggestions popup — keep
+                        // the caret where it was so the next letter appends
+                        // instead of replacing the selection.
+                        root._refocusingFromPopup = false
+                    } else {
+                        selectAll()
+                    }
                 } else {
+                    var popupWindow = urlSuggestions.Window.window
+                    if (urlSuggestions.visible && popupWindow && popupWindow.active) {
+                        // The native suggestions window briefly took window
+                        // activation (Windows quirk — should not happen with
+                        // tooltip-style flags, but heal it): give typing focus
+                        // back without touching the text or hiding suggestions.
+                        root._refocusingFromPopup = true
+                        urlInput.forceActiveFocus()
+                        return
+                    }
                     root.syncUrlField(false)
                     urlSuggestions.hidePopup()
                 }
