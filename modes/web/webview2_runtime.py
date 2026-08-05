@@ -273,11 +273,15 @@ def get_stage_error_message() -> str:
     return "WebView2 is not available"
 
 
-def _wait_for_task(task: Any, timeout_s: float = 15.0) -> Any:
+def _wait_for_task(task: Any, timeout_s: float = 25.0) -> Any:
     """Synchronously obtain a .NET Task result across pythonnet runtimes.
 
     WebView2 async creation methods require Windows message pumping on the STA
     GUI thread. Pumping Qt events while waiting prevents UI thread deadlocks.
+
+    The default timeout is generous because ad-heavy sites (e.g. bilibili.tv)
+    can queue several controller creations in a row; a too-aggressive timeout
+    would turn a slow but healthy startup into a blank stage.
     """
     import time
 
