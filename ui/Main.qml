@@ -284,11 +284,13 @@ Shell {
             if (!window.leftPanelAvailable()) return;
             window.leftPanelOpen = !window.leftPanelOpen;
             Settings.set("window.leftPanelVisible", window.leftPanelOpen);
+            if (window.fullscreen) window.wakeChrome();
         }
         function toggleRightPanel() {
             if (!window.rightDockAvailable()) return;   // M3U/Web: inert (§P2.4)
             window.rightPanelOpen = !window.rightPanelOpen;
             Settings.set("window.rightPanelVisible", window.rightPanelOpen);
+            if (window.fullscreen) window.wakeChrome();
         }
         function showEqualizer() {
             if (!window.rightDockAvailable()) return;   // EQ is Local's (§P2.4)
@@ -559,7 +561,8 @@ Shell {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: body.transportInset
-                open: !window.fullscreen && window.leftPanelOpen && window.leftPanelAvailable()
+                open: window.leftPanelOpen && window.leftPanelAvailable()
+                      && (!window.fullscreen || window.chromeVisible)
                 // Clearing the source matters as well as width: a native Web
                 // stage must not leave Web's placeholder panel instantiated
                 // behind an invisible zero-width dock.
@@ -584,8 +587,10 @@ Shell {
                 anchors.bottomMargin: body.transportInset
                 // Gated on the mode's rich-chrome flag: in M3U/Web the dock is
                 // simply absent — even if it was open when the chip flipped.
-                open: !window.fullscreen && window.rightPanelOpen
-                      && window.rightDockAvailable()
+                // In fullscreen panels auto-hide together with the transport
+                // bar (chromeVisible) — move mouse to bring all back.
+                open: window.rightPanelOpen && window.rightDockAvailable()
+                      && (!window.fullscreen || window.chromeVisible)
                 blurSource: stage
                 z: 10
 
@@ -862,6 +867,26 @@ Shell {
             }
 
             if (event.key === Qt.Key_Escape) {
+                // 1st Esc: close fullscreen panels (both together), stay fullscreen.
+                // 2nd Esc: exit fullscreen. Mirrors YouTube / video player UX.
+                if (window.fullscreen
+                    && (window.leftPanelOpen || window.rightPanelOpen)) {
+                    var hadLeft = window.leftPanelOpen && window.leftPanelAvailable();
+                    var hadRight = window.rightPanelOpen && window.rightDockAvailable();
+                    if (hadLeft || hadRight) {
+                        if (window.leftPanelOpen) {
+                            window.leftPanelOpen = false;
+                            Settings.set("window.leftPanelVisible", false);
+                        }
+                        if (window.rightPanelOpen) {
+                            window.rightPanelOpen = false;
+                            Settings.set("window.rightPanelVisible", false);
+                        }
+                        window.wakeChrome();
+                        event.accepted = true;
+                        return;
+                    }
+                }
                 Actions.exitFullscreen();
                 event.accepted = true;
                 return;
