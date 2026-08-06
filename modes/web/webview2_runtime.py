@@ -367,53 +367,47 @@ def get_shared_environment() -> Any:
 #     CoreWebView2Environment has no Profile; CoreWebView2.Profile is the
 #     documented source.
 #
-# The eight checkbox rows in display order.  ``kinds`` is the combined
-# WebView2 flag set; ``default`` is whether the row starts ticked;
-# ``destructive`` marks the row with a warning cue in the UI.
-CLEAR_DATA_OPTIONS = [
-    {"id": "browsingHistory", "label": "Browsing history", "destructive": False, "default": True},
-    {"id": "downloadHistory", "label": "Download history", "destructive": False, "default": False},
-    {"id": "cookies", "label": "Cookies and site data", "destructive": True, "default": True},
-    {"id": "cache", "label": "Cached images and files", "destructive": False, "default": True},
-    {"id": "passwords", "label": "Passwords", "destructive": True, "default": False},
-    {"id": "autofill", "label": "Autofill form data", "destructive": True, "default": False},
-    {"id": "sitePermissions", "label": "Site permissions", "destructive": False, "default": False},
-    {"id": "serviceWorkers", "label": "Service workers and offline data", "destructive": False, "default": False},
-]
-
-
+# The id strings here are the SAME ids the dialog's eight CheckBoxRows use
+# (see ClearBrowsingDataDialog.qml).  The QML owns the rows; this table owns
+# the mapping id -> WebView2 flag bits.  Values below are Microsoft's official
+# CoreWebView2BrowsingDataKinds constants (verified against the SDK docs).
 def _kind_flags() -> dict[str, int]:
     """Map checkbox id -> WebView2 data-kind flag bits.
 
     Read at call time: the bridge is only importable after
     ``get_shared_environment`` has loaded it, which is guaranteed to have
     happened by the time the user can click Clear.  On a non-Windows dev box
-    the fallback constants keep the pure-Python tests meaningful.
+    the fallback constants (which equal the official enum values) keep the
+    pure-Python tests meaningful.
     """
     try:
         from Microsoft.Web.WebView2.Core import CoreWebView2BrowsingDataKinds as K
 
-        kinds = {
+        return {
             "browsingHistory": int(K.BrowsingHistory),
             "downloadHistory": int(K.DownloadHistory),
             "cookies": int(K.Cookies) | int(K.AllDomStorage),
             "cache": int(K.DiskCache),
             "passwords": int(K.PasswordAutosave),
             "autofill": int(K.GeneralAutofill),
-            "sitePermissions": int(K.SitePermissions),
+            # Site permissions are cleared by the Settings kind (the SDK has
+            # no separate "site permissions" member).
+            "sitePermissions": int(K.Settings),
             "serviceWorkers": int(K.ServiceWorkers),
         }
-        return kinds
     except Exception:
+        # Official CoreWebView2BrowsingDataKinds values — keep in lock-step
+        # with the try branch above (test_kind_flags_match_official_enum
+        # guards this table).
         return {
-            "browsingHistory": 1,
-            "downloadHistory": 2,
-            "cookies": 4 | 256,      # Cookies | AllDomStorage
-            "cache": 8,              # DiskCache
-            "passwords": 32,         # PasswordAutosave
-            "autofill": 16,          # GeneralAutofill
-            "sitePermissions": 64,
-            "serviceWorkers": 128,
+            "browsingHistory": 4096,    # BrowsingHistory
+            "downloadHistory": 512,     # DownloadHistory
+            "cookies": 64 | 32,         # Cookies | AllDomStorage
+            "cache": 256,               # DiskCache
+            "passwords": 2048,          # PasswordAutosave
+            "autofill": 1024,           # GeneralAutofill
+            "sitePermissions": 8192,    # Settings (covers site permissions)
+            "serviceWorkers": 32768,    # ServiceWorkers
         }
 
 
@@ -443,7 +437,17 @@ def clear_browsing_data_all(profile: Any, options: list[str], *, wipe_folders: b
     ok = False
     try:
         # The one-argument form: clears these kinds for ALL TIME.
-        task = profile.ClearBrowsingDataAsync(combined)
+        arg = combined
+        try:
+            # Wrap the combined int in the real enum type so pythonnet never
+            # has to guess; if the bridge is somehow absent, the int itself
+            # still converts fine.
+            from Microsoft.Web.WebView2.Core import CoreWebView2BrowsingDataKinds as K
+
+            arg = K(combined)
+        except Exception:
+            pass
+        task = profile.ClearBrowsingDataAsync(arg)
         _wait_for_task(task, timeout_s=60.0)
         logger.info("Cleared browsing data (kinds=0x%04X, all time)", combined)
         ok = True

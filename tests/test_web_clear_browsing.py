@@ -305,17 +305,35 @@ class _FakeProfile:
 
 
 def _monkeypatch_kinds(monkeypatch):
-    """Pin the fallback flag table so tests can assert exact bit masks."""
+    """Pin the flag table so tests can assert exact bit masks (official values)."""
     monkeypatch.setattr(webview2_runtime, "_kind_flags", lambda: {
-        "browsingHistory": 1,
-        "downloadHistory": 2,
-        "cookies": 4 | 256,
-        "cache": 8,
-        "passwords": 32,
-        "autofill": 16,
-        "sitePermissions": 64,
-        "serviceWorkers": 128,
+        "browsingHistory": 4096,
+        "downloadHistory": 512,
+        "cookies": 64 | 32,
+        "cache": 256,
+        "passwords": 2048,
+        "autofill": 1024,
+        "sitePermissions": 8192,
+        "serviceWorkers": 32768,
     })
+
+
+def test_kind_flags_match_official_webview2_enum_values():
+    """The flag table must equal Microsoft's documented enum values.
+
+    This holds in BOTH branches: with the real bridge (Windows) and with the
+    fallback table (this sandbox).  If either drifts from the SDK, clearing
+    would silently hit the wrong data kinds.
+    """
+    flags = webview2_runtime._kind_flags()
+    assert flags["browsingHistory"] == 4096      # BrowsingHistory
+    assert flags["downloadHistory"] == 512       # DownloadHistory
+    assert flags["cookies"] == 64 | 32           # Cookies | AllDomStorage
+    assert flags["cache"] == 256                 # DiskCache
+    assert flags["passwords"] == 2048            # PasswordAutosave
+    assert flags["autofill"] == 1024             # GeneralAutofill
+    assert flags["sitePermissions"] == 8192      # Settings (site permissions)
+    assert flags["serviceWorkers"] == 32768      # ServiceWorkers
 
 
 def test_runtime_clear_calls_sdk_once_with_combined_flags(monkeypatch):
@@ -330,7 +348,8 @@ def test_runtime_clear_calls_sdk_once_with_combined_flags(monkeypatch):
     )
 
     assert ok is True
-    assert profile.calls == [1 | (4 | 256) | 8 | 32], "one call, flags OR-ed together"
+    expected = 4096 | (64 | 32) | 256 | 2048  # official enum values
+    assert profile.calls == [expected], "one call, flags OR-ed together"
     assert wiped == [1], "cache ticked -> folders wiped after the SDK call"
 
 
@@ -344,7 +363,7 @@ def test_runtime_clear_skips_folder_wipe_when_cache_not_ticked(monkeypatch):
     ok = webview2_runtime.clear_browsing_data_all(profile, ["passwords"])
 
     assert ok is True
-    assert profile.calls == [32]
+    assert profile.calls == [2048]
     assert wiped == [], "no cache row -> no folder wipe"
 
 
@@ -370,6 +389,46 @@ def test_runtime_clear_survives_sdk_failure_and_still_wipes_cache(monkeypatch):
     ok = webview2_runtime.clear_browsing_data_all(_BrokenProfile(), ["cache"])
     assert ok is False
     assert wiped == [1], "cache wipe is independent of the SDK call"
+
+
+# ---------------------------------------------------------------------------
+# full chain: QML checkboxes -> browser slot -> runtime -> one SDK call
+# ---------------------------------------------------------------------------
+def test_full_chain_qml_to_sdk_call(gui_app, tmp_path: Path, monkeypatch):
+    """The whole path in one test: ticked rows in the QML end up as exactly
+    one ClearBrowsingDataAsync call with the OR-ed official flags."""
+    _monkeypatch_kinds(monkeypatch)
+    monkeypatch.setattr(webview2_runtime, "_wait_for_task", lambda task, timeout_s=25: None)
+    wiped = []
+    monkeypatch.setattr(webview2_runtime, "_delete_cache_directories", lambda: wiped.append(1))
+
+    class _P:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def ClearBrowsingDataAsync(self, kinds: int):
+            self.calls.append(int(kinds))
+            return "task"
+
+    from PySide6.QtCore import QMetaObject
+
+    dialog, browser = _build_dialog(gui_app, tmp_path)
+    browser.addTab("https://example.com")
+    browser._tabs[0].host = SimpleNamespace(webview=SimpleNamespace(Profile=_P()))
+    fake_profile = browser._tabs[0].host.webview.Profile
+
+    rows = _checkbox_rows(dialog)
+    # Defaults are history + cookies + cache ticked.  Untick cookies, tick
+    # passwords -> expected kinds: BrowsingHistory | DiskCache | PasswordAutosave.
+    rows["cookies"].setProperty("checked", False)
+    rows["passwords"].setProperty("checked", True)
+
+    dialog.setProperty("visible", True)
+    assert QMetaObject.invokeMethod(dialog, "clearData")
+    QTest.qWait(30)
+
+    assert fake_profile.calls == [4096 | 256 | 2048]
+    assert wiped == [1], "cache ticked -> folder wipe ran after the SDK call"
 
 
 # ---------------------------------------------------------------------------
