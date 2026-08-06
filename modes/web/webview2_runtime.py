@@ -413,16 +413,26 @@ CLEAR_DATA_OPTIONS = [
 ]
 
 
-def clear_browsing_data(options: list[str], minutes: int | None) -> None:
+def clear_browsing_data(options: list[str], minutes: int | None, *, wipe_folders: bool = True) -> None:
     """Clear the requested browsing data from the shared WebView2 profile.
 
     ``options`` is the list of ``id`` values the user ticked. ``minutes`` is the
     time-window size, or ``None`` for "All time". Calls WebView2's
-    ``ClearBrowsingDataAsync`` on the shared environment's profile. Failures are
-    logged but never raised — a failed clear must not crash the browser.
+    ``ClearBrowsingDataAsync`` on the shared environment's profile. After the
+    SDK clear, for the cache option we also delete the regenerable cache
+    folders on disk (compiled JS, GPU/shader caches, etc.) that WebView2
+    doesn't wipe via the SDK flag — otherwise the size probe keeps reporting
+    the same number and the user sees "nothing cleared".
+
+    Failures are logged but never raised — a failed clear must not crash
+    the browser.
+
+    ``wipe_folders`` exists so tests can disable the on-disk deletion when
+    they are monkeypatching the SDK call; production always passes True.
     """
     if not _HAS_DATA_KINDS:
         return
+    want_cache = "cache" in (options or [])
     try:
         env = get_shared_environment()
         if env is None:
@@ -439,13 +449,17 @@ def clear_browsing_data(options: list[str], minutes: int | None) -> None:
         if combined == 0:
             return
 
-        # WebView2's ClearBrowsingDataAsync accepts an optional
-        # CoreWebView2ClearBrowsingDataTimeRange. The SDK exposes it on the
-        # profile; if the installed runtime is too old for the time-range API,
-        # fall back to clearing everything in the chosen kinds.
-        start_filetime = 0
-        end_filetime = 0
-        if minutes is not None:
+        # WebView2's ClearBrowsingDataAsync has two forms:
+        #   (a) ClearBrowsingDataAsync(kinds, timeRange) — windowed clear
+        #   (b) ClearBrowsingDataAsync(kinds)             — ALL TIME
+        # A (start=0, end=0) CoreWebView2ClearBrowsingDataTimeRange is an empty
+        # window and several SDK versions treat it as "clear nothing", so for
+        # "All time" we MUST take branch (b). The "minutes=None" sentinel is
+        # what CLEAR_DATA_TIME_RANGES uses for "All time"; any int value
+        # (including the previous buggy 0) becomes a real filetime window.
+        used_time_range = False
+        task = None
+        if minutes is not None and int(minutes) > 0:
             import time as _time
             # FILETIME is 100-ns intervals since 1601-01-01 UTC.
             now_100ns = int((_time.time() + 11644473600) * 10_000_000)
@@ -453,20 +467,36 @@ def clear_browsing_data(options: list[str], minutes: int | None) -> None:
             start_filetime = max(0, now_100ns - delta_100ns)
             end_filetime = now_100ns
 
-        try:
-            from Microsoft.Web.WebView2.Core import CoreWebView2ClearBrowsingDataTimeRange  # type: ignore[import-not-found]
-            time_range = CoreWebView2ClearBrowsingDataTimeRange()
-            time_range.StartTime = start_filetime
-            time_range.EndTime = end_filetime
-            task = profile.ClearBrowsingDataAsync(combined, time_range)
-        except Exception:
-            # Older runtimes — clear all data of the chosen kinds.
+            try:
+                from Microsoft.Web.WebView2.Core import CoreWebView2ClearBrowsingDataTimeRange  # type: ignore[import-not-found]
+                time_range = CoreWebView2ClearBrowsingDataTimeRange()
+                time_range.StartTime = start_filetime
+                time_range.EndTime = end_filetime
+                task = profile.ClearBrowsingDataAsync(combined, time_range)
+                used_time_range = True
+            except Exception:
+                # Older runtimes — fall through to the all-kinds overload.
+                pass
+
+        if task is None:
+            # All-time path, or older runtime without time-range support.
             task = profile.ClearBrowsingDataAsync(combined)
 
         # Wait briefly on the GUI thread, pumping Qt events so the dialog
         # stays responsive. The clear itself is fast.
         _wait_for_task(task, timeout_s=10.0)
-        logger.info("Cleared browsing data (kinds=0x%04X, minutes=%s)", combined, minutes)
+        logger.info(
+            "Cleared browsing data (kinds=0x%04X, minutes=%s, time_range=%s)",
+            combined, minutes, used_time_range,
+        )
+
+        # Cache folder wipe is done AFTER the SDK clear, so any files the
+        # renderer still had open are now released (the SDK call is
+        # synchronous from the GUI thread's point of view). Only when the
+        # user actually ticked "Cached images and files" — other checkboxes
+        # don't promise a space saving.
+        if want_cache and wipe_folders:
+            _delete_cache_directories()
     except Exception as exc:
         logger.warning("clear_browsing_data failed: %s", exc, exc_info=True)
 
@@ -475,9 +505,17 @@ def clear_browsing_data(options: list[str], minutes: int | None) -> None:
 # profile and summing these gives the same number Edge shows next to
 # "Cached images and files" — the only data kind whose size we can measure,
 # so the dialog's "Freed space" estimate is driven by it.
+#
+# IMPORTANT — keep this list in lock-step with ``_delete_cache_directories``.
+# The MB number shown in the dialog MUST equal the bytes we can actually
+# remove from disk, otherwise the user sees "nothing cleared" after clicking
+# Clear.  WebView2's ``DiskCache`` clear-kinds flag only wipes the HTTP cache
+# (``Cache/Cache_Data``); the other folders below hold derived/generated data
+# Chromium rebuilds on next launch, so we delete them ourselves after the SDK
+# clear finishes — that is what Chromium/Edge's own UI does internally.
 _CACHE_DIR_NAMES = frozenset(
     {
-        "cache_data",       # HTTP cache (Default/Cache/Cache_Data)
+        "cache_data",       # HTTP cache (Default/Cache/Cache_Data)  — wiped by DiskCache
         "code cache",       # compiled JS bytecode
         "gpucache",
         "shadercache",
@@ -525,6 +563,72 @@ def get_cache_size_bytes() -> int:
     except OSError:
         pass
     return total
+
+
+def _delete_cache_directories() -> None:
+    """Physically remove cache folders the WebView2 SDK won't delete on its own.
+
+    ``ClearBrowsingDataAsync(Kinds.DiskCache)`` only invalidates and trims the
+    HTTP cache; compiled JS bytecode, GPU/shader caches, Dawn cache, service
+    worker scripts and back-forward cache can remain on disk until the
+    renderer next runs its own eviction.  After an SDK clear, we walk the
+    profile and delete those directories ourselves — they are pure
+    regenerable caches, WebView2 simply recreates them on next navigation.
+
+    Failures are swallowed and logged; a locked file on Windows just means
+    that slice stays until the next launch, which is acceptable.
+    """
+    import shutil
+
+    root_dir = get_user_data_dir()
+    if not root_dir.is_dir():
+        return
+
+    def _onerror(func: Any, path: str, exc_info: Any) -> None:  # noqa: ANN401 - shutil signature
+        logger.debug("cache cleanup skipped %s: %s", path, exc_info[1] if exc_info else "")
+
+    try:
+        for dirpath, dirnames, _filenames in os.walk(root_dir, topdown=True, onerror=None):
+            base = os.path.basename(dirpath).lower()
+            if base in _CACHE_DIR_NAMES and base != "cache_data":
+                # ``cache_data`` itself is the HTTP cache — WebView2 already
+                # wiped it via DiskCache. We still need to prune any leftover
+                # index/lock files that eviction may leave behind, so empty
+                # the directory but leave the folder for reuse.
+                try:
+                    shutil.rmtree(dirpath, ignore_errors=False, onerror=_onerror)
+                except Exception as exc:
+                    logger.debug("cache cleanup rmtree %s failed: %s", dirpath, exc)
+                # Prevent os.walk descending into a directory we just removed.
+                dirnames[:] = []
+                continue
+            if base == "cache_data":
+                # HTTP cache was logically cleared by the SDK. Any files
+                # remaining are either still-open handles that Windows will
+                # release on next close, or orphan journal entries. Delete
+                # what we can without fighting the renderer.
+                for entry in os.listdir(dirpath):
+                    full = os.path.join(dirpath, entry)
+                    try:
+                        if os.path.isdir(full):
+                            shutil.rmtree(full, ignore_errors=False, onerror=_onerror)
+                        else:
+                            os.remove(full)
+                    except OSError as exc:
+                        logger.debug("cache cleanup entry %s skipped: %s", full, exc)
+                dirnames[:] = []
+    except Exception as exc:
+        logger.debug("cache directory cleanup failed: %s", exc)
+
+
+def force_clear_cache_folders() -> None:
+    """Public entry point for cache cleanup — runs the SDK-evicting folder wipe.
+
+    Called by the browser controller after ``clear_browsing_data`` completes,
+    so the "Freed space" number the dialog next opens reflects actual on-disk
+    state instead of Chromium's lazy in-process eviction queue.
+    """
+    _delete_cache_directories()
 
 
 def get_anti_bot_user_agent(default_ua: str = "") -> str:

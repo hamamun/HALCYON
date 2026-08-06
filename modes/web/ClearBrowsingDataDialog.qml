@@ -20,7 +20,7 @@ BrowserPopup {
     property var browser: null
 
     // The eight checkboxes are fixed rows below; on Clear we read each one.
-    // timeRanges: 0 minutes means "All time".
+    // timeRanges: 0 minutes means "All time" (translated to None in browser.py).
     property var timeRanges: [
         { label: "Last hour", minutes: 60 },
         { label: "Last 24 hours", minutes: 60 * 24 },
@@ -31,9 +31,14 @@ BrowserPopup {
     property int selectedRangeIndex: 1   // default: Last 24 hours
 
     // On-disk cache size in bytes, probed once per open (walking the profile
-    // is cheap but not free) and again after a clear.  Only the cache is
-    // measurable, so the "Freed space" line is driven by the cache checkbox.
-    property real cacheBytes: 0
+    // is cheap but not free) and again after a clear completes.  Only the
+    // cache is measurable, so the "Freed space" line is driven by the cache
+    // checkbox.  Kept as an int — cache sizes are whole bytes, never fractional.
+    property int cacheBytes: 0
+
+    // True while the native clear is running — used to disable the Clear
+    // button and show a busy indicator so the user can't double-click.
+    property bool clearing: false
 
     signal cleared()
 
@@ -64,11 +69,15 @@ BrowserPopup {
     }
 
     onVisibleChanged: {
-        if (visible)
+        if (visible) {
+            clearing = false
             refreshCacheSize()
+        }
     }
 
     // Collect the ticked option ids and the chosen time window, then clear.
+    // Returns the list of picked ids (used by tests and for the post-clear
+    // summary line).
     function clearData() {
         var picked = []
         if (cb0.checked) picked.push("browsingHistory")
@@ -79,12 +88,23 @@ BrowserPopup {
         if (cb5.checked) picked.push("autofill")
         if (cb6.checked) picked.push("sitePermissions")
         if (cb7.checked) picked.push("serviceWorkers")
+        if (picked.length === 0) {
+            root.hidePopup()
+            return picked
+        }
         var minutes = timeRanges[selectedRangeIndex].minutes
+        clearing = true
         if (root.browser)
             root.browser.clearBrowsingData(picked, minutes)
+        // The clearBrowsingData call is synchronous from the GUI thread's
+        // point of view (it waits on the .NET Task, pumping Qt events).
+        // When we get here, WebView2 has finished and our folder-wipe
+        // helper has already removed the regenerable cache directories.
         refreshCacheSize()
+        clearing = false
         root.cleared()
         root.hidePopup()
+        return picked
     }
 
     ColumnLayout {
@@ -124,6 +144,23 @@ BrowserPopup {
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeBody
 
+                // Force the popup (and everything inside it) to a known dark
+                // palette.  Qt Quick Controls' Basic style inherits the
+                // system palette on the native popup window; without this,
+                // even though we set a dark background rectangle, child
+                // controls (ItemDelegate, ScrollIndicator) may still render
+                // with a light-system colour for text, which is what made
+                // the options unreadable. Pinning palette.text / .base /
+                // .highlight here overrides the OS fallback entirely.
+                palette.text: Theme.text
+                palette.windowText: Theme.text
+                palette.base: Theme.baseElevated
+                palette.window: Theme.baseElevated
+                palette.highlight: Theme.accentDim
+                palette.highlightedText: Theme.accent
+                palette.button: Theme.baseElevated
+                palette.buttonText: Theme.text
+
                 background: Rectangle {
                     radius: Theme.radiusSmall
                     color: Theme.glassFill
@@ -133,50 +170,85 @@ BrowserPopup {
 
                 contentItem: Text {
                     leftPadding: Theme.spaceMd
+                    rightPadding: Theme.spaceMd
                     text: rangeCombo.displayText
                     font: rangeCombo.font
                     color: Theme.text
+                    elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
 
-                delegate: ItemDelegate {
-                    id: delegateItem
-                    width: rangeCombo.width
-                    text: model.label
-                    font: rangeCombo.font
-                    highlighted: rangeCombo.highlightedIndex === index
-
-                    contentItem: Text {
-                        text: delegateItem.text
-                        font: delegateItem.font
-                        color: delegateItem.highlighted ? Theme.accent : Theme.text
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    background: Rectangle {
-                        color: delegateItem.highlighted ? Theme.glassFillHover : "transparent"
-                    }
-                }
-
-                // The popup panel that holds the options.  The row delegates
-                // above are themed, but the CONTAINER Qt draws behind them is
-                // not — it falls back to the OS's light panel colour, which
-                // makes the off-white option text unreadable (the "black-on-
-                // black" the user saw).  Theme it explicitly so the dark
-                // panel carries the off-white rows.
+                // The popup panel that holds the options.
+                //
+                // IMPORTANT — when you override ``popup.contentItem`` (a
+                // ListView), you MUST also set its ``delegate`` property.
+                // The previous fix only set ``ComboBox.delegate`` above and
+                // assumed the ListView would pick it up, but with a custom
+                // contentItem that delegate is not auto-wired, so Qt fell
+                // back to the built-in default delegate which paints text
+                // using the *system* palette. That was the cause of the
+                // "black text on black / light text on light" the user kept
+                // seeing. We declare the delegate inline here so the ListView
+                // uses it directly — and we also pin a dark palette on the
+                // popup (above) as a second guard against OS fallback.
                 popup: Popup {
+                    id: rangePopup
                     y: rangeCombo.height
                     width: rangeCombo.width
                     implicitHeight: contentItem.implicitHeight
                     padding: Theme.spaceXs
+                    topInset: 0
+                    bottomInset: 0
+                    leftInset: 0
+                    rightInset: 0
+
+                    palette.text: Theme.text
+                    palette.windowText: Theme.text
+                    palette.base: Theme.baseElevated
+                    palette.window: Theme.baseElevated
+                    palette.highlight: Theme.accentDim
+                    palette.highlightedText: Theme.accent
+                    palette.button: Theme.baseElevated
+                    palette.buttonText: Theme.text
 
                     contentItem: ListView {
+                        id: popupList
                         clip: true
                         implicitHeight: contentHeight
-                        model: rangeCombo.popup.visible ? rangeCombo.delegateModel : null
+                        model: rangePopup.visible ? rangeCombo.delegateModel : null
                         currentIndex: rangeCombo.highlightedIndex
-                        ScrollIndicator.vertical: ScrollIndicator {}
+                        // CRITICAL: assign delegate explicitly so the ListView
+                        // does NOT fall back to Qt's default system-themed
+                        // delegate, which paints text in the OS palette color.
+                        delegate: ItemDelegate {
+                            id: popupDelegateItem
+                            width: popupList.width
+                            text: model.label
+                            font: rangeCombo.font
+                            highlighted: rangeCombo.highlightedIndex === index
+                            palette.text: Theme.text
+                            palette.windowText: Theme.text
+                            palette.highlight: Theme.accentDim
+                            palette.highlightedText: Theme.accent
+
+                            contentItem: Text {
+                                leftPadding: Theme.spaceMd
+                                rightPadding: Theme.spaceMd
+                                text: popupDelegateItem.text
+                                font: popupDelegateItem.font
+                                color: popupDelegateItem.highlighted ? Theme.accent : Theme.text
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            background: Rectangle {
+                                color: popupDelegateItem.highlighted ? Theme.glassFillHover : "transparent"
+                                radius: Theme.radiusSmall
+                            }
+                        }
+                        ScrollIndicator.vertical: ScrollIndicator {
+                            palette.alternateBase: Theme.baseElevated
+                        }
                     }
 
                     background: Rectangle {
@@ -185,6 +257,16 @@ BrowserPopup {
                         border.width: 1
                         border.color: Theme.glassBorderStrong
                     }
+                }
+
+                // The top-level ``delegate`` property is unused now that the
+                // popup declares its delegate inline (see note above). Leave
+                // a minimal stub so nothing else in the scene graph tries to
+                // read it and falls over.
+                delegate: ItemDelegate {
+                    width: rangeCombo.width
+                    text: model.label
+                    font: rangeCombo.font
                 }
             }
         }
@@ -300,13 +382,16 @@ BrowserPopup {
                 text: "Cancel"
                 tooltip: "Cancel"
                 glyph: Glyphs.cancel
+                enabled: !root.clearing
                 onClicked: root.hidePopup()
             }
             IconButton {
-                text: "Clear"
+                id: clearBtn
+                text: root.clearing ? "Clearing…" : "Clear"
                 tooltip: "Clear"
                 glyph: Glyphs.clearBrowsingData
                 active: true
+                enabled: !root.clearing
                 onClicked: root.clearData()
             }
         }
