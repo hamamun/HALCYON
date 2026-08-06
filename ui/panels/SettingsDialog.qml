@@ -82,6 +82,7 @@ Dialog {
             }
 
             ComboBox {
+                id: backendCombo
                 width: parent.width - 120 - Theme.spaceSm
                 model: ["auto", "i420", "rv32"]
                 currentIndex: Math.max(0, model.indexOf(Settings.get("video.backend", "auto")))
@@ -100,6 +101,52 @@ Dialog {
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.text
                     verticalAlignment: Text.AlignVCenter
+                }
+
+                // Same themed popup as the Clear Browsing Data dialog (§4.1):
+                // the row delegates and the container behind them are themed
+                // together, so the dark glass panel carries off-white options
+                // with the teal hover instead of Qt's default light surface.
+                delegate: ItemDelegate {
+                    id: delegateItem
+                    width: backendCombo.width
+                    text: modelData
+                    font: backendCombo.font
+                    highlighted: backendCombo.highlightedIndex === index
+
+                    contentItem: Text {
+                        text: delegateItem.text
+                        font: delegateItem.font
+                        color: delegateItem.highlighted ? Theme.accent : Theme.text
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        color: delegateItem.highlighted ? Theme.glassFillHover : "transparent"
+                    }
+                }
+
+                popup: Popup {
+                    y: backendCombo.height
+                    width: backendCombo.width
+                    implicitHeight: contentItem.implicitHeight
+                    padding: Theme.spaceXs
+
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: backendCombo.popup.visible ? backendCombo.delegateModel : null
+                        currentIndex: backendCombo.highlightedIndex
+                        ScrollIndicator.vertical: ScrollIndicator {}
+                    }
+
+                    background: Rectangle {
+                        radius: Theme.radiusSmall
+                        color: Theme.baseElevated
+                        border.width: 1
+                        border.color: Theme.glassBorderStrong
+                    }
                 }
             }
         }

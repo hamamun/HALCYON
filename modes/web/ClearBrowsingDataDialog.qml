@@ -158,6 +158,34 @@ BrowserPopup {
                         color: delegateItem.highlighted ? Theme.glassFillHover : "transparent"
                     }
                 }
+
+                // The popup panel that holds the options.  The row delegates
+                // above are themed, but the CONTAINER Qt draws behind them is
+                // not — it falls back to the OS's light panel colour, which
+                // makes the off-white option text unreadable (the "black-on-
+                // black" the user saw).  Theme it explicitly so the dark
+                // panel carries the off-white rows.
+                popup: Popup {
+                    y: rangeCombo.height
+                    width: rangeCombo.width
+                    implicitHeight: contentItem.implicitHeight
+                    padding: Theme.spaceXs
+
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: rangeCombo.popup.visible ? rangeCombo.delegateModel : null
+                        currentIndex: rangeCombo.highlightedIndex
+                        ScrollIndicator.vertical: ScrollIndicator {}
+                    }
+
+                    background: Rectangle {
+                        radius: Theme.radiusSmall
+                        color: Theme.baseElevated
+                        border.width: 1
+                        border.color: Theme.glassBorderStrong
+                    }
+                }
             }
         }
 
