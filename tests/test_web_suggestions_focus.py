@@ -21,15 +21,17 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QObject, Qt, QUrl
-from PySide6.QtQml import QQmlComponent, QQmlEngine
-from PySide6.QtQuick import QQuickItem, QQuickWindow
-from PySide6.QtTest import QTest
 
 from tests.conftest import GUI_AVAILABLE, ROOT
 
 pytestmark = pytest.mark.skipif(
     not GUI_AVAILABLE, reason="QtGui/QML unavailable in this environment"
 )
+
+if GUI_AVAILABLE:
+    from PySide6.QtQml import QQmlComponent, QQmlEngine
+    from PySide6.QtQuick import QQuickItem, QQuickWindow
+    from PySide6.QtTest import QTest
 
 from modes.web.bookmarks import BookmarksStore
 from modes.web.browser import BrowserContext

@@ -93,11 +93,20 @@ class BrowserContext(QObject):
         bookmarks: BookmarksStore | None = None,
         parent: QObject | None = None,
         *,
+        controller: QObject | None = None,
         host_factory: Callable[..., WebViewHost] | None = None,
         runtime_check: Callable[[], tuple[bool, str]] | None = None,
         environment_getter: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(parent)
+        self._controller = controller
+        self._previous_mode = getattr(controller, "activeMode", "local") if controller else ""
+        if controller is not None and hasattr(controller, "activeModeChanged"):
+            try:
+                controller.activeModeChanged.connect(self._on_active_mode_changed)
+            except Exception:
+                pass
+
         self._tabs: list[_BrowserTab] = []
         self._active_index = -1
         self._tab_limit_message_visible = False
@@ -268,15 +277,39 @@ class BrowserContext(QObject):
         active = bool(active)
         if active != self._stage_active:
             self._stage_active = active
-            if not active and self.contentFullscreen:
-                self.exitFullscreen()
-                self._set_content_fullscreen("")
+            if not active:
+                if self.contentFullscreen:
+                    self.exitFullscreen()
+                    self._set_content_fullscreen("")
+                self.pauseMedia()
             self._sync_hosts()
 
     @Slot()
     def detachStage(self) -> None:  # noqa: N802 - QML API
         """Hide every native child before a non-Web stage becomes visible."""
         self.setStageActive(False)
+
+    @Slot()
+    def pauseMedia(self) -> None:  # noqa: N802 - QML API
+        """Pause video/audio playback across all web tabs (§P3.3 one-tuner rule)."""
+        for tab in self._tabs:
+            if tab.host is not None:
+                pause_fn = getattr(tab.host, "pause_media", None)
+                if callable(pause_fn):
+                    try:
+                        pause_fn()
+                    except Exception as exc:
+                        logger.debug("pause_media on tab %s failed: %s", tab.id, exc)
+
+    def _on_active_mode_changed(self) -> None:
+        if self._controller is None:
+            return
+        mode = getattr(self._controller, "activeMode", "")
+        leaving = self._previous_mode
+        self._previous_mode = mode
+
+        if leaving == "web" and mode != "web":
+            self.pauseMedia()
 
     @Slot()
     def exitFullscreen(self) -> None:  # noqa: N802 - QML API
@@ -504,7 +537,7 @@ class BrowserContext(QObject):
         # Edge fires NewWindowRequested and pauses waiting for us to return. If we
         # synchronously create the controller here, we wait for Edge while Edge
         # waits for us, resulting in a TimeoutError. Deferring lets Edge resume.
-        QTimer.singleShot(1, lambda: self.addTab(url))
+        QTimer.singleShot(0, lambda: self.addTab(url))
 
     @staticmethod
     def _extract_domain(url: str) -> str:
