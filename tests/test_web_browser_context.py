@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Signal
 
 from modes.web.browser import BOOKMARKS_URL, BrowserContext
 
@@ -30,6 +30,7 @@ class FakeHost(QObject):
         self.reload_calls = 0
         self.stop_calls = 0
         self.exit_fullscreen_calls = 0
+        self.pause_media_calls = 0
         self.errorMessage = ""
 
     def init_controller(self, hwnd, _environment):
@@ -60,6 +61,9 @@ class FakeHost(QObject):
 
     def exit_fullscreen(self):
         self.exit_fullscreen_calls += 1
+
+    def pause_media(self):
+        self.pause_media_calls += 1
 
     def release_controller(self):
         self.isReady = False
@@ -127,6 +131,7 @@ def test_browser_context_popup_routing():
     """Popup/new-window requests must route to new tabs (§P3.4)."""
     browser = BrowserContext()
     browser.onPopupRequested("https://www.example.org/popup")
+    QCoreApplication.processEvents()
     assert browser.tabCount == 1
     assert browser.activeTab["url"] == "https://www.example.org/popup"
 
@@ -272,7 +277,44 @@ def test_popup_requests_create_a_normal_halcyon_tab_with_its_own_host():
     browser = BrowserContext(host_factory=make_host)
     browser.navigateActive("https://example.com")
     browser.onPopupRequested("https://example.org/popup")
+    QCoreApplication.processEvents()
 
     assert browser.tabCount == 2
     assert browser.activeTab["url"] == "https://example.org/popup"
     assert len(hosts) == 2
+
+
+def test_set_stage_active_false_pauses_media_on_hosts():
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(host_factory=make_host)
+    browser.navigateActive("https://example.com")
+    browser.setStageActive(True)
+    assert len(hosts) == 1
+    assert hosts[0].pause_media_calls == 0
+
+    browser.setStageActive(False)
+    assert hosts[0].pause_media_calls == 1
+
+
+def test_browser_context_pause_media_across_all_tabs():
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(host_factory=make_host)
+    browser.addTab("https://example1.com")
+    browser.addTab("https://example2.com")
+    assert len(hosts) == 2
+
+    browser.pauseMedia()
+    assert hosts[0].pause_media_calls == 1
+    assert hosts[1].pause_media_calls == 1

@@ -129,11 +129,10 @@ class _ProbeTask(QRunnable):
 
         # Re-check: the model may have been torn down during the parse above,
         # and emitting into a deleted QObject raises out of a pool thread.
-        if self._signals.cancelled:
-            return
         try:
-            self._signals.done.emit(self._path, duration)
-        except RuntimeError:
+            if not self._signals.cancelled:
+                self._signals.done.emit(self._path, duration)
+        except (RuntimeError, Exception):
             pass  # receiver already gone; nothing to report to
 
 
@@ -160,7 +159,7 @@ class PlaylistModel(QAbstractListModel):
         self._shuffle = False
         self._shuffle_order: list[int] = []
         self._pool = QThreadPool.globalInstance()
-        self._probe_signals = _ProbeSignals(self)
+        self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
 
     # ------------------------------------------------------ model plumbing ---

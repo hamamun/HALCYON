@@ -72,3 +72,20 @@ def test_web_mode_switch_stops_player_one_tuner():
     mock_engine.stop.assert_called_once()
     mock_metadata.load.assert_called_with("")
     mock_lyrics.load.assert_called_with("")
+
+
+def test_switch_away_from_web_mode_pauses_web_media():
+    """Switching away from Web mode must pause web media (§P3.3 one-tuner rule)."""
+    mock_engine = MagicMock()
+    mock_settings = MagicMock()
+    mock_settings.get.return_value = "web"
+    app = AppController(
+        mock_engine, mock_settings, MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    browser = BrowserContext(controller=app)
+    browser.pauseMedia = MagicMock()
+    app.register_context("web", browser)
+    assert app.activeMode == "web"
+
+    app.setActiveMode("local")
+    browser.pauseMedia.assert_called_once()

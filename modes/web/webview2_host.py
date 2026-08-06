@@ -436,6 +436,59 @@ class WebViewHost(QObject):
         except Exception as exc:
             logger.debug("WebView2 exit fullscreen script failed: %s", exc)
 
+    def pause_media(self) -> None:
+        """Ask the document to pause all playing audio and video elements (§P3.3)."""
+        if self.webview is None:
+            return
+        script = """
+(() => {
+    try {
+        const pauseMediaInDoc = (doc) => {
+            if (!doc) return;
+            try {
+                const media = doc.querySelectorAll('video, audio');
+                for (const m of media) {
+                    try {
+                        if (m && typeof m.pause === 'function' && !m.paused) {
+                            m.pause();
+                        }
+                    } catch (e) {}
+                }
+                const all = doc.querySelectorAll('*');
+                for (const el of all) {
+                    if (el && el.shadowRoot) {
+                        try {
+                            const shadowMedia = el.shadowRoot.querySelectorAll('video, audio');
+                            for (const sm of shadowMedia) {
+                                try {
+                                    if (sm && typeof sm.pause === 'function' && !sm.paused) {
+                                        sm.pause();
+                                    }
+                                } catch (e) {}
+                            }
+                        } catch (e) {}
+                    }
+                    if (el && el.tagName === 'IFRAME') {
+                        try {
+                            if (el.contentDocument) {
+                                pauseMediaInDoc(el.contentDocument);
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        };
+        pauseMediaInDoc(document);
+    } catch (e) {}
+    return true;
+})();
+"""
+        try:
+            task = self.webview.ExecuteScriptAsync(script)
+            self._pending_tasks.append(task)
+        except Exception as exc:
+            logger.debug("WebView2 pause media script failed: %s", exc)
+
     # -------------------------------------------------------------- placement
     def set_bounds(self, x: int, y: int, width: int, height: int) -> None:
         self._bounds = (int(x), int(y), max(0, int(width)), max(0, int(height)))

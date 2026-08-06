@@ -47,6 +47,8 @@ def test_webview2_host_not_available_fallback():
     host.go_forward()
     host.reload()
     host.stop()
+    host.pause_media()
+    host.exit_fullscreen()
     host.set_bounds(10, 10, 800, 600)
     host.set_visible(False)
     host.close()
