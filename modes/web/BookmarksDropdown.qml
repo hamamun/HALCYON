@@ -37,9 +37,10 @@ BrowserPopup {
             Layout.fillWidth: true
             spacing: Theme.spaceXs
 
-            TextButton {
+            IconButton {
                 id: clearButton
                 text: "Clear browsing data"
+                tooltip: "Clear browsing data"
                 glyph: Glyphs.clearBrowsingData
                 onClicked: {
                     root.hidePopup()
@@ -57,9 +58,10 @@ BrowserPopup {
                 }
             }
             Item { Layout.fillWidth: true }
-            TextButton {
+            IconButton {
                 id: manageButton
                 text: "Manage Bookmarks"
+                tooltip: "Manage Bookmarks"
                 glyph: Glyphs.bookmark
                 onClicked: {
                     if (root.browser)

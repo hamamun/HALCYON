@@ -18,7 +18,7 @@ ClearBrowsingDataDialog) without Windows/WebView2 and verify:
     "Last 24 hours", the eight options with exactly three pre-ticked
     (history, cookies, cache), danger cues on destructive rows;
   * Clear maps the ticked boxes and time range onto the backend call;
-  * the cache-size probe and the live "Freed space" line.
+  * the cache-size probe and the live "will be cleared" line.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def _checkbox_rows(dialog: QObject) -> dict[str, QObject]:
 def _freed_space_text(dialog: QObject) -> QObject | None:
     for obj in _children_matching(dialog, "QQuickText"):
         text = str(obj.property("text") or "")
-        if text.startswith("Freed space:"):
+        if "will be cleared" in text:
             return obj
     return None
 
@@ -302,7 +302,7 @@ def test_freed_space_line_follows_the_cache_checkbox(gui_app, tmp_path: Path, mo
     assert float(dialog.property("cacheBytes")) == 400
 
     freed = _freed_space_text(dialog)
-    assert freed is not None, "dialog needs the 'Freed space:' line"
+    assert freed is not None, "dialog needs the 'will be cleared' line"
     assert freed.property("visible") is True, "cache is pre-ticked, so the line shows"
     assert "400" not in str(freed.property("text"))  # formatted, not raw bytes
     assert "less than 1 MB" in str(freed.property("text"))

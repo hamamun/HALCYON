@@ -123,12 +123,40 @@ BrowserPopup {
                 onCurrentIndexChanged: root.selectedRangeIndex = currentIndex
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeBody
+
+                background: Rectangle {
+                    radius: Theme.radiusSmall
+                    color: Theme.glassFill
+                    border.width: 1
+                    border.color: Theme.glassBorder
+                }
+
+                contentItem: Text {
+                    leftPadding: Theme.spaceMd
+                    text: rangeCombo.displayText
+                    font: rangeCombo.font
+                    color: Theme.text
+                    verticalAlignment: Text.AlignVCenter
+                }
+
                 delegate: ItemDelegate {
+                    id: delegateItem
                     width: rangeCombo.width
                     text: model.label
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeBody
+                    font: rangeCombo.font
                     highlighted: rangeCombo.highlightedIndex === index
+
+                    contentItem: Text {
+                        text: delegateItem.text
+                        font: delegateItem.font
+                        color: delegateItem.highlighted ? Theme.accent : Theme.text
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        color: delegateItem.highlighted ? Theme.glassFillHover : "transparent"
+                    }
                 }
             }
         }
@@ -228,7 +256,7 @@ BrowserPopup {
         Text {
             Layout.fillWidth: true
             visible: cb3.checked && root.cacheBytes > 0
-            text: "Freed space: " + root.formatBytes(root.cacheBytes)
+            text: root.formatBytes(root.cacheBytes) + " will be cleared"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
             color: Theme.textMuted
@@ -240,15 +268,17 @@ BrowserPopup {
             Layout.fillWidth: true
             spacing: Theme.spaceSm
             Item { Layout.fillWidth: true }
-            TextButton {
+            IconButton {
                 text: "Cancel"
+                tooltip: "Cancel"
                 glyph: Glyphs.cancel
                 onClicked: root.hidePopup()
             }
-            TextButton {
+            IconButton {
                 text: "Clear"
+                tooltip: "Clear"
                 glyph: Glyphs.clearBrowsingData
-                primary: true
+                active: true
                 onClicked: root.clearData()
             }
         }
