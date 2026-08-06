@@ -88,6 +88,18 @@ Dialog {
                 currentIndex: Math.max(0, model.indexOf(Settings.get("video.backend", "auto")))
                 onActivated: Settings.set("video.backend", model[currentIndex])
 
+                // Force a dark palette on the popup so the system (light)
+                // palette cannot leak into the option rows — the same fix
+                // as the Clear Browsing Data dialog (§4.1).
+                palette.text: Theme.text
+                palette.windowText: Theme.text
+                palette.base: Theme.baseElevated
+                palette.window: Theme.baseElevated
+                palette.highlight: Theme.accentDim
+                palette.highlightedText: Theme.accent
+                palette.button: Theme.baseElevated
+                palette.buttonText: Theme.text
+
                 background: Rectangle {
                     radius: Theme.radiusSmall
                     color: Theme.glassFill
@@ -96,48 +108,64 @@ Dialog {
                 }
                 contentItem: Text {
                     leftPadding: Theme.spaceMd
+                    rightPadding: Theme.spaceMd
                     text: parent.displayText
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.text
+                    elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
 
-                // Same themed popup as the Clear Browsing Data dialog (§4.1):
-                // the row delegates and the container behind them are themed
-                // together, so the dark glass panel carries off-white options
-                // with the teal hover instead of Qt's default light surface.
-                delegate: ItemDelegate {
-                    id: delegateItem
-                    width: backendCombo.width
-                    text: modelData
-                    font: backendCombo.font
-                    highlighted: backendCombo.highlightedIndex === index
-
-                    contentItem: Text {
-                        text: delegateItem.text
-                        font: delegateItem.font
-                        color: delegateItem.highlighted ? Theme.accent : Theme.text
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    background: Rectangle {
-                        color: delegateItem.highlighted ? Theme.glassFillHover : "transparent"
-                    }
-                }
-
                 popup: Popup {
+                    id: backendPopup
                     y: backendCombo.height
                     width: backendCombo.width
                     implicitHeight: contentItem.implicitHeight
                     padding: Theme.spaceXs
+                    topInset: 0; bottomInset: 0; leftInset: 0; rightInset: 0
+
+                    palette.text: Theme.text
+                    palette.windowText: Theme.text
+                    palette.base: Theme.baseElevated
+                    palette.window: Theme.baseElevated
+                    palette.highlight: Theme.accentDim
+                    palette.highlightedText: Theme.accent
 
                     contentItem: ListView {
+                        id: backendPopupList
                         clip: true
                         implicitHeight: contentHeight
-                        model: backendCombo.popup.visible ? backendCombo.delegateModel : null
+                        model: backendPopup.visible ? backendCombo.delegateModel : null
                         currentIndex: backendCombo.highlightedIndex
+                        // Delegate declared inline so the ListView cannot
+                        // fall back to Qt's default system-themed delegate
+                        // (which paints text with the OS palette color and
+                        // makes the options unreadable on a dark panel).
+                        delegate: ItemDelegate {
+                            id: bd
+                            width: backendPopupList.width
+                            text: modelData
+                            font: backendCombo.font
+                            highlighted: backendCombo.highlightedIndex === index
+                            palette.text: Theme.text
+                            palette.windowText: Theme.text
+                            palette.highlight: Theme.accentDim
+                            palette.highlightedText: Theme.accent
+                            contentItem: Text {
+                                leftPadding: Theme.spaceMd
+                                rightPadding: Theme.spaceMd
+                                text: bd.text
+                                font: bd.font
+                                color: bd.highlighted ? Theme.accent : Theme.text
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: bd.highlighted ? Theme.glassFillHover : "transparent"
+                                radius: Theme.radiusSmall
+                            }
+                        }
                         ScrollIndicator.vertical: ScrollIndicator {}
                     }
 
@@ -147,6 +175,12 @@ Dialog {
                         border.width: 1
                         border.color: Theme.glassBorderStrong
                     }
+                }
+
+                delegate: ItemDelegate {
+                    width: backendCombo.width
+                    text: modelData
+                    font: backendCombo.font
                 }
             }
         }
