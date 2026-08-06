@@ -53,8 +53,13 @@ Rectangle {
 
             CheckBox {
                 id: box
-                checked: root.defaultTick
-                onToggled: {}
+                // Seed the initial tick from defaultTick exactly once.  Using a
+                // live `checked: root.defaultTick` binding here makes every
+                // later toggle (this MouseArea, or the box itself) an
+                // "overwriting binding" error in the terminal.  defaultTick is
+                // fixed at construction, so an onCompleted assignment gives the
+                // same result without creating a binding to clobber.
+                Component.onCompleted: checked = root.defaultTick
                 indicator: Rectangle {
                     implicitWidth: 18
                     implicitHeight: 18
