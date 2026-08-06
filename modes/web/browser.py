@@ -545,7 +545,7 @@ class BrowserContext(QObject):
 
     @Slot(result=int)
     def cacheSizeBytes(self) -> int:  # noqa: N802 - QML API
-        """On-disk size of the profile's caches, for the dialog's freed-space line.
+        """On-disk size of the profile's caches, for the dialog's size line.
 
         Only the cache is measurable, so the Clear Browsing Data dialog shows
         this number while "Cached images and files" is ticked.  Failures (no
@@ -557,19 +557,31 @@ class BrowserContext(QObject):
             logger.debug("cache size probe failed: %s", exc)
             return 0
 
-    @Slot("QStringList", int)
-    def clearBrowsingData(self, options: list[str], minutes: int) -> None:  # noqa: N802
-        """Clear the selected browsing data from the shared WebView2 profile.
+    @Slot("QStringList")
+    def clearBrowsingDataAll(self, options: list[str]) -> None:  # noqa: N802 - QML API
+        """Clear the ticked browsing data for ALL TIME.
 
-        ``minutes`` is the time-window size in minutes. The QML dialog sends
-        0 to mean "All time" (matching the dropdown's ``minutes: 0`` sentinel
-        defined there) and we translate that to the ``None`` the runtime
-        module expects for the no-time-range overload of
-        ``ClearBrowsingDataAsync``.
+        The profile comes from a live tab (``CoreWebView2.Profile`` is the
+        documented source — the environment has no profile).  The dialog has
+        no time-range dropdown, so the runtime always uses the one-argument
+        all-time SDK overload.
         """
-        # Translate the dialog's 0 ("All time") into None for the runtime.
-        window_arg = None if int(minutes or 0) <= 0 else int(minutes)
-        webview2_runtime.clear_browsing_data(list(options or []), window_arg)
+        profile = self._live_profile()
+        if profile is None:
+            logger.warning("clear browsing data: no live WebView2 profile available")
+            return
+        webview2_runtime.clear_browsing_data_all(profile, list(options or []))
+
+    def _live_profile(self) -> Any:
+        """Return the CoreWebView2Profile of the first ready, non-internal tab."""
+        for tab in self._tabs:
+            if tab.internal or tab.host is None:
+                continue
+            webview = getattr(tab.host, "webview", None)
+            profile = getattr(webview, "Profile", None)
+            if profile is not None:
+                return profile
+        return None
 
     @Slot()
     def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
