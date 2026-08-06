@@ -1,14 +1,26 @@
-"""Clean-state checks for the Clear Browsing Data dialog (§4.1).
+"""Tests for the rewritten Clear Browsing Data flow (§4.1).
 
-The old clearing logic was removed entirely.  These tests verify the dialog
-still opens from the bookmarks dropdown and keeps its layout: the 8 checkbox
-rows, the Cancel and Clear buttons, and NO time-range dropdown.  The clearing
-behaviour itself is re-tested once the new implementation lands.
+The rewrite removed the time-range dropdown entirely: every clear is
+"all time" via WebView2's one-argument ``ClearBrowsingDataAsync(kinds)``.
+The profile comes from a LIVE tab's ``CoreWebView2.Profile`` — the
+environment has no profile, which is why the old code silently cleared
+nothing.
+
+These tests verify:
+  * the click path still opens the dialog from the bookmarks dropdown;
+  * the dialog layout: 8 checkbox rows, Cancel + Clear, NO dropdown;
+  * the Clear button maps the ticked rows onto the browser slot;
+  * the browser slot pulls the profile from a live tab and calls the
+    runtime all-time clear with exactly the ticked options;
+  * the runtime combines option ids into one flag mask, calls
+    ClearBrowsingDataAsync once, and wipes cache folders when ticked;
+  * the cache-size probe and the live "will be cleared" line.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +34,7 @@ if GUI_AVAILABLE:
     from PySide6.QtCore import QObject, QUrl, qInstallMessageHandler
     from PySide6.QtTest import QTest
 
+from modes.web import webview2_runtime
 from modes.web.bookmarks import BookmarksStore
 from modes.web.browser import BrowserContext
 
@@ -46,6 +59,25 @@ def _build_bar(gui_app, tmp_path: Path):
     assert bar is not None, "\n".join(e.toString() for e in component.errors())
     bar._refs = (engine, component, browser)
     return bar, browser
+
+
+def _build_dialog(gui_app, tmp_path: Path, browser: BrowserContext | None = None):
+    from PySide6.QtQml import QQmlComponent, QQmlEngine
+
+    engine = QQmlEngine()
+    engine.addImportPath(str(ROOT))
+    if browser is None:
+        browser = BrowserContext(bookmarks=BookmarksStore(path=tmp_path / "bookmarks.json"))
+    engine.rootContext().setContextProperty("modeContext_web", browser)
+    component = QQmlComponent(
+        engine, QUrl.fromLocalFile(str(ROOT / "modes" / "web" / "ClearBrowsingDataDialog.qml"))
+    )
+    assert not component.isError(), "\n".join(e.toString() for e in component.errors())
+    dialog = component.create()
+    assert dialog is not None, "\n".join(e.toString() for e in component.errors())
+    dialog._refs = (engine, component, browser)
+    dialog.setProperty("browser", browser)
+    return dialog, browser
 
 
 def _show_in_window(gui_app, bar, browser):
@@ -91,6 +123,22 @@ def _checkbox_rows(dialog: QObject) -> dict[str, QObject]:
     for row in _children_matching(dialog, "CheckBoxRow"):
         rows[str(row.property("optionId"))] = row
     return rows
+
+
+def _freed_space_text(dialog: QObject) -> QObject | None:
+    for obj in _children_matching(dialog, "QQuickText"):
+        text = str(obj.property("text") or "")
+        if "will be cleared" in text:
+            return obj
+    return None
+
+
+def _attach_fake_live_tab(browser: BrowserContext):
+    """Give the browser one tab whose host exposes a fake WebView2 profile."""
+    browser.addTab("https://example.com")
+    tab = browser._tabs[0]
+    tab.host = SimpleNamespace(webview=SimpleNamespace(Profile=SimpleNamespace(name="fake")))
+    return tab.host.webview.Profile
 
 
 # ---------------------------------------------------------------------------
@@ -150,20 +198,7 @@ SPEC_OPTIONS = {
 
 
 def test_dialog_layout_has_eight_checkboxes_no_dropdown(gui_app, tmp_path: Path):
-    from PySide6.QtQml import QQmlComponent, QQmlEngine
-
-    engine = QQmlEngine()
-    engine.addImportPath(str(ROOT))
-    browser = BrowserContext(bookmarks=BookmarksStore(path=tmp_path / "bookmarks.json"))
-    engine.rootContext().setContextProperty("modeContext_web", browser)
-    component = QQmlComponent(
-        engine, QUrl.fromLocalFile(str(ROOT / "modes" / "web" / "ClearBrowsingDataDialog.qml"))
-    )
-    assert not component.isError(), "\n".join(e.toString() for e in component.errors())
-    dialog = component.create()
-    assert dialog is not None, "\n".join(e.toString() for e in component.errors())
-    dialog._refs = (engine, component, browser)
-    dialog.setProperty("browser", browser)
+    dialog, _browser = _build_dialog(gui_app, tmp_path)
 
     rows = _checkbox_rows(dialog)
     assert set(rows) == set(SPEC_OPTIONS), f"expected the eight options, got {set(rows)}"
@@ -173,12 +208,248 @@ def test_dialog_layout_has_eight_checkboxes_no_dropdown(gui_app, tmp_path: Path)
         assert bool(row.property("checked")) is default_tick
         assert bool(row.property("destructive")) is destructive
 
-    # No time-range dropdown in the clean/rewritten dialog.
+    # No time-range dropdown in the rewritten dialog.
     assert not _children_matching(dialog, "ComboBox"), "dialog must have no dropdown"
     assert dialog.property("timeRanges") is None, "old timeRanges property must be gone"
 
     # Both footer buttons exist.
     assert _button_with(dialog, "text", "Cancel")
     assert _button_with(dialog, "text", "Clear")
+
+    dialog.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# Clear maps the ticked rows onto the browser slot (all time, no minutes)
+# ---------------------------------------------------------------------------
+def test_clear_maps_ticked_options_to_browser_slot(gui_app, tmp_path: Path, monkeypatch):
+    captured: dict = {}
+
+    def fake_clear(profile, options, *, wipe_folders=True):  # noqa: ARG001
+        captured["profile"] = profile
+        captured["options"] = list(options)
+
+    monkeypatch.setattr(webview2_runtime, "clear_browsing_data_all", fake_clear)
+
+    dialog, browser = _build_dialog(gui_app, tmp_path)
+    profile = _attach_fake_live_tab(browser)
+
+    rows = _checkbox_rows(dialog)
+    # Deviate from defaults: drop cookies, add passwords, keep history + cache.
+    rows["cookies"].setProperty("checked", False)
+    rows["passwords"].setProperty("checked", True)
+
+    dialog.setProperty("visible", True)  # triggers onVisibleChanged -> cache probe
+    assert dialog.property("cacheBytes") is not None
+
+    from PySide6.QtCore import QMetaObject
+
+    assert QMetaObject.invokeMethod(dialog, "clearData")
+    QTest.qWait(30)
+
+    assert captured["profile"] is profile, "slot must pass the live tab's profile"
+    assert captured["options"] == ["browsingHistory", "cache", "passwords"]
+    assert dialog.property("visible") is False, "dialog hides itself after Clear"
+
+    dialog.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# browser slot: profile comes from a live tab; none available -> no call
+# ---------------------------------------------------------------------------
+def test_browser_slot_pulls_profile_from_live_tab(gui_app, tmp_path: Path, monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        webview2_runtime,
+        "clear_browsing_data_all",
+        lambda profile, options, *, wipe_folders=True: captured.update(
+            profile=profile, options=list(options)
+        ),
+    )
+
+    browser = BrowserContext(bookmarks=BookmarksStore(path=tmp_path / "bookmarks.json"))
+    assert browser._live_profile() is None, "no tabs -> no profile"
+
+    profile = _attach_fake_live_tab(browser)
+    assert browser._live_profile() is profile
+
+    browser.clearBrowsingDataAll(["cache", "cookies"])
+    assert captured["profile"] is profile
+    assert captured["options"] == ["cache", "cookies"]
+
+
+def test_browser_slot_without_live_tab_does_not_call_runtime(
+    gui_app, tmp_path: Path, monkeypatch
+):
+    called = []
+    monkeypatch.setattr(
+        webview2_runtime,
+        "clear_browsing_data_all",
+        lambda *a, **k: called.append(a),
+    )
+    browser = BrowserContext(bookmarks=BookmarksStore(path=tmp_path / "bookmarks.json"))
+    browser.clearBrowsingDataAll(["cache"])
+    assert called == [], "no live profile -> must not call the runtime"
+
+
+# ---------------------------------------------------------------------------
+# runtime: one all-time SDK call with combined flags + cache folder wipe
+# ---------------------------------------------------------------------------
+class _FakeProfile:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def ClearBrowsingDataAsync(self, kinds: int):
+        self.calls.append(int(kinds))
+        return "task"
+
+
+def _monkeypatch_kinds(monkeypatch):
+    """Pin the fallback flag table so tests can assert exact bit masks."""
+    monkeypatch.setattr(webview2_runtime, "_kind_flags", lambda: {
+        "browsingHistory": 1,
+        "downloadHistory": 2,
+        "cookies": 4 | 256,
+        "cache": 8,
+        "passwords": 32,
+        "autofill": 16,
+        "sitePermissions": 64,
+        "serviceWorkers": 128,
+    })
+
+
+def test_runtime_clear_calls_sdk_once_with_combined_flags(monkeypatch):
+    _monkeypatch_kinds(monkeypatch)
+    monkeypatch.setattr(webview2_runtime, "_wait_for_task", lambda task, timeout_s=25: None)
+    wiped = []
+    monkeypatch.setattr(webview2_runtime, "_delete_cache_directories", lambda: wiped.append(1))
+
+    profile = _FakeProfile()
+    ok = webview2_runtime.clear_browsing_data_all(
+        profile, ["browsingHistory", "cookies", "cache", "passwords"]
+    )
+
+    assert ok is True
+    assert profile.calls == [1 | (4 | 256) | 8 | 32], "one call, flags OR-ed together"
+    assert wiped == [1], "cache ticked -> folders wiped after the SDK call"
+
+
+def test_runtime_clear_skips_folder_wipe_when_cache_not_ticked(monkeypatch):
+    _monkeypatch_kinds(monkeypatch)
+    monkeypatch.setattr(webview2_runtime, "_wait_for_task", lambda task, timeout_s=25: None)
+    wiped = []
+    monkeypatch.setattr(webview2_runtime, "_delete_cache_directories", lambda: wiped.append(1))
+
+    profile = _FakeProfile()
+    ok = webview2_runtime.clear_browsing_data_all(profile, ["passwords"])
+
+    assert ok is True
+    assert profile.calls == [32]
+    assert wiped == [], "no cache row -> no folder wipe"
+
+
+def test_runtime_clear_returns_false_for_no_profile_or_empty_options(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        webview2_runtime, "_wait_for_task", lambda task, timeout_s=25: called.append(1)
+    )
+    assert webview2_runtime.clear_browsing_data_all(None, ["cache"]) is False
+    assert webview2_runtime.clear_browsing_data_all(_FakeProfile(), []) is False
+    assert called == [], "no SDK call must be made"
+
+
+def test_runtime_clear_survives_sdk_failure_and_still_wipes_cache(monkeypatch):
+    _monkeypatch_kinds(monkeypatch)
+    wiped = []
+    monkeypatch.setattr(webview2_runtime, "_delete_cache_directories", lambda: wiped.append(1))
+
+    class _BrokenProfile:
+        def ClearBrowsingDataAsync(self, kinds):  # noqa: ARG002
+            raise RuntimeError("sdk exploded")
+
+    ok = webview2_runtime.clear_browsing_data_all(_BrokenProfile(), ["cache"])
+    assert ok is False
+    assert wiped == [1], "cache wipe is independent of the SDK call"
+
+
+# ---------------------------------------------------------------------------
+# freed-space line + cache probe
+# ---------------------------------------------------------------------------
+def _make_fake_profile(base: Path) -> Path:
+    profile = base / "webview2_data"
+    (profile / "Default" / "Cache" / "Cache_Data").mkdir(parents=True)
+    (profile / "Default" / "Code Cache").mkdir(parents=True)
+    (profile / "Default" / "Service Worker" / "CacheStorage" / "https_example.com").mkdir(
+        parents=True
+    )
+    (profile / "Local Storage").mkdir(parents=True)
+
+    def _write(rel: str, size: int) -> None:
+        path = profile / rel
+        path.write_bytes(b"x" * size)
+
+    _write("Default/Cache/Cache_Data/f_000001", 100)
+    _write("Default/Cache/Cache_Data/f_000002", 200)
+    _write("Default/Code Cache/js.bin", 40)
+    _write("Default/Service Worker/CacheStorage/https_example.com/index", 25)
+    _write("Default/Service Worker/CacheStorage/https_example.com/body", 35)
+    # Not a cache — must never count.
+    _write("Local Storage/site.json", 999)
+    return profile
+
+
+def test_cache_size_probe_sums_only_cache_dirs(tmp_path: Path, monkeypatch):
+    profile = _make_fake_profile(tmp_path)
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: profile)
+    assert webview2_runtime.get_cache_size_bytes() == 400
+
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: tmp_path / "missing")
+    assert webview2_runtime.get_cache_size_bytes() == 0
+
+
+def test_browser_context_cache_size_bytes(gui_app, tmp_path: Path, monkeypatch):
+    profile = _make_fake_profile(tmp_path)
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: profile)
+    browser = BrowserContext(bookmarks=BookmarksStore(path=tmp_path / "bookmarks.json"))
+    assert browser.cacheSizeBytes() == 400
+
+
+def test_delete_cache_directories_removes_cache_folders(tmp_path: Path, monkeypatch):
+    profile = _make_fake_profile(tmp_path)
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: profile)
+
+    webview2_runtime._delete_cache_directories()
+
+    assert not (profile / "Default" / "Code Cache").exists()
+    assert not (profile / "Default" / "Service Worker" / "CacheStorage").exists()
+    # Local Storage is not a cache — never touched.
+    assert (profile / "Local Storage" / "site.json").exists()
+    assert webview2_runtime.get_cache_size_bytes() == 0
+
+
+def test_freed_space_line_follows_the_cache_checkbox(gui_app, tmp_path: Path, monkeypatch):
+    profile = _make_fake_profile(tmp_path)
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: profile)
+
+    dialog, browser = _build_dialog(gui_app, tmp_path)
+    assert browser.cacheSizeBytes() == 400, "probe sanity"
+
+    dialog.setProperty("visible", True)  # triggers refreshCacheSize()
+    QTest.qWait(30)
+    assert float(dialog.property("cacheBytes")) == 400
+
+    freed = _freed_space_text(dialog)
+    assert freed is not None, "dialog needs the 'will be cleared' line"
+    assert freed.property("visible") is True, "cache is pre-ticked, so the line shows"
+    assert "less than 1 MB" in str(freed.property("text"))
+
+    rows = _checkbox_rows(dialog)
+    rows["cache"].setProperty("checked", False)
+    QTest.qWait(30)
+    assert freed.property("visible") is False, "unticking cache hides the estimate"
+
+    rows["cache"].setProperty("checked", True)
+    QTest.qWait(30)
+    assert freed.property("visible") is True, "re-ticking cache restores the estimate"
 
     dialog.deleteLater()

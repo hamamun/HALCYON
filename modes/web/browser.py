@@ -543,6 +543,46 @@ class BrowserContext(QObject):
             return True
         return False
 
+    @Slot(result=int)
+    def cacheSizeBytes(self) -> int:  # noqa: N802 - QML API
+        """On-disk size of the profile's caches, for the dialog's size line.
+
+        Only the cache is measurable, so the Clear Browsing Data dialog shows
+        this number while "Cached images and files" is ticked.  Failures (no
+        profile yet, non-Windows dev box) simply return 0.
+        """
+        try:
+            return int(webview2_runtime.get_cache_size_bytes())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("cache size probe failed: %s", exc)
+            return 0
+
+    @Slot("QStringList")
+    def clearBrowsingDataAll(self, options: list[str]) -> None:  # noqa: N802 - QML API
+        """Clear the ticked browsing data for ALL TIME.
+
+        The profile comes from a live tab (``CoreWebView2.Profile`` is the
+        documented source — the environment has no profile).  The dialog has
+        no time-range dropdown, so the runtime always uses the one-argument
+        all-time SDK overload.
+        """
+        profile = self._live_profile()
+        if profile is None:
+            logger.warning("clear browsing data: no live WebView2 profile available")
+            return
+        webview2_runtime.clear_browsing_data_all(profile, list(options or []))
+
+    def _live_profile(self) -> Any:
+        """Return the CoreWebView2Profile of the first ready, non-internal tab."""
+        for tab in self._tabs:
+            if tab.internal or tab.host is None:
+                continue
+            webview = getattr(tab.host, "webview", None)
+            profile = getattr(webview, "Profile", None)
+            if profile is not None:
+                return profile
+        return None
+
     @Slot()
     def openBookmarksManager(self) -> None:  # noqa: N802 - QML API
         for index, tab in enumerate(self._tabs):
