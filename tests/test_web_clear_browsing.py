@@ -512,3 +512,143 @@ def test_freed_space_line_follows_the_cache_checkbox(gui_app, tmp_path: Path, mo
     assert freed.property("visible") is True, "re-ticking cache restores the estimate"
 
     dialog.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# END-TO-END: real QML + real button click + real slot + real runtime,
+# against a faithful fake of the WebView2 SDK (official enum values).
+# ---------------------------------------------------------------------------
+def _install_fake_webview2_sdk(monkeypatch):
+    """Register a realistic Microsoft.Web.WebView2.Core in sys.modules.
+
+    Mirrors the real SDK: CoreWebView2BrowsingDataKinds with Microsoft's
+    documented member values.  Lets the runtime's REAL try-branch (not the
+    fallback table) run end-to-end.
+    """
+    import enum
+    import sys
+    import types
+
+    class CoreWebView2BrowsingDataKinds(enum.IntFlag):
+        FileSystems = 1
+        IndexedDb = 2
+        LocalStorage = 4
+        WebSql = 8
+        CacheStorage = 16
+        AllDomStorage = 32
+        Cookies = 64
+        AllSite = 128
+        DiskCache = 256
+        DownloadHistory = 512
+        GeneralAutofill = 1024
+        PasswordAutosave = 2048
+        BrowsingHistory = 4096
+        Settings = 8192
+        AllProfile = 16384
+        ServiceWorkers = 32768
+
+    core = types.ModuleType("Microsoft.Web.WebView2.Core")
+    core.CoreWebView2BrowsingDataKinds = CoreWebView2BrowsingDataKinds
+
+    def _ensure(pkg_name, parent=None):
+        mod = sys.modules.get(pkg_name)
+        if mod is None:
+            mod = types.ModuleType(pkg_name)
+            sys.modules[pkg_name] = mod
+        if parent is not None:
+            leaf = pkg_name.rsplit(".", 1)[-1]
+            setattr(parent, leaf, mod)
+        return mod
+
+    m = _ensure("Microsoft")
+    w = _ensure("Microsoft.Web", m)
+    v = _ensure("Microsoft.Web.WebView2", w)
+    _ensure("Microsoft.Web.WebView2.Core", v)
+
+    return CoreWebView2BrowsingDataKinds
+
+
+class _E2EProfile:
+    """Faithful stand-in for CoreWebView2Profile: records ClearBrowsingDataAsync."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def ClearBrowsingDataAsync(self, kinds):
+        self.calls.append(int(kinds))
+        return "fake-task"
+
+
+def test_end_to_end_click_clear_in_real_dialog(gui_app, tmp_path: Path, monkeypatch):
+    """The whole flow as a user drives it.
+
+    Real SDK enum (official values) -> real dialog -> real Clear button click
+    -> real browser slot -> real runtime -> ONE ClearBrowsingDataAsync call
+    with the exact OR-ed official flags -> cache folders physically wiped ->
+    size probe re-reads disk -> reopening the dialog shows 0 MB.
+    """
+    import sys as _sys
+
+    K = _install_fake_webview2_sdk(monkeypatch)
+    # Pumping Qt events is the only production step we cannot run headless;
+    # the .NET task completion is what it waits for.
+    monkeypatch.setattr(webview2_runtime, "_wait_for_task", lambda task, timeout_s=25: None)
+
+    # Real profile on disk with cache + non-cache files, exactly like
+    # %LOCALAPPDATA%/Halcyon/webview2_data after browsing.
+    profile_dir = _make_fake_profile(tmp_path)
+    monkeypatch.setattr(webview2_runtime, "get_user_data_dir", lambda: profile_dir)
+    assert webview2_runtime.get_cache_size_bytes() == 400
+
+    # Real dialog + real browser; attach the tab exactly as production does
+    # (addTab -> _navigate_tab -> host with .webview, and webview.Profile is
+    # the documented live source).
+    dialog, browser = _build_dialog(gui_app, tmp_path)
+    browser.addTab("https://example.com")
+    tab = browser._tabs[0]
+    fake_profile = _E2EProfile()
+    tab.host = SimpleNamespace(webview=SimpleNamespace(Profile=fake_profile))
+
+    dialog.setProperty("visible", True)
+    QTest.qWait(30)
+    assert float(dialog.property("cacheBytes")) == 400
+
+    # Defaults: history + cookies + cache ticked.  Add passwords too.
+    rows = _checkbox_rows(dialog)
+    rows["passwords"].setProperty("checked", True)
+
+    # The REAL Clear button (not invokeMethod): user click path.
+    clear_button = _button_with(dialog, "text", "Clear")
+    clear_button.clicked.emit()
+    QTest.qWait(50)
+
+    # 1) exactly one SDK call with the OR of the official enum values
+    expected = int(K.BrowsingHistory | K.Cookies | K.AllDomStorage | K.DiskCache | K.PasswordAutosave)
+    assert fake_profile.calls == [expected], f"got {fake_profile.calls}, want [{expected}]"
+
+    # 2) dialog hides itself after clearing
+    assert dialog.property("visible") is False
+
+    # 3) cache folders physically gone; non-cache data untouched
+    assert not (profile_dir / "Default" / "Code Cache").exists()
+    assert not (profile_dir / "Default" / "Cache" / "Cache_Data" / "f_000001").exists()
+    assert (profile_dir / "Local Storage" / "site.json").exists(), "non-cache must survive"
+
+    # 4) disk re-probe now reports 0 — no stale 170 MB
+    assert webview2_runtime.get_cache_size_bytes() == 0
+    assert browser.cacheSizeBytes() == 0
+
+    # 5) reopening the dialog re-probes and shows the real post-clear size:
+    #    0 MB, not a stale 170 MB — and the line literally says "0 MB".
+    dialog.setProperty("visible", True)
+    QTest.qWait(30)
+    assert float(dialog.property("cacheBytes")) == 0
+    freed = _freed_space_text(dialog)
+    assert freed is not None
+    assert freed.property("visible") is True, "line stays while cache row is ticked"
+    assert "0 MB will be cleared" in str(freed.property("text"))
+
+    dialog.deleteLater()
+    for name in list(_sys.modules):
+        if name == "Microsoft" or name.startswith("Microsoft."):
+            del _sys.modules[name]

@@ -207,12 +207,14 @@ BrowserPopup {
             color: Theme.glassBorder
         }
 
-        // Freed-space estimate — updates live as the cache box is ticked.
-        // Only the cache size is measurable, so the number appears while
-        // "Cached images and files" is selected.
+        // Freed-space estimate — updates live as the cache box is ticked and
+        // re-probes after every clear.  Only the cache size is measurable, so
+        // the number appears while "Cached images and files" is selected; it
+        // shows the real post-clear size (0 MB once the cache is actually
+        // gone) instead of a stale pre-clear number.
         Text {
             Layout.fillWidth: true
-            visible: cb3.checked && root.cacheBytes > 0
+            visible: cb3.checked
             text: root.formatBytes(root.cacheBytes) + " will be cleared"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
