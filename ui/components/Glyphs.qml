@@ -111,5 +111,5 @@ QtObject {
     // Do not substitute E902/E903 here. E902 is "Group" (an unrelated glyph)
     // and E903 is unassigned in Segoe Fluent Icons — it renders as tofu.
     readonly property string expandPanel:   chevronLeft    // widen  ← 
-    readonly property string collapsePanel: chevronRight   // narrow →
+    readonly property string collapsePanel: "\u203A"   // narrow →
 }
