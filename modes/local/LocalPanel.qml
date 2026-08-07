@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import Halcyon.Ui
 
 // Local's left panel — §P1.5.
@@ -183,10 +182,10 @@ Item {
             color: Theme.textFaint
             lineHeight: 1.35
         }
-        TextButton {
+        IconButton {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Add files"
             glyph: Glyphs.openFile
+            tooltip: "Add files (Ctrl+O)"
             onClicked: Actions.addFiles()      // same action, not a copy
         }
     }
