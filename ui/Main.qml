@@ -51,6 +51,27 @@ Shell {
     property bool leftPanelOpen: false
     property bool rightPanelOpen: false
 
+    // --------------------------------------------------------- Mini Mode v1.1 §M
+    property bool miniModeActive: false
+    property int normalX: -1
+    property int normalY: -1
+    property int normalW: -1
+    property int normalH: -1
+    property bool normalWasMaximized: false
+    property bool normalWasFullscreen: false
+    property bool wasTurbo: false
+    // Width from settings, height = titleBarHeight per spec
+    property int miniBarWidth: Settings.get("window.miniBarWidth", 400)
+    readonly property int miniBarHeight: Theme.titleBarHeight // 44px
+
+    // Override Shell's min/max to allow fixed mini size
+    minimumWidth: miniModeActive ? miniBarWidth : 860
+    minimumHeight: miniModeActive ? miniBarHeight : 520
+    maximumWidth: miniModeActive ? miniBarWidth : 16777215
+    maximumHeight: miniModeActive ? miniBarHeight : 16777215
+    // Always-on-top in mini
+    flags: Qt.Window | Qt.FramelessWindowHint | (miniModeActive ? Qt.WindowStaysOnTopHint : 0)
+
     // The OS-level title: taskbar button, Alt-Tab, window list. The frameless
     // shell draws no caption of its own, so this is otherwise invisible to the
     // user — but it is what Windows shows, and "Halcyon" for every window is
@@ -58,9 +79,6 @@ Shell {
     //
     // For M3U, the channel name is shown instead of file metadata.
     title: {
-        // A mode may contribute an OS-level title through App's generic
-        // protocol.  Web uses this for the active page title without making
-        // this shared shell name/import the Web mode directly.
         var modeTitle = App.modeWindowTitle || "";
         if (modeTitle !== "")
             return modeTitle + "  \u00B7  Halcyon";
@@ -71,6 +89,132 @@ Shell {
         return media !== "" ? media + "  \u00B7  Halcyon" : "Halcyon";
     }
     visible: true
+
+    // -------------------------------------------------- geometry overrides §M
+    function saveGeometry() {
+        if (miniModeActive) {
+            Settings.set("window.miniBarX", x);
+            Settings.set("window.miniBarY", y);
+        } else {
+            if (visibility === Window.Windowed) {
+                Settings.set("window.x", x);
+                Settings.set("window.y", y);
+                Settings.set("window.width", width);
+                Settings.set("window.height", height);
+            }
+            Settings.set("window.maximized", visibility === Window.Maximized);
+        }
+    }
+
+    function restoreGeometry() {
+        // Normal geometry only — mini geometry restored on demand in enterMiniMode
+        var w = Settings.get("window.width", 1280);
+        var h = Settings.get("window.height", 760);
+        var sx = Settings.get("window.x", -1);
+        var sy = Settings.get("window.y", -1);
+        width = Math.max(w, 860);
+        height = Math.max(h, 520);
+        if (sx >= 0 && sy >= 0) {
+            x = sx;
+            y = sy;
+        } else {
+            x = Screen.width / 2 - width / 2;
+            y = Screen.height / 2 - height / 2;
+        }
+        if (Settings.get("window.maximized", false))
+            visibility = Window.Maximized;
+    }
+
+    // Mini Mode core — simplest path §M.6
+    function hasMedia() {
+        return Player && (Player.duration > 0 || (Player.currentMedia !== undefined && Player.currentMedia !== null && Player.currentMedia !== ""));
+    }
+
+    function enterMiniMode() {
+        if (miniModeActive) return;
+        if (activeMode !== "local") return;
+        if (!hasMedia()) return;
+        if (fullscreen) {
+            // Fullscreen lockout §M.5
+            return;
+        }
+        // Save normal geometry
+        normalX = x;
+        normalY = y;
+        normalW = width;
+        normalH = height;
+        normalWasMaximized = (visibility === Window.Maximized);
+        normalWasFullscreen = fullscreen;
+        if (normalWasFullscreen) {
+            setFullscreen(false);
+        }
+        if (normalWasMaximized) {
+            visibility = Window.Windowed;
+        }
+        // Turbo — save and disable simplest
+        wasTurbo = Settings.get("playback.turboMode", false);
+        if (wasTurbo) {
+            Settings.set("playback.turboMode", false);
+        }
+
+        // Determine mini position — first time top-center, else saved
+        var mx = Settings.get("window.miniBarX", -1);
+        var my = Settings.get("window.miniBarY", -1);
+        var mw = miniBarWidth;
+        var mh = miniBarHeight;
+        if (mx < 0 || my < 0) {
+            // Top-center of the screen where the window was
+            var scr = Screen; // current screen
+            mx = scr.width / 2 - mw / 2 + scr.virtualX;
+            my = scr.virtualY + 12;
+        }
+
+        // Apply fixed size and move — triggers saveTimer but our saveGeometry will save mini pos
+        width = mw;
+        height = mh;
+        x = mx;
+        y = my;
+
+        miniModeActive = true;
+        // Ensure chromeVisible true for mini (no auto-hide)
+        chromeVisible = true;
+    }
+
+    function leaveMiniMode() {
+        if (!miniModeActive) return;
+        // Save mini position
+        Settings.set("window.miniBarX", x);
+        Settings.set("window.miniBarY", y);
+
+        miniModeActive = false;
+
+        // Restore normal geometry
+        if (normalW > 0 && normalH > 0) {
+            width = normalW;
+            height = normalH;
+            x = normalX;
+            y = normalY;
+        } else {
+            // Fallback to settings restore
+            restoreGeometry();
+        }
+        if (normalWasMaximized) {
+            visibility = Window.Maximized;
+        }
+        if (normalWasFullscreen) {
+            setFullscreen(true);
+        }
+        // Restore Turbo
+        if (wasTurbo) {
+            Settings.set("playback.turboMode", true);
+        }
+        wasTurbo = false;
+    }
+
+    function toggleMiniMode() {
+        if (miniModeActive) leaveMiniMode();
+        else enterMiniMode();
+    }
 
     Component.onCompleted: {
         // Seed the plain dock bools from the persisted settings. Done here
@@ -83,7 +227,13 @@ Shell {
         Actions.host = actionHost;
     }
 
-    onClosing: {
+    onClosing: function(close) {
+        if (miniModeActive) {
+            // No close from mini — return to normal §M.5
+            close.accepted = false;
+            leaveMiniMode();
+            return;
+        }
         saveGeometry();
         Settings.flush();
     }
@@ -316,6 +466,7 @@ Shell {
         function minimizeWindow()  { window.showMinimized() }
         function toggleMaximized() { window.toggleMaximized() }
         function closeWindow()     { window.close() }
+        function toggleMiniMode()  { window.toggleMiniMode() }
 
         // --------------------------------------------------------- osd --
         function osd(text, glyph)  { if (osdEnabled()) osdLayer.show(text, glyph) }
@@ -455,20 +606,22 @@ Shell {
     Rectangle {
         anchors.fill: parent
         color: Theme.base
-        radius: window.maximizedOrFull ? 0 : Theme.radiusPanel
+        radius: window.maximizedOrFull || window.miniModeActive ? 0 : Theme.radiusPanel
+        visible: !window.miniModeActive
 
         TitleBar {
             id: titleBar
             width: parent.width
             anchors.top: parent.top
             activeMode: window.activeMode
-            visible: !window.fullscreen
-            height: window.fullscreen ? 0 : Theme.titleBarHeight
+            visible: !window.fullscreen && !window.miniModeActive
+            height: (window.fullscreen || window.miniModeActive) ? 0 : Theme.titleBarHeight
             onModeRequested: function(id) { Actions.switchMode(id) }
         }
 
         Item {
             id: body
+            visible: !window.miniModeActive
             anchors.top: titleBar.bottom
             anchors.left: parent.left
             anchors.right: parent.right
@@ -629,6 +782,54 @@ Shell {
                 // The clock, the seek bar and the toast all read time the same
                 // way — one formatter, not three (§4.1).
                 formatTime: window.formatTime
+            }
+        }
+    }
+
+    // ======================================================================
+    // MINI BAR — §M.3 / §M.4 — v1.1 fixed 400×44, always-on-top
+    // ======================================================================
+    MiniBar {
+        id: miniBar
+        anchors.centerIn: parent
+        width: window.miniBarWidth
+        height: window.miniBarHeight
+        visible: window.miniModeActive
+        z: 50
+
+        onSeekRequested: function(frac) {
+            Actions.seekFraction(frac);
+        }
+    }
+
+    // Auto-return to normal when playlist naturally finishes while in mini §M.5
+    Connections {
+        target: (typeof Player !== "undefined" && Player) ? Player : null
+        enabled: target !== null && window.miniModeActive
+        function onStateChanged() {
+            // When playback stops and we are in mini, auto-return if repeat off and at end
+            if (!window.miniModeActive) return;
+            // State 6 = Ended, 5 = Stopped per vlc_engine State enum
+            // Use isPlaying false + position near end as fallback
+            if (target.state === 5 || target.state === 6) {
+                // Check repeat: if repeat one/all, stay in mini (will loop)
+                var rep = window.modeContext ? window.modeContext.repeatMode : 0;
+                if (rep === 0) {
+                    // If count == 1 or at last index, or count==0, return
+                    var ctx = window.modeContext;
+                    var atEnd = true;
+                    if (ctx) {
+                        var cnt = ctx.count;
+                        var cur = ctx.current_index;
+                        if (cnt > 1 && cur >= 0 && cur < cnt - 1) {
+                            atEnd = false; // there is next track, will auto-advance
+                        }
+                    }
+                    if (atEnd) {
+                        // Small delay so toast can show if any
+                        Qt.callLater(function() { if (window.miniModeActive) window.leaveMiniMode(); });
+                    }
+                }
             }
         }
     }
@@ -867,6 +1068,12 @@ Shell {
             }
 
             if (event.key === Qt.Key_Escape) {
+                // Mini Mode: Esc returns to normal §M.5
+                if (window.miniModeActive) {
+                    window.leaveMiniMode();
+                    event.accepted = true;
+                    return;
+                }
                 // 1st Esc: close fullscreen panels (both together), stay fullscreen.
                 // 2nd Esc: exit fullscreen. Mirrors YouTube / video player UX.
                 if (window.fullscreen

@@ -12,8 +12,10 @@ Window {
 
     property int resizeMargin: 6
     property bool fullscreen: false
+    property bool miniModeActive: false // v1.1 §M — hides resize handles in mini
     readonly property bool maximizedOrFull: visibility === Window.Maximized || fullscreen
 
+    // flags overridden in Main.qml to add StayOnTop in mini — keep base here
     flags: Qt.Window | Qt.FramelessWindowHint
     color: "transparent"
     minimumWidth: 860
@@ -92,7 +94,7 @@ Window {
         delegate: MouseArea {
             required property var modelData
             z: 9999
-            visible: !shell.maximizedOrFull
+            visible: !shell.maximizedOrFull && !shell.miniModeActive
             enabled: visible
             cursorShape: modelData.c
 

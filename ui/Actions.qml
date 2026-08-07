@@ -88,6 +88,7 @@ QtObject {
     // showEqualizer() (which lands on tab 2); this lands on tab 1.
     function showLyrics()           { return _call("showLyrics") }
     function showSettings()         { return _call("showSettings") }
+    function toggleMiniMode()       { return _call("toggleMiniMode") }
 
     // ---------------------------------------------------------------- mode --
     // The one home: the title bar.

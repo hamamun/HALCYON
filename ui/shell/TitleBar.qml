@@ -180,6 +180,10 @@ Item {
         }
     }
 
+    readonly property bool hasMedia: player && (player.duration > 0 || (player.currentMedia !== undefined && player.currentMedia !== null && player.currentMedia !== ""))
+    readonly property bool isFullscreen: root.Window.window && root.Window.window.fullscreen
+    readonly property bool miniEnabled: activeMode === "local" && hasMedia && !isFullscreen
+
     // ------------------------------------------------------ window buttons --
     Row {
         anchors.right: parent.right
@@ -193,6 +197,14 @@ Item {
             onClicked: Actions.showSettings()
         }
         Item { width: Theme.spaceSm; height: 1 }
+        // Mini Mode toggle — v1.1 §M.5 — left of minimize, Local + media only
+        IconButton {
+            glyph: Glyphs.miniMode
+            tooltip: miniEnabled ? "Mini Mode" : "Mini Mode (Local playback only)"
+            showRing: false
+            enabled: miniEnabled
+            onClicked: Actions.toggleMiniMode()
+        }
         IconButton {
             glyph: Glyphs.minimize
             tooltip: "Minimise"

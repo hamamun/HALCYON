@@ -37,6 +37,10 @@ DEFAULTS: dict[str, Any] = {
     "window.maximized": False,
     "window.leftPanelVisible": True,
     "window.rightPanelVisible": False,
+    # mini mode v1.1 — §M.5
+    "window.miniBarX": -1,
+    "window.miniBarY": -1,
+    "window.miniBarWidth": 400,
     # playback
     "audio.volume": 80,
     "audio.muted": False,
