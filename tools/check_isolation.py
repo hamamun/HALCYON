@@ -92,11 +92,12 @@ PHASE3_DISCLOSED = [
 ]
 
 #: Disclosed Phase-4 (v1.1) Mini Mode additions — post-v1.0 shell state §M.
-#: Mini is not a ModeSpec, it's a compact bar (400×44 = TitleBar height) with
-#: grip-only drag, top hairline seek + circular play ring, vertical volume
-#: pop-up, always-on-top top-center. Touches frozen shell + settings + actions
-#: but documented in v4.1 changelog, covered by M.7 acceptance. Owner-approved
-#: generic shell capability, same class as v4.0 panel_enabled.
+#: Mini is not a ModeSpec, it's a compact bar (460×44 = TitleBar height) with
+#: grip-only drag, top hairline seek + circular play ring, inline horizontal
+#: volume capsule, always-on-top, top-center on each fresh session. Touches
+#: frozen shell + settings + actions but documented in v4.1 changelog, covered
+#: by M.7 acceptance. Owner-approved generic shell capability, same class as
+#: v4.0 panel_enabled.
 PHASE4_DISCLOSED = [
     "core/settings.py",
     "ui/Actions.qml",
