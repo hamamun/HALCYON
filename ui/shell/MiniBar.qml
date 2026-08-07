@@ -4,15 +4,16 @@ import Halcyon.Ui
 
 // Mini Mode bar — §M.3 / §M.4 — v1.1
 //
-// Fixed 400-420 × 44 (height = Theme.titleBarHeight). Only grip drags.
+// Fixed 460 × 44 (height = Theme.titleBarHeight). Only grip drags.
 // Top 3px hairline IS the seek bar (2px rest → 6px + knob on hover).
 // Play button has circular progress ring (0-100%) — zero width increase.
-// Volume vertical pop-up above mute icon — no width increase.
+// Innovative horizontal volume capsule to right of mute button — zero clipping.
+// Zero tooltips in Mini Mode for unobtrusive, clean controls.
 // All controls bind to same Actions entries as Local transport §4.1.
 
 Item {
     id: root
-    width: 400
+    width: 460
     height: Theme.titleBarHeight // 44px — same as TitleBar §M.3
     readonly property real fixedWidth: width
     readonly property real fixedHeight: height
@@ -52,7 +53,7 @@ Item {
 
     // ------------------------------------------------------- top hairline seek §M.4
     // The top 3px of the bar itself is the seek bar. 2px at rest, 6px on hover.
-    // No extra width, no extra height outside 44px.
+    // No extra width, no extra height outside 44px. No tooltip popup.
     Item {
         id: seekArea
         anchors.top: parent.top
@@ -82,7 +83,6 @@ Item {
                 anchors.bottomMargin: 0
                 color: Theme.trackRest
                 radius: height / 2
-                // Rounded only at bottom when thin? Keep pill.
             }
             // buffered
             Rectangle {
@@ -116,47 +116,11 @@ Item {
             y: seekTrack.height / 2 - height / 2
         }
 
-        // time tooltip — appears below the hairline so it doesn't go off-screen
-        Rectangle {
-            id: seekTip
-            visible: seekHover.containsMouse && root.duration > 0
-            height: 20
-            width: tipText.implicitWidth + Theme.spaceMd
-            radius: Theme.radiusSmall
-            color: Qt.rgba(0.043, 0.055, 0.078, 0.94)
-            border.width: 1
-            border.color: Theme.glassBorder
-            y: seekTrack.height + Theme.spaceXs
-            x: Math.max(0, Math.min(root.width - width, seekHover.mouseX - width / 2))
-
-            Text {
-                id: tipText
-                anchors.centerIn: parent
-                text: {
-                    var frac = seekHover.mouseX / Math.max(1, root.width);
-                    var ms = frac * root.duration;
-                    if (!isFinite(ms) || ms < 0) ms = 0;
-                    var total = Math.floor(ms / 1000);
-                    var h = Math.floor(total / 3600);
-                    var m = Math.floor((total % 3600) / 60);
-                    var s = total % 60;
-                    var mm = (h > 0 && m < 10 ? "0" : "") + m;
-                    var ss = (s < 10 ? "0" : "") + s;
-                    return h > 0 ? h + ":" + mm + ":" + ss : mm + ":" + ss;
-                }
-                font.family: Theme.fontFamilyMono
-                font.pixelSize: Theme.fontSizeTiny
-                color: Theme.text
-            }
-        }
-
         MouseArea {
             id: seekHover
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.NoButton
-            property real mouseX: 0
-            onPositionChanged: function(mouse) { mouseX = mouse.x }
         }
 
         MouseArea {
@@ -198,7 +162,6 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         anchors.verticalCenterOffset: 2 // account for 3px seek bar on top — visually center in remaining 41px
         spacing: 2
-        // clip if window somehow narrower
 
         // Grip — only draggable via this — 24px
         Item {
@@ -241,7 +204,6 @@ Item {
         // Prev track
         IconButton {
             glyph: Glyphs.previous
-            tooltip: "Previous track"
             iconSize: 18
             onClicked: Actions.previous()
         }
@@ -249,7 +211,6 @@ Item {
         // Seek -10s
         IconButton {
             glyph: Glyphs.rewind
-            tooltip: "Seek -10s"
             iconSize: 18
             onClicked: Actions.seekRelative(-10000)
         }
@@ -288,7 +249,6 @@ Item {
                         ctx.beginPath();
                         ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress, false);
                         ctx.lineWidth = 2.2;
-                        // accent solid — gradient hard in Canvas, use accent
                         ctx.strokeStyle = "#5EEAD4";
                         ctx.stroke();
                     }
@@ -298,7 +258,6 @@ Item {
             IconButton {
                 anchors.centerIn: parent
                 glyph: root.isPlaying ? Glyphs.pause : Glyphs.play
-                tooltip: root.isPlaying ? "Pause" : "Play"
                 iconSize: 20
                 width: 40
                 height: 40
@@ -309,7 +268,6 @@ Item {
         // Stop
         IconButton {
             glyph: Glyphs.stop
-            tooltip: "Stop"
             iconSize: 18
             onClicked: Actions.stop()
         }
@@ -317,7 +275,6 @@ Item {
         // Next track
         IconButton {
             glyph: Glyphs.next
-            tooltip: "Next track"
             iconSize: 18
             onClicked: Actions.next()
         }
@@ -325,113 +282,118 @@ Item {
         // Seek +10s
         IconButton {
             glyph: Glyphs.fastForward
-            tooltip: "Seek +10s"
             iconSize: 18
             onClicked: Actions.seekRelative(10000)
         }
 
-        // Volume / Mute with vertical pop-up — no width increase
+        // Mute button with wheel support
         Item {
-            id: volumeArea
             width: 40
-            height: 44
+            height: Theme.titleBarHeight - 4
             anchors.verticalCenter: parent.verticalCenter
 
             IconButton {
                 id: muteBtn
                 anchors.centerIn: parent
                 glyph: root.volumeGlyph(root.volume, root.muted)
-                tooltip: root.muted ? "Unmuted" : "Mute — hover for volume"
                 iconSize: 18
                 onClicked: Actions.toggleMute()
             }
 
-            // Vertical slider pop-up above bar
-            Item {
-                id: volumePopup
-                anchors.bottom: parent.top
-                anchors.bottomMargin: 8
-                anchors.horizontalCenter: parent.horizontalCenter
-                width: 36
-                height: 140
-                visible: muteBtn.hovered || popupHover.containsMouse || volSlider.pressed
-                z: 10
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.NoButton
+                onWheel: function(wheel) {
+                    var delta = wheel.angleDelta.y > 0 ? 5 : -5;
+                    Actions.adjustVolume(delta);
+                    if (root.muted && delta > 0) Actions.toggleMute();
+                }
+            }
+        }
 
-                GlassPanel {
-                    anchors.fill: parent
-                    radius: Theme.radiusControl
-                    fillColor: Qt.rgba(0.06, 0.08, 0.12, 0.92)
-                    borderColor: Theme.glassBorder
-                    blurRadius: 16
+        // Innovative horizontal volume capsule — inline right of mute button
+        Item {
+            id: volCapsule
+            width: 74
+            height: 24
+            anchors.verticalCenter: parent.verticalCenter
+
+            Rectangle {
+                id: volBg
+                anchors.fill: parent
+                radius: height / 2
+                color: volArea.containsMouse || volArea.pressed ? Qt.rgba(0.08, 0.11, 0.16, 0.95)
+                                                                : Qt.rgba(0.05, 0.07, 0.11, 0.85)
+                border.width: 1
+                border.color: volArea.containsMouse || volArea.pressed ? Theme.accentDim
+                                                                       : Theme.glassBorder
+
+                Behavior on color {
+                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                }
+                Behavior on border.color {
+                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
                 }
 
-                Controls.Slider {
-                    id: volSlider
-                    anchors.fill: parent
-                    anchors.margins: Theme.spaceSm
-                    orientation: Qt.Vertical
-                    from: 0
-                    to: 100
-                    stepSize: 1
-                    // Avoid binding loop: only push to Player when user drags,
-                    // but reflect Player.volume when not pressed.
-                    onPressedChanged: {
-                        if (!pressed) {
-                            // commit (already done on valueChanged, but safe)
-                        }
-                    }
-                    Component.onCompleted: {
-                        value = root.volume;
-                    }
-                    // Keep slider in sync when volume changes externally (keys etc.) and not being dragged
-                    Connections {
-                        target: root
-                        function onVolumeChanged() {
-                            if (!volSlider.pressed) volSlider.value = root.volume;
-                        }
-                    }
-                    onValueChanged: {
-                        if (pressed) {
-                            Actions.setVolume(Math.round(value));
-                        }
-                    }
-                    onMoved: {
-                        Actions.setVolume(Math.round(value));
+                // Filled level indicator (from left)
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Math.max(0, Math.min(parent.width, parent.width * (root.volume / 100.0)))
+                    radius: height / 2
+                    opacity: root.muted ? 0.35 : 0.9
+
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: Theme.accentDim }
+                        GradientStop { position: 1.0; color: Theme.accent }
                     }
 
-                    background: Rectangle {
-                        width: 4
-                        height: parent.availableHeight
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        radius: 2
-                        color: Theme.trackRest
-                        Rectangle {
-                            width: parent.width
-                            height: volSlider.visualPosition * parent.height
-                            anchors.bottom: parent.bottom
-                            radius: 2
-                            gradient: Gradient {
-                                orientation: Gradient.Vertical
-                                GradientStop { position: 0.0; color: Theme.accentAlt }
-                                GradientStop { position: 1.0; color: Theme.accent }
-                            }
-                        }
-                    }
-                    handle: Rectangle {
-                        width: 12
-                        height: 12
-                        radius: 6
-                        color: Theme.text
-                        border.width: 1
-                        border.color: Theme.glassBorder
+                    Behavior on width {
+                        enabled: !volArea.pressed
+                        NumberAnimation { duration: Theme.durFast; easing.type: Theme.easing }
                     }
                 }
 
-                MouseArea {
-                    id: popupHover
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    acceptedButtons: Qt.NoButton
+                // Volume text label inside capsule
+                Text {
+                    anchors.centerIn: parent
+                    text: root.muted ? "MUTED" : "VOL " + root.volume
+                    font.family: Theme.fontFamilyMono
+                    font.pixelSize: Theme.fontSizeTiny
+                    font.weight: Font.Medium
+                    color: Theme.text
+                    opacity: root.muted ? 0.6 : 0.95
+                }
+            }
+
+            MouseArea {
+                id: volArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+
+                function volumeAt(mx) {
+                    var ratio = Math.max(0.0, Math.min(1.0, mx / Math.max(1, width)));
+                    return Math.round(ratio * 100);
+                }
+
+                onPressed: function(mouse) {
+                    var newVol = volumeAt(mouse.x);
+                    Actions.setVolume(newVol);
+                    if (root.muted && newVol > 0) Actions.toggleMute();
+                }
+                onPositionChanged: function(mouse) {
+                    if (!pressed) return;
+                    var newVol = volumeAt(mouse.x);
+                    Actions.setVolume(newVol);
+                    if (root.muted && newVol > 0) Actions.toggleMute();
+                }
+                onWheel: function(wheel) {
+                    var delta = wheel.angleDelta.y > 0 ? 5 : -5;
+                    Actions.adjustVolume(delta);
+                    if (root.muted && delta > 0) Actions.toggleMute();
                 }
             }
         }
@@ -439,19 +401,8 @@ Item {
         // Return to normal — expand
         IconButton {
             glyph: Glyphs.miniReturn
-            tooltip: "Back to normal (Esc)"
             iconSize: 18
             onClicked: Actions.toggleMiniMode()
-        }
-    }
-
-    // Correct vertical slider handle positioning for Qt.Vertical
-    // Qt's Slider with custom handle needs y = (1 - visualPosition)*(availableHeight - handleSize)
-    // We patch after component creation via binding in volSlider
-    Connections {
-        target: volSlider
-        function onVisualPositionChanged() {
-            // handled via binding above if needed
         }
     }
 }
