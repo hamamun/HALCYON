@@ -216,13 +216,34 @@ Dialog {
     }
 
     footer: Item {
-        implicitHeight: 56
-        TextButton {
+        implicitHeight: Theme.hitTarget
+        IconButton {
             anchors.right: parent.right
             anchors.rightMargin: Theme.spaceXl
             anchors.verticalCenter: parent.verticalCenter
-            text: "Done"
-            primary: true
+            glyph: Glyphs.check
+            tooltip: "Done"
+            activeColor: Theme.textOnAccent
+            background: Rectangle {
+                anchors.fill: parent
+                radius: Theme.radiusSmall
+                color: root.pressed ? Qt.darker(Theme.accent, 1.2)
+                         : root.hovered ? Qt.lighter(Theme.accent, 1.08) : Theme.accent
+                Behavior on color {
+                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                }
+            }
+            contentItem: Text {
+                anchors.centerIn: parent
+                text: root.glyph
+                font.family: Theme.fontFamilyIcons
+                font.pixelSize: Theme.iconSize
+                color: Theme.textOnAccent
+                scale: root.pressed ? 0.90 : 1.0
+                Behavior on scale {
+                    NumberAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                }
+            }
             onClicked: root.close()
         }
     }
