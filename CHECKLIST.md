@@ -1,6 +1,6 @@
 # Halcyon — Build Checklist
 
-> Companion to `HALCYON_PLAN.md` v4.0. Every task, in build order, with a plan reference.
+> Companion to `HALCYON_PLAN.md` v4.1. Every task, in build order, with a plan reference.
 >
 > **How to use this file**
 > - **`[ ]` → `[x]`** is set by *me* when a task is implemented.
@@ -24,7 +24,8 @@ file; both were replaced).*
 | 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
 | 3 — Web | 5 / 5 built | 62 / 62 | 0 / 56 | `v1.0.0` |
-| **Total** | — | **295 / 303** | **104 / 222** | |
+| 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 18 | `v1.1.0-mini` |
+| **Total** | — | **310 / 318** | **104 / 240** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -773,6 +774,57 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 **→ Merge to `main`, tag `v1.0.0`. 🎉**
 
+---
+
+# PHASE 4 — Mini Mode v1.1 — Local Compact Bar · §M
+
+**Ship:** `v1.1.0-mini` · **Est:** 0.5–1 day · **Branch:** `phase-4-mini` or `main` post-v1.0
+
+> ★ **Not a 4th ModeSpec.** Shell state `miniModeActive` in `Main.qml`. Only Local when media loaded. Height = `Theme.titleBarHeight: 44px` so it sits on Word/Explorer title bar. Width may increase to 400-420px to accommodate controls but still title-bar sized. Owner decisions 7 Aug 2026 locked.
+
+## Milestone 4.1 — Mini Bar · 0.5–1 d
+
+### Build
+
+- [x] `ui/shell/MiniBar.qml` — fixed **400–420 × 44**, glass `Theme.glassFill`, blur 32, radius 12, always-on-top when active · §M.2
+- [x] Layout: **grip ⋮⋮ (24px, only draggable via `startSystemMove()`) · prev track · seek -10s · play/pause 44px with circular progress ring · stop · next track · seek +10s · volume/mute · return** — 8 controls + grip, 32-40px hit targets, from shared `IconButton` vocabulary · §M.3 §B.1
+- [x] ★ **Innovative seek without width increase:** top 3px hairline of bar IS seek bar — 2px rest (played accent gradient + buffered), 6px + knob + tooltip on hover, click/drag to seek live · §M.4
+- [x] ★ Circular progress ring around play button — 0-100% fill, accent colour, glanceable without width · §M.4
+- [x] Volume: mute icon click = `Actions.toggleMute`, hover → vertical `GlassPanel` slider 140px tall pops ABOVE bar (overlay, no width increase) · §M.4
+- [x] All controls bind to **same `Actions` entries** as Local transport — `playPause`, `stop`, `prev`, `next`, `seekRelative`, `toggleMute`, `toggleMiniMode` — no second implementation · §4.1
+- [x] `ui/shell/TitleBar.qml` — add mini toggle left of minimize as `[mini][─][□][✕]`, glyph relevant, tooltip "Mini Mode", enabled only when `activeModeId=="local"` && `hasMedia`, grayed in M3U/Web/no media · §M.5
+- [x] `ui/Actions.qml` — new `toggleMiniMode` action, single implementation · §4.1
+- [x] `ui/Main.qml` — `miniModeActive` bool, hide TitleBar/PanelHost/InfoPanel/Stage when active (Stage kept alive hidden, not destroyed — no black flash), fixed window size `min==max==400-420×44`, hide 8 resize handles, `StayOnTopHint` when active, save/restore normal geometry (`x,y,w,h,wasMaximized,wasFullscreen`) · §M.5 §M.6
+- [x] `core/settings.py` — `miniBarPos` + `firstTime` flag, top-center on first activation: `screen.x + screen.width/2 - miniWidth/2, y=screen.y+12` · §M.5
+- [x] Always-on-top, first-time top-center, only grip drags · §M.5
+- [x] No close from mini: intercept `onClosing` in mini → `close.accepted=false; toggleMiniMode()` → returns to normal; only normal can `Qt.quit()` · §M.5
+- [x] Auto-return on playlist naturally finished (no next, repeat off) → toggle to normal · §M.5
+- [x] Turbo Mode: on entering mini, force soft I420 path (disable HWND), on return restore if setting ON · §M.6
+- [x] No auto-hide, no cursor hide in mini — bar always visible · §M.5
+
+### ◻ Verify — Mini Mode
+
+- ◻ Toggle button renders left of minimize, only enabled in Local when media loaded, grayed in M3U/Web/no media
+- ◻ Click → window becomes fixed 400–420×44, frameless, always-on-top, top-center first time, glass matches Theme.titleBarHeight
+- ◻ Bar shows grip ⋮⋮ + 8 controls in order, 44px height, balanced, no gaps
+- ◻ Only grip drags window, buttons click normally
+- ◻ Top 3px hairline seek: 2px rest, 6px + knob on hover, click/drag seeks, buffered behind played, time tooltip
+- ◻ Play button circular ring shows 0-100% progress
+- ◻ Volume: mute click toggles, hover pops vertical slider above bar, live
+- ◻ Seek -10s/+10s, prev/next, play/pause, stop all work via same Actions as Local
+- ◻ Video hidden, audio continues, CPU not higher
+- ◻ Return via return button / Esc / Alt+F4 → normal geometry restored, video instantly resumes no black flash
+- ◻ Playlist finished while in mini → auto-return to normal
+- ◻ No close from mini — taskbar close returns to normal, only normal can quit
+- ◻ No auto-hide, no cursor hide
+- ◻ Sits cleanly on Word/Explorer title bar (44px height match)
+- ◻ No PiP conflict (PiP M3U only, Mini Local only), one-tuner intact
+- ◻ `tools/check_isolation.py` passes, Phases 1-3 regression still passing
+
+**→ Tag `v1.1.0-mini`**
+
+---
+
 # Deferred — post-v1.0 · §8
 
 Not in any phase above. Recorded so they aren't mistaken for oversights.
@@ -798,4 +850,4 @@ Not in any phase above. Recorded so they aren't mistaken for oversights.
 
 ---
 
-*Generated from `HALCYON_PLAN.md` v4.0 — 4 August 2026*
+*Generated from `HALCYON_PLAN.md` v4.1 — 7 August 2026 — includes Mini Mode v1.1*

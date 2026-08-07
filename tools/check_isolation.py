@@ -91,6 +91,23 @@ PHASE3_DISCLOSED = [
     "ui/components/Glyphs.qml",
 ]
 
+#: Disclosed Phase-4 (v1.1) Mini Mode additions — post-v1.0 shell state §M.
+#: Mini is not a ModeSpec, it's a compact bar (400×44 = TitleBar height) with
+#: grip-only drag, top hairline seek + circular play ring, vertical volume
+#: pop-up, always-on-top top-center. Touches frozen shell + settings + actions
+#: but documented in v4.1 changelog, covered by M.7 acceptance. Owner-approved
+#: generic shell capability, same class as v4.0 panel_enabled.
+PHASE4_DISCLOSED = [
+    "core/settings.py",
+    "ui/Actions.qml",
+    "ui/Main.qml",
+    "ui/shell/Shell.qml",
+    "ui/shell/TitleBar.qml",
+    "ui/shell/MiniBar.qml",
+    "ui/components/Glyphs.qml",
+    "Halcyon/Shell/qmldir",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -255,7 +272,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

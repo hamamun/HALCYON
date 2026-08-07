@@ -102,6 +102,12 @@ QtObject {
     readonly property string refresh:    "\uE72C"
     readonly property string home:       "\uE80F"
 
+    // Mini Mode v1.1 — §M.3. BackToWindow (shrink) and FullScreen (expand) are
+    // reused because they already convey compact ↔ normal. Distinct aliases so
+    // TitleBar and MiniBar bind to semantic names, not raw fullscreen icons.
+    readonly property string miniMode:   \"\\uE73F\"   // BackToWindow / compact
+    readonly property string miniReturn: \"\\uE740\"   // FullScreen / expand back
+
     // Right-dock widen/narrow, used by the Lyrics tab.
     //
     // Aliases onto the chevron pair above rather than introducing new

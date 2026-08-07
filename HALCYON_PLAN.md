@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v4.0** — 4 August 2026 |
+| **Version** | Plan **v4.1** — 7 August 2026 |
+| **Changes in v4.1** | **Mini Mode (v1.1) — Local compact bar (owner decision 7 Aug 2026).** Shell state, not a 4th ModeSpec: `miniModeActive` bool in `Main.qml` hides TitleBar, PanelHost, InfoPanel, Stage (kept alive, not destroyed, zero black flash). Bar is **fixed 400-420px × 44px** — height equals standard `Theme.titleBarHeight: 44px` so it sits cleanly on a Word/File Explorer title bar, width increased to accommodate controls but still title-bar sized. Controls: **grip ⋮⋮ (only grip drags) · prev track · seek -10s · play/pause with circular progress ring · stop · next track · seek +10s · volume/mute (vertical pop-up slider above bar) · return**. Toggle button **left of minimize** `[mini][─][□][✕]`, only enabled in Local when media loaded, grayed in M3U/Web or no media. **Innovative seek without width increase:** top 3px hairline of the bar IS the seek bar (2px rest, 6px + knob on hover, click/drag to seek) + circular progress ring around play button. No extra width. Always-on-top, first-time top-center, draggable only via grip, no close from mini (return to normal to quit), auto-return to normal on playlist finished, no auto-hide. |
 | **Changes in v4.0** | **Phase 3 final design (owner decision, 4 Aug 2026), engine = Route A.** Web becomes a real browser **inside the main window** on Windows' built-in **Edge WebView2**, reached **directly via pythonnet** + the vendored 788 KB `Microsoft.Web.WebView2.Core.dll` connector (the same proven approach as the owner's Smart Player) — **no Qt WebView, no QtWebEngine, nothing bundled**. Qt WebView was dropped because its Windows backend silently **blocks all popup/new-window requests** (`qwebview2webview.cpp` — "FIXME actually handle new windows"); direct WebView2's `add_NewWindowRequested` routes site popups to **new Halcyon tabs**, never an outside window. Startup **detection** (registry + import test); missing runtime → the stage shows *"WebView2 is not available"*; profile lives in `%LOCALAPPDATA%\Halcyon\webview2_data`. Layout: title bar → **tabs row** → **address bar** → page. Tabs: none on entry (+ only), typing creates the first tab, **max 15** (in-chrome message "Maximum 15 tabs reached." — no toast), survive mode switches, never saved on exit. Bookmarks: **quick star** (empty→Add popup; filled→Edit/Remove/Cancel) + **Edge-style dropdown** (menu icon; closes on same icon/outside/Esc; text title+URL rows; a Halcyon-owned frameless popup window, §P3.2) + **Bookmarks Manager** internal tab (manual add title+URL / edit / delete / reorder / search; permanent store). Search default is **Google**; **Home** goes to the loaded site's homepage (Google's home page on a blank tab); bookmarks start **completely blank** — no defaults. **No left bookmark drawer** — Web has no dock panel; **no media controls, media panels, OSD or PiP**; site videos use their own controls. Two owner-approved generic capability changes (§A.3 rule 1): `panel_enabled` (Web hides the left dock) and `keep_stage_alive` (Web's stage is parked on mode switch so tabs/pages survive). |
 | **Changes in v3.5** | **M3U polish (owner decision):** the channel filter gets a one-click clear ×, and M3U shows the shared transport toast for Play/Pause, Next/Previous (with the friendly channel name), volume, mute and fullscreen. Toast capability and the Local-only Info/Lyrics/Equalizer dock are now separate mode flags, so M3U gains feedback without gaining a right dock. |
 | **Changes in v3.4** | **One-tuner rule (owner decision):** one engine plays one thing — switching the chip stops whatever is playing; there is never background audio. Entering M3U stops Local (playlist + position preserved; Local's resume prompt brings you back). Leaving M3U stops the stream (list and last channel intact; nothing auto-plays). Enforced from M3U's own `setup` hook — no Phase 1 file is edited. The earlier right-dock/OSD coupling is superseded by v3.5's distinct right-dock flag. |
@@ -31,8 +32,9 @@ This document is now organised as **three sequential chapters**. Each ends with 
 | Chapter | Ship | You test | Status |
 |---|---|---|---|
 | **Phase 1** | `Halcyon Local` — full local player | Everything in §P1.7 | ✅ Complete / signed off |
-| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | 🟡 In progress — kicked off 2 Aug 2026 (foundation frozen at tag `v0.1.0-local`) |
-| **Phase 3** | `Halcyon Complete` — Web added, **in-window** (v4.0 design: Edge WebView2 browser) | §P3.6 (plus P1+P2 regression) | 🟡 Design finalised v4.0 — awaiting P2 sign-off |
+| **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ✅ Complete — tagged `v0.2.0-m3u` |
+| **Phase 3** | `Halcyon Complete` — Web added, **in-window** (v4.0 design: Edge WebView2 browser) | §P3.6 (plus P1+P2 regression) | ✅ Complete — tagged `v1.0.0` |
+| **Phase 4** | `Mini Mode v1.1` — Local compact 400×44 bar | Everything in §M.7 | 🟡 Design locked v4.1 — awaiting implementation |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
 
@@ -907,6 +909,112 @@ SPEC = ModeSpec(
 
 **→ Merge to `main`, tag `v1.0.0`. 🎉**
 
+---
+
+# POST v1.0 — Mini Mode (v1.1) — Local Compact Bar
+
+> **Ship target:** `v1.1.0-mini` · **Est:** 0.5–1 day · **Branch:** `phase-4-mini` (or `main` post-v1.0)
+> **Not a 4th ModeSpec.** Mini is a shell state, like Fullscreen — a `miniModeActive` bool in `ui/Main.qml`. Only available in Local mode when media loaded.
+> 
+> **Owner decisions locked 7 Aug 2026:** height equals standard title bar (`Theme.titleBarHeight: 44px`) so it can sit on Word/Explorer title bar without excess space; width may increase to accommodate controls (400–420px). Draggable only via grip `⋮⋮`, not whole bar. No close from mini (must return to normal to quit). Auto-return to normal on playlist finished. No cursor auto-hide. Volume vertical pop-up. Seek bar zero-width idea loved — hairline top + circular ring.
+
+## M.1 Why not a ModeSpec
+
+| | |
+|---|---|
+| **ModeSpec** = channel with panel + stage + transport (Local/M3U/Web) | Mini has no panel, no stage, no transport — it IS the whole window |
+| **Isolation test** §A.2 | Deleting `modes/mini/` must still work — but mini has no `modes/mini/` folder, it's `ui/shell/MiniBar.qml` |
+| **Simplicity** | Boolean toggle, saves/restores normal geometry, no new registry entry |
+
+## M.2 What gets added / touched (disclosed v4.1 shell change — post-foundation, owner-approved)
+
+```
+ui/shell/MiniBar.qml          # ★ fixed 400-420 × 44, glass, 8 controls + grip
+ui/shell/TitleBar.qml         # ★ add mini toggle left of minimize [mini][─][□][✕] — bound to Actions.toggleMiniMode
+ui/Actions.qml                # ★ new action toggleMiniMode
+ui/Theme.qml                  # maybe miniBarWidth token, if needed — height reuses titleBarHeight
+ui/Main.qml                   # ★ miniModeActive bool, show/hide chrome, fixed window size, always-on-top, save/restore geometry
+core/settings.py              # miniBarPos + firstTime flag
+```
+
+Frozen Phase 1 files are touched, but documented as v4.1 post-v1.0 feature — same class as v4.0 `panel_enabled` capability, covered by regression tests.
+
+## M.3 Layout — 44px height equals TitleBar
+
+```
+┌─────────────────────────────────────────────────────────────┐ 3px hairline seek = top edge of bar itself
+│●━━━━━━━━━━━━━○··············································│ 2px rest → 6px + knob on hover, click/drag seek
+├─────────────────────────────────────────────────────────────┤
+│ ⋮⋮  ⏮  ⏪  ▶  ⏹  ⏭  ⏩  🔊  ⤢  │  44px = Theme.titleBarHeight
+│ 24  40  40  44  40  40  40  40  40  │ grip only drags via startSystemMove()
+└─────────────────────────────────────────────────────────────┘
+        400-420px fixed, frameless, always-on-top
+```
+
+- **Grip `⋮⋮` (24px):** only draggable part, `MouseArea` with `startSystemMove()`, cursor `OpenHand`. Simple, no whole-bar drag conflict.
+- **Prev track / Next track:** `Actions.prev` / `Actions.next` — same action as Local transport
+- **Seek -10s / +10s:** `Actions.seekRelative(-10s)` / `(+10s)` — same actions as transport
+- **Play/Pause (44px, slightly larger):** `Actions.playPause` — **circular progress ring** around it (0-100% fill) = glanceable progress without width
+- **Stop:** `Actions.stop`
+- **Volume/Mute:** mute icon, click = `Actions.toggleMute`. Hover → vertical `GlassPanel` slider 140px tall pops ABOVE bar (overlay, not expanding width). Same shared volume logic.
+- **Return (⤢ expand):** `Actions.toggleMiniMode` — returns to normal geometry
+
+All built from §B.1 vocabulary: `IconButton`, `Theme` tokens, `Actions` singleton — no new colours/radii/durations.
+
+## M.4 Innovative seek without width increase — owner loved
+
+**Zero extra width, zero extra height beyond 44px:**
+
+1. **Top-edge hairline seek bar:** Top 3px of MiniBar IS the seek bar. Rest: 2px thin line, played = accent gradient, buffered = `trackBuffered`. Hover: thickens to 6px + knob + time tooltip, live scrub. Click/drag anywhere on top edge to seek — same code as `SeekBar.qml` but ultra-thin.
+2. **Circular progress ring:** The border of the play button itself fills circularly with accent colour = current position. At a glance progress without looking at hairline.
+
+Together they give precise seek + glanceable status with **0px width increase**, fitting the "sit on Word title bar" requirement.
+
+## M.5 Behaviour
+
+- **Activation:** TitleBar button left of minimize `[mini]`. Enabled only when `activeModeId == "local"` && `hasMedia` (duration>0 / state!=stopped). Grayed + disabled otherwise (M3U/Web/no media). Tooltip "Mini Mode". Bound to `Actions.toggleMiniMode`.
+- **Deactivation:** Return button in mini bar, `Esc`, or close request (Alt+F4/taskbar X) → interpreted as return to normal, not quit. Only normal mode can quit.
+- **Fixed size:** `minimumWidth == maximumWidth == 400-420px`, `minimumHeight == maximumHeight == 44px`. 8 resize handles hidden in mini state.
+- **Always-on-top:** `flags: StayOnTopHint` in mini, normal otherwise. First time: `x = screen.x + screen.width/2 - miniWidth/2`, `y = screen.y + 12`. After drag, save `miniBarPos` to settings.
+- **Video hidden:** Stage `visible: !miniModeActive` but **kept alive** (not destroyed) — reader refcount stays, ring buffer still fills, no texture upload while hidden to save GPU. Return = instant picture, no black flash (see Risks).
+- **Auto-return:** When playlist naturally ends (no next, repeat off) while in mini, automatically call toggle → normal mode.
+- **No auto-hide / cursor hide:** Mini bar never hides. User works in other windows leaving it playing.
+- **No PiP conflict:** PiP only exists in M3U (§P2.5), Mini only in Local, so mutually exclusive by definition. One-tuner rule already stops M3U when switching to Local.
+- **Fullscreen lockout:** Mini toggle disabled while `isFullscreen`.
+
+## M.6 Risks & mitigations
+
+| Risk | Mitigation — simplest |
+|---|---|
+| **Black flash on return** | Keep Stage alive hidden, not destroyed — same as Web `keep_stage_alive`. On return, latest frame already in ring. Skip `createTextureFromImage` while hidden to save. |
+| **Geometry restore** | Save normal `x,y,w,h,wasMaximized,wasFullscreen` before entering mini. On return restore. If wasMaximized, call `showMaximized()` after. |
+| **Turbo Mode HWND child** | Turbo uses native child HWND — hidden Stage would leave orphan. On entering mini, force switch to I420 soft path keeping position; on return, if Turbo setting ON, re-enable hw. Simplest: disable Turbo while mini. |
+| **Fixed-size frameless drag** | Only grip calls `startSystemMove()`, not whole bar — avoids accidental drags. Handles hidden. |
+| **Close from mini** | Intercept `onClosing` in mini: `close.accepted=false; toggleMiniMode()` → returns to normal. Only normal mode `Qt.quit()`. |
+
+## M.7 Acceptance — Mini Mode
+
+- [ ] Toggle button renders left of minimize as `[mini][─][□][✕]`, only enabled in Local when media loaded, grayed in M3U/Web/no media
+- [ ] Click toggle → window becomes fixed 400-420 × 44, frameless, always-on-top, top-center first time, glass matches Theme
+- [ ] Bar shows grip ⋮⋮ + 8 controls: prev track · seek -10s · play/pause (with circular progress ring) · stop · next track · seek +10s · volume/mute + vertical pop-up · return — same `IconButton` vocabulary, no new colours/radii
+- [ ] Only grip drags the window (`startSystemMove()`), buttons click normally, no accidental drag
+- [ ] Top 3px hairline is seek bar: 2px rest, 6px + knob on hover, click/drag seeks, buffered behind played
+- [ ] Play button circular ring shows progress 0-100% without extra width
+- [ ] Volume: mute icon click toggles mute, hover pops vertical slider above bar (no width increase), controls live
+- [ ] Seek -10s/+10s, prev/next, play/pause, stop all work via same `Actions` entries as Local transport (§4.1)
+- [ ] Video hidden, audio continues, CPU not higher than normal (no texture upload while hidden)
+- [ ] Return via return button / Esc / Alt+F4 → normal window restores at previous geometry, video instantly resumes with no black flash
+- [ ] Playlist naturally finished while in mini → auto-return to normal
+- [ ] No close from mini — taskbar close / Alt+F4 returns to normal, only normal can quit
+- [ ] No auto-hide, no cursor hide in mini
+- [ ] Works while sitting on Word/Explorer title bar (44px height matches, 400px width fits in free title bar space)
+- [ ] No PiP conflict (PiP only M3U, Mini only Local), one-tuner rule intact
+- [ ] `tools/check_isolation.py` still passes, all Phase 1-3 regression still passing
+
+**→ Tag `v1.1.0-mini`**
+
+---
+
 ## 7. Visual Design *(applies to all phases — set in Phase 1)*
 
 **Aurora glass.** Deep charcoal base, slow-drifting aurora gradient, frosted panels floating above.
@@ -1014,6 +1122,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | **Separate playlists per mode** | all | ✅ one slot, three panels |
 | **Modes independently testable** | all | ✅ §A + per-phase acceptance |
 | **One machine, three channels** | all | ✅ §B — shared vocabulary, per-mode layout |
+| **Mini Mode v1.1: Local compact bar 400×44, grip only drag, prev/seek ±10/play/stop/next/volume/mute/return, hairline top seek + circular play ring, vertical volume pop-up, always-on-top top-center, no close from mini, auto-return on finished** | 4 | ✅ §M — shell state not ModeSpec, 44px = TitleBar height |
 | Mobile remote + QR | post-v1.0 | ⏸ §8 |
 
 **One conscious trade-off, bounded:** 4K60 needs Turbo Mode (§0.5). *The separate-window limitation from earlier drafts is resolved — see §P3.2.*
