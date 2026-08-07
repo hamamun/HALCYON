@@ -242,11 +242,25 @@ class BrowserContext(QObject):
     # -------------------------------------------------------- stage attachment
     @Slot(QObject)
     def attachToWindow(self, window: QObject | None) -> None:  # noqa: N802 - QML API
-        """Attach controllers to the main QQuickWindow once it owns an HWND."""
+        """Attach controllers to the main QQuickWindow once it owns an HWND.
+
+        The window is identified by its real Win32 HWND rather than by Python
+        object identity.  QML's ``syncBrowserSurface()`` re-runs this on every
+        stage/geometry change and passes ``webStage.Window.window``, which
+        PySide6 hands back as a *fresh* Python wrapper for the same native
+        window each time.  Comparing with ``is not`` would therefore always see
+        "a different window", release and re-create every WebView2 controller
+        and re-navigate the page — restarting a web video from 0:00 instead of
+        leaving it paused on the exact frame the user switched away on.
+        """
         if window is None:
             return
 
-        changed_window = window is not self._host_window
+        hwnd = self._window_hwnd(window)
+        # Only a genuinely different native window (a changed HWND) counts as a
+        # changed window.  A repeated wrapper for the same HWND is the common
+        # sync case and must never release the controllers.
+        changed_window = not (self._parent_hwnd > 0 and hwnd == self._parent_hwnd)
         if changed_window:
             self._host_window = window
             self._parent_hwnd = 0

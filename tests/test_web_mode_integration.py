@@ -89,3 +89,72 @@ def test_switch_away_from_web_mode_pauses_web_media():
 
     app.setActiveMode("local")
     browser.pauseMedia.assert_called_once()
+
+
+def test_web_local_web_round_trip_keeps_page_paused_not_reloaded():
+    """Web -> Local -> Web must not destroy the controller or restart the video.
+
+    Leaving Web pauses the web media (one-tuner rule); returning to Web stops
+    the VLC engine, reveals the *existing* WebView2 controller (same HWND) and
+    leaves the page paused on its frame instead of reloading from 0:00.
+    """
+    hosts: list = []
+
+    def make_host(parent=None):
+        from tests.test_web_browser_context import FakeHost
+
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    from PySide6.QtCore import QObject
+
+    class FakeWindow(QObject):
+        def winId(self):  # noqa: N802
+            return 4242
+
+    mock_engine = MagicMock()
+    mock_engine.state = 3  # Playing
+    mock_settings = MagicMock()
+    mock_settings.get.return_value = "local"
+    app = AppController(
+        mock_engine, mock_settings, MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    browser = BrowserContext(
+        controller=app,
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+    app.register_context("web", browser)
+
+    # Enter Web mode and load a page.
+    app.setActiveMode("web")
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+    browser.navigateActive("https://www.youtube.com")
+
+    assert len(hosts) == 1
+    host = hosts[0]
+    assert host.isReady is True
+    assert host.release_calls == 0
+
+    # Switch away to Local: engine keeps running, web media must pause and the
+    # stage is parked.
+    browser.setStageActive(False)
+    assert host.pause_media_calls == 1
+    assert host.release_calls == 0
+    assert host.visible_values[-1] is False
+
+    # Switch back to Web: VLC engine is stopped and the existing controller is
+    # revealed without release/re-navigation.
+    app.setActiveMode("web")
+    mock_engine.stop.assert_called_once()
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+
+    assert host.isReady is True
+    assert host.release_calls == 0
+    assert host.visible_values[-1] is True
