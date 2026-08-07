@@ -53,6 +53,7 @@ QtObject {
     readonly property string edit:       "\uE70F"
     readonly property string cancel:     "\uE711"
     readonly property string save:       "\uE74E"
+    readonly property string check:      "\uE73E"   // CheckMark — dialog confirm (Settings "Done")
 
     readonly property string infoPanel:  "\uE8A0"   // right dock toggle
 

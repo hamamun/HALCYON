@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import Halcyon.Ui
 
 // Local's left panel — §P1.5.
