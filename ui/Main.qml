@@ -61,7 +61,7 @@ Shell {
     property bool normalWasFullscreen: false
     property bool wasTurbo: false
     // Width from settings, height = titleBarHeight per spec
-    property int miniBarWidth: Settings.get("window.miniBarWidth", 400)
+    property int miniBarWidth: Math.max(460, Settings.get("window.miniBarWidth", 460))
     readonly property int miniBarHeight: Theme.titleBarHeight // 44px
 
     // Override Shell's min/max to allow fixed mini size
@@ -787,7 +787,7 @@ Shell {
     }
 
     // ======================================================================
-    // MINI BAR — §M.3 / §M.4 — v1.1 fixed 400×44, always-on-top
+    // MINI BAR — §M.3 / §M.4 — v1.1 fixed 460×44, always-on-top
     // ======================================================================
     MiniBar {
         id: miniBar
@@ -799,38 +799,6 @@ Shell {
 
         onSeekRequested: function(frac) {
             Actions.seekFraction(frac);
-        }
-    }
-
-    // Auto-return to normal when playlist naturally finishes while in mini §M.5
-    Connections {
-        target: (typeof Player !== "undefined" && Player) ? Player : null
-        enabled: target !== null && window.miniModeActive
-        function onStateChanged() {
-            // When playback stops and we are in mini, auto-return if repeat off and at end
-            if (!window.miniModeActive) return;
-            // State 6 = Ended, 5 = Stopped per vlc_engine State enum
-            // Use isPlaying false + position near end as fallback
-            if (target.state === 5 || target.state === 6) {
-                // Check repeat: if repeat one/all, stay in mini (will loop)
-                var rep = window.modeContext ? window.modeContext.repeatMode : 0;
-                if (rep === 0) {
-                    // If count == 1 or at last index, or count==0, return
-                    var ctx = window.modeContext;
-                    var atEnd = true;
-                    if (ctx) {
-                        var cnt = ctx.count;
-                        var cur = ctx.current_index;
-                        if (cnt > 1 && cur >= 0 && cur < cnt - 1) {
-                            atEnd = false; // there is next track, will auto-advance
-                        }
-                    }
-                    if (atEnd) {
-                        // Small delay so toast can show if any
-                        Qt.callLater(function() { if (window.miniModeActive) window.leaveMiniMode(); });
-                    }
-                }
-            }
         }
     }
 
