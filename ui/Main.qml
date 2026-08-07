@@ -157,7 +157,9 @@ Shell {
             Settings.set("playback.turboMode", false);
         }
 
-        // Determine mini position — first time top-center, else saved
+        // Determine mini position — each session's first entry is top-center
+        // (startup resets the saved position to -1); within this session the
+        // last dragged position is remembered.
         var mx = Settings.get("window.miniBarX", -1);
         var my = Settings.get("window.miniBarY", -1);
         var mw = miniBarWidth;
@@ -224,6 +226,13 @@ Shell {
         leftPanelOpen = Settings.get("window.leftPanelVisible", true);
         rightPanelOpen = Settings.get("window.rightPanelVisible", false);
         restoreGeometry();
+        // Mini Mode always re-enters top-center on a fresh session (§M).
+        // Startup clears any position the previous session's drag persisted;
+        // leaveMiniMode() still saves within this run, so drags stay
+        // remembered between entries in the same session while every launch
+        // begins top-center again.
+        Settings.set("window.miniBarX", -1);
+        Settings.set("window.miniBarY", -1);
         Actions.host = actionHost;
     }
 

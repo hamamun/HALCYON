@@ -322,8 +322,13 @@ Item {
                 id: volBg
                 anchors.fill: parent
                 radius: height / 2
-                color: volArea.containsMouse || volArea.pressed ? Qt.rgba(0.08, 0.11, 0.16, 0.95)
-                                                                : Qt.rgba(0.05, 0.07, 0.11, 0.85)
+                // Transparent capsule — the bar's own GlassPanel shows through,
+                // matching Mini Mode's translucent look instead of an opaque
+                // dark pill. Hover/press lift with the same glass tokens every
+                // other control uses (IconButton §B.1); the accent gradient
+                // fill and glass border keep the capsule shape readable.
+                color: volArea.containsMouse || volArea.pressed ? Theme.glassFillHover
+                                                                : "transparent"
                 border.width: 1
                 border.color: volArea.containsMouse || volArea.pressed ? Theme.accentDim
                                                                        : Theme.glassBorder
