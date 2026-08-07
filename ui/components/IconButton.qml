@@ -24,7 +24,7 @@ AbstractButton {
     property string tooltip: ""
     property bool active: false            // "on" state, e.g. shuffle enabled
     property real iconSize: Theme.iconSize
-    property color iconColor: Theme.text
+    property color iconColor: Theme.text       // rest-state glyph colour
     property color activeColor: Theme.accent
     property bool showRing: true
     // A small "something is available" dot in the top-right corner — used by
@@ -67,7 +67,8 @@ AbstractButton {
             font.weight: root.plainTextGlyph ? Font.Bold : Font.Normal
             color: root.active ? root.activeColor
                  : root.hovered ? Theme.text
-                 : Qt.rgba(Theme.text.r, Theme.text.g, Theme.text.b, Theme.opacityRest)
+                 : Qt.rgba(root.iconColor.r, root.iconColor.g, root.iconColor.b,
+                           Theme.opacityRest)
             scale: root.pressed ? 0.90 : 1.0
 
             Behavior on color {
