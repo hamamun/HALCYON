@@ -31,6 +31,7 @@ class FakeHost(QObject):
         self.stop_calls = 0
         self.exit_fullscreen_calls = 0
         self.pause_media_calls = 0
+        self.release_calls = 0
         self.errorMessage = ""
 
     def init_controller(self, hwnd, _environment):
@@ -66,6 +67,7 @@ class FakeHost(QObject):
         self.pause_media_calls += 1
 
     def release_controller(self):
+        self.release_calls += 1
         self.isReady = False
 
     def close(self):
@@ -181,6 +183,138 @@ def test_external_tab_is_wired_to_a_host_and_native_viewport():
 
     browser.goBack()
     assert host.back_calls == 1
+
+
+def test_reattach_same_hwnd_with_fresh_wrapper_keeps_controller():
+    """Re-syncing the same native window must NOT release the WebView2 controller.
+
+    QML's syncBrowserSurface() calls attachToWindow on every geometry/visibility
+    change, handing back a fresh PySide6 Python wrapper for the *same* native
+    window each time.  The controller must be identified by its Win32 HWND, so a
+    repeated wrapper (identical HWND) is treated as the same window and the
+    page is left paused on its frame instead of being destroyed and re-navigated
+    from 0:00 (§P3.3 mode-switch retention).
+    """
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+
+    # A genuine first attach creates the controller.
+    first = FakeWindow()
+    browser.attachToWindow(first)
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+    browser.navigateActive("example.com")
+
+    assert len(hosts) == 1
+    assert hosts[0].isReady is True
+    assert hosts[0].release_calls == 0
+
+    # A fresh wrapper for the SAME native window (same HWND) must be treated as
+    # the same window — no controller release, no re-navigation.
+    second_wrapper = FakeWindow()
+    assert second_wrapper is not first
+    assert second_wrapper.winId() == first.winId()
+    browser.attachToWindow(second_wrapper)
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+
+    assert hosts[0].isReady is True
+    assert hosts[0].release_calls == 0
+    assert len(hosts) == 1
+
+
+def test_attach_to_different_hwnd_releases_controller():
+    """A genuinely different native window (new HWND) still releases controllers.
+
+    The HWND-based window check must not prevent release when Qt actually
+    re-creates the top-level window — the old controller cannot be rebound to
+    another parent HWND.
+    """
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+
+    browser.attachToWindow(FakeWindow())  # HWND 4242
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+    browser.navigateActive("example.com")
+    assert len(hosts) == 1
+    assert hosts[0].isReady is True
+    assert hosts[0].release_calls == 0
+
+    # A window with a genuinely different HWND must release + re-create.
+    class OtherWindow(FakeWindow):
+        def winId(self):  # noqa: N802
+            return 9999
+
+    browser.attachToWindow(OtherWindow())
+    assert hosts[0].release_calls == 1
+    assert hosts[0].isReady is False
+
+
+def test_mode_switch_away_and_back_preserves_controller_and_pauses_media():
+    """Web -> Local/M3U -> Web must keep the web page paused on its frame.
+
+    Leaving Web pauses media and exits fullscreen; returning must reveal the
+    existing controller *without* releasing it, so the video does not reload
+    from the beginning and auto-play.
+    """
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+    browser.navigateActive("https://www.youtube.com")
+
+    host = hosts[0]
+    assert host.isReady is True
+    assert host.release_calls == 0
+    assert host.pause_media_calls == 0
+
+    # Leaving Web mode: the stage is parked -> stage inactive -> pause media.
+    browser.setStageActive(False)
+    assert host.pause_media_calls == 1
+    assert host.isReady is True
+    assert host.release_calls == 0
+
+    # Returning to Web mode: the same native window is re-attached (fresh
+    # wrapper), the stage becomes active again, and the controller survives.
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+
+    assert host.isReady is True
+    assert host.release_calls == 0
+    assert host.visible_values[-1] is True
 
 
 def test_browser_context_promotes_webview_fullscreen_to_qml_state():
