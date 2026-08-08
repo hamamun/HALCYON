@@ -497,6 +497,21 @@ class BrowserContext(QObject):
         else:
             tab.host.reload()
 
+    # ------------------------------------------------------- Phase R web chip -
+    def mediaControl(self, action: str, value=None) -> None:  # noqa: N802 - QML API
+        """Universal media control on the ACTIVE tab only (§R.2)."""
+        tab = self._active_tab()
+        if tab is None or tab.host is None:
+            return
+        getattr(tab.host, "media_control")(action, value)
+
+    def media_status(self) -> dict:
+        """Latest media-probe result for the active tab (web chip §R.2)."""
+        tab = self._active_tab()
+        if tab is None or tab.host is None:
+            return {"found": False}
+        return getattr(tab.host, "media_status")()
+
     @Slot(str)
     def onPopupRequested(self, url: str) -> None:  # noqa: N802 - QML API
         # Burst protection for ad-heavy sites like bilibili.tv:

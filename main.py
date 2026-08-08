@@ -275,8 +275,56 @@ def main(argv: list[str] | None = None) -> int:
         log.error("QML failed to load — see the messages above")
         return 2
 
+    # --- mobile remote (Phase R, §R.4) --------------------------------------
+    # On by default; the LAST step of startup loading (owner decision
+    # 2026-08-08). Never fatal: without aiohttp the app starts exactly as
+    # before, with a warning. Stopped FIRST in on_quit() so no command can
+    # arrive while the engine is tearing down (§R.4).
+    #
+    # The bridge is the safety keystone: the server thread only emits queued
+    # signals and reads plain dicts; every command runs on the Qt thread here,
+    # exactly like a button click (§R.4).
+    from remote.bridge import RemoteBridge
+    from remote.server import RemoteServer
+
+    remote_bridge = RemoteBridge(
+        controller=controller,
+        engine=player,
+        settings=settings,
+        equalizer=equalizer,
+        subs=subs_backend,
+        parent=app,
+    )
+    _KEEP_ALIVE.append(remote_bridge)
+    # Hand the bridge the mode contexts (Local playlist, M3U, Web browser) so
+    # it can drive and mirror each mode — the remote mirrors every mode's
+    # control set (§R.2), which is why it is allowed to reach modes.
+    for spec in mode_registry.all_modes():
+        remote_bridge.register_context(spec.id, controller.context(spec.id))
+    ctx.setContextProperty("RemoteBridge", remote_bridge)
+
+    remote = RemoteServer(bridge=remote_bridge, settings=settings)
+    _KEEP_ALIVE.append(remote)
+    if remote.start():
+        log.info("mobile remote serving on %s", remote.base_url)
+    else:
+        log.info("mobile remote not started")
+
     # --- shutdown, in the right order (§9) ---------------------------------
     def on_quit() -> None:
+        # The remote goes down first: it is the only component that accepts
+        # input from outside the process, so once shutdown starts no new
+        # command may be accepted (§R.4). Stop the bridge's status poller too
+        # so it never reads engine state mid-teardown.
+        try:
+            remote.stop()
+        except Exception:
+            log.exception("remote server stop failed")
+        try:
+            remote_bridge.stop()
+        except Exception:
+            log.exception("remote bridge stop failed")
+
         # Break QML's signal bindings while their target QObjects are still
         # alive. Otherwise QQmlApplicationEngine may tear down a Connections
         # object after Player has already been destroyed and Qt prints

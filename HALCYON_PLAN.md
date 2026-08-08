@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v4.1** — 7 August 2026 |
+| **Version** | Plan **v4.2** — 8 August 2026 |
+| **Changes in v4.2** | **Mobile Remote (v1.2) — full spec locked (owner review, 8 Aug 2026), §R.** Phone controls the PC over Wi-Fi via a web page in the phone browser (no install). Tiny `aiohttp` server inside the app, **on by default, starts as the last step of startup loading**, stops on exit. Connect by scanning a **QR code in PC Settings → Mobile Remote** (or typing `http://<pc-ip>:8765`); QR/URL is the only key — **no PIN** (owner: keep it simple). Real-time sync, **PC is the source of truth**, phone is a mirror. One-shot build — no versions. Chip-wise scope: **Local** = transport, volume, drive browser (all drives), playlist pinned to the **bottom with max 7 rows + autoscroll**, tracks & subtitles incl. **subtitle download**, equalizer, now-playing (no lyrics — owner); **M3U** = transport **incl. PiP + Fullscreen**, sources (**add by URL only** — owner), grouped channels, favourites; **Web** = active-page only, bookmarks + **universal media control** via WebView2 `ExecuteScriptAsync` on the active tab; **⚡ Power** (collapsed, every chip) = Sleep / Shutdown on the PC. Build deliberately deferred until v1.0 ships (§8) — no remote code exists yet. |
 | **Changes in v4.1** | **Mini Mode (v1.1) — Local compact bar (owner decision 7 Aug 2026).** Shell state, not a 4th ModeSpec: `miniModeActive` bool in `Main.qml` hides TitleBar, PanelHost, InfoPanel, Stage (kept alive, not destroyed, zero black flash). Bar is **fixed 400-420px × 44px** — height equals standard `Theme.titleBarHeight: 44px` so it sits cleanly on a Word/File Explorer title bar, width increased to accommodate controls but still title-bar sized. Controls: **grip ⋮⋮ (only grip drags) · prev track · seek -10s · play/pause with circular progress ring · stop · next track · seek +10s · volume/mute (vertical pop-up slider above bar) · return**. Toggle button **left of minimize** `[mini][─][□][✕]`, only enabled in Local when media loaded, grayed in M3U/Web or no media. **Innovative seek without width increase:** top 3px hairline of the bar IS the seek bar (2px rest, 6px + knob on hover, click/drag to seek) + circular progress ring around play button. No extra width. Always-on-top, first-time top-center, draggable only via grip, no close from mini (return to normal to quit), auto-return to normal on playlist finished, no auto-hide. |
 | **Changes in v4.0** | **Phase 3 final design (owner decision, 4 Aug 2026), engine = Route A.** Web becomes a real browser **inside the main window** on Windows' built-in **Edge WebView2**, reached **directly via pythonnet** + the vendored 788 KB `Microsoft.Web.WebView2.Core.dll` connector (the same proven approach as the owner's Smart Player) — **no Qt WebView, no QtWebEngine, nothing bundled**. Qt WebView was dropped because its Windows backend silently **blocks all popup/new-window requests** (`qwebview2webview.cpp` — "FIXME actually handle new windows"); direct WebView2's `add_NewWindowRequested` routes site popups to **new Halcyon tabs**, never an outside window. Startup **detection** (registry + import test); missing runtime → the stage shows *"WebView2 is not available"*; profile lives in `%LOCALAPPDATA%\Halcyon\webview2_data`. Layout: title bar → **tabs row** → **address bar** → page. Tabs: none on entry (+ only), typing creates the first tab, **max 15** (in-chrome message "Maximum 15 tabs reached." — no toast), survive mode switches, never saved on exit. Bookmarks: **quick star** (empty→Add popup; filled→Edit/Remove/Cancel) + **Edge-style dropdown** (menu icon; closes on same icon/outside/Esc; text title+URL rows; a Halcyon-owned frameless popup window, §P3.2) + **Bookmarks Manager** internal tab (manual add title+URL / edit / delete / reorder / search; permanent store). Search default is **Google**; **Home** goes to the loaded site's homepage (Google's home page on a blank tab); bookmarks start **completely blank** — no defaults. **No left bookmark drawer** — Web has no dock panel; **no media controls, media panels, OSD or PiP**; site videos use their own controls. Two owner-approved generic capability changes (§A.3 rule 1): `panel_enabled` (Web hides the left dock) and `keep_stage_alive` (Web's stage is parked on mode switch so tabs/pages survive). |
 | **Changes in v3.5** | **M3U polish (owner decision):** the channel filter gets a one-click clear ×, and M3U shows the shared transport toast for Play/Pause, Next/Previous (with the friendly channel name), volume, mute and fullscreen. Toast capability and the Local-only Info/Lyrics/Equalizer dock are now separate mode flags, so M3U gains feedback without gaining a right dock. |
@@ -35,6 +36,7 @@ This document is now organised as **three sequential chapters**. Each ends with 
 | **Phase 2** | `Halcyon + M3U` — Local untouched, M3U added | §P2.6 (plus P1 regression) | ✅ Complete — tagged `v0.2.0-m3u` |
 | **Phase 3** | `Halcyon Complete` — Web added, **in-window** (v4.0 design: Edge WebView2 browser) | §P3.6 (plus P1+P2 regression) | ✅ Complete — tagged `v1.0.0` |
 | **Phase 4** | `Mini Mode v1.1` — Local compact 400×44 bar | Everything in §M.7 | 🟡 Design locked v4.1 — awaiting implementation |
+| **Phase R** | `Mobile Remote v1.2` — Android phone companion | Everything in §R.5 | ✅ **Built 2026-08-08 (§R.6) — awaiting owner verification on Windows** |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
 
@@ -1015,6 +1017,262 @@ Together they give precise seek + glanceable status with **0px width increase**,
 
 ---
 
+# POST v1.0 — Mobile Remote (v1.2) — Android phone companion · §R
+
+> **Status: BUILT — 2026-08-08 (all nine steps landed, §R.6).** Spec locked and implemented the same day by owner decision (overrides the earlier "deferred until v1.0" gate). The player's own code paths stay untouched: the remote is a second doorway onto existing `AppController` actions (§4.1); every step landed with the full regression suite and isolation check green. **Awaiting owner verification on Windows** (CHECKLIST Phase R sign-off boxes).
+> Verified 2026-08-08 at lock time: **no remote code existed** — no server, no QR, no phone UI. `aiohttp`/`qrcode` were commented out in `requirements-dev-full.txt`; both are now active (Phase R build).
+
+## R.1 Product decisions — owner, 2026-08-08 (lock these)
+
+| # | Decision | Owner call |
+|---|---|---|
+| 1 | Phone side | **Web page in the phone's browser** — no install, no Play Store, no APK. Scan the QR → page opens in Chrome. |
+| 2 | Server on PC | Tiny HTTP server inside the app. **On by default — starts as the last step of startup loading**, stops when the app closes. |
+| 3 | Connecting | QR code in **PC Settings → Mobile Remote** section. Scanning it (or typing `http://<pc-ip>:8765`) is the *only* key. |
+| 4 | PIN | **None — keep it simple.** The QR/URL is the door; same Wi-Fi only; never exposed to the internet. |
+| 5 | Sync | Real-time; **PC is the source of truth**, the phone mirrors it — instant, never stale, no two realities. |
+| 6 | Look | Stunning dark-glass mobile UI matching Halcyon's theme; thumb-friendly. |
+| 7 | Versions | **One shot — full remote in a single build.** No v0.x remote. |
+| 8 | Local playlist position | **Pinned to the bottom** of the Local screen; **max 7 rows visible, then autoscroll** (it can be long). |
+| 9 | Lyrics on mobile | **Not required** — excluded (owner). |
+| 10 | M3U Add source | **URL field only** — no drive browser for M3U sources (owner). |
+| 11 | Web mode | **Active page only**; bookmarks + **universal media control** via WebView2 `ExecuteScriptAsync` on the active tab's controller. |
+| 12 | Power | Collapsible **⚡ Power** section (every chip) → **Sleep** / **Shutdown** buttons that act on the PC. |
+| 13 | PiP / Fullscreen | **PiP + Fullscreen buttons included on the M3U chip** remote transport. |
+| 14 | Subtitle download | **Included on the Local chip** — search + language filter + results + download, same backend as the PC dialog. |
+
+## R.2 Chip-wise control list (final)
+
+### Common — top of every chip
+- 3 chips `Local` · `M3U` · `Web` — tapping a chip switches the **PC's** mode too (same as clicking it on the PC)
+- Now Playing bar (title + time) · connection dot (phone ↔ PC link alive)
+- ⚡ Power (collapsed) pinned at the bottom
+
+### 🎬 Local chip
+1. **Transport** — Play/Pause · Stop · Next/Previous · seek bar + **±10 s** quick-jump · playback speed 0.5×–2×
+2. **Volume** — slider + mute
+3. **Files (drive browser)** — **all drives** (C:, D:, …) · navigate folders · media-only filter · **tap file = plays on PC** · add file/folder to playlist
+4. **Playlist** — **pinned to the bottom, max 7 rows visible + autoscroll** · tap to play · reorder · remove · clear · shuffle · repeat (off/all/one)
+5. **Tracks & subtitles** — audio track picker · subtitle track picker · **Download subtitles** · load subtitle file (reuses drive browser) · subtitle delay +/−
+6. **Equalizer** — all sliders + presets, same as the PC
+7. **Now playing** — album art, title, artist *(no lyrics — owner R.1#9)*
+
+### 📺 M3U chip
+1. **Transport** — prev channel · Play/Pause · next channel · Stop · seek bar (on-demand) · volume + mute
+2. **Extras** — **🖼 PiP** · **⛶ Fullscreen** (both act on the PC)
+3. **Sources** — list saved sources · **+ Add source = URL field only** (no drive browser — owner R.1#10) · edit / remove
+4. **Channels** — grouped list (sports/movies/…) · tap channel = plays on PC · search/filter · expand/collapse groups · favourites filter
+5. **Favourites** — star / unstar · favourites-only view
+
+### 🌐 Web chip *(active page only — owner R.1#11)*
+1. **Active page card** — title + URL of the page currently open on the PC
+2. **Bookmarks** — list · tap = open in the active tab · add current page · remove
+3. **Universal media control** (appears only when the page has a video) — Play/Pause · seek bar · time · volume/mute · fullscreen on PC. *(Known exception: paid DRM-streaming sites such as Netflix/Prime Video resist scripted control — status still shown, transport may not respond.)*
+
+### ⚡ Power (global, every chip)
+- Collapsed bar at the bottom → expands to two buttons: **Sleep** · **Shutdown** (acts on the PC)
+
+### ❌ Not on the remote
+- App Settings (the QR code lives *inside* PC Settings) · Mini Mode · window controls · OSD toasts · lyrics
+
+## R.3 Interface layouts (locked)
+
+### Screen 0 — Common shell (frame on every chip)
+```
+┌──────────────────────────────┐
+│  ◉ HALCYON  ● Connected      │   header + status dot
+├──────────────────────────────┤
+│  [ LOCAL ] [ M3U ] [ WEB ]   │   chips — tap switches PC too
+├──────────────────────────────┤
+│ ▶▶ Now Playing      12:34    │   now playing bar
+├──────────────────────────────┤
+│                              │
+│   (chip content — scrolls)   │
+│                              │
+├──────────────────────────────┤
+│  ▸ ⚡ Power                   │   collapsed by default
+└──────────────────────────────┘
+```
+
+### Screen 1 — 🎬 Local chip
+```
+┌──────────────────────────────┐
+│  [ LOCAL ] [ M3U ] [ WEB ]   │
+├──────────────────────────────┤
+│  Now Playing           12:34 │
+├──────────────────────────────┤
+│  ── TRANSPORT ────────────── │
+│  ⏮  ▶/⏸  ⏭   ⏹             │
+│  ───────●────────  seek bar  │
+│  -10s         +10s   [1.0×]  │
+│  ── VOLUME ───────────────── │
+│  🔇 ────●────────  🔊         │
+│  ── FILES ────────────────── │
+│  [ 📁 Browse Drives ]        │  → Screen 2
+│  [ ➕ Add folder to playlist]│
+│  ── TRACKS & SUBTITLES ──── │
+│  Audio track:   [English ▾] │
+│  Subtitles:     [Off     ▾] │
+│  [ ⬇ Download Subtitles ]   │  → Screen 3
+│  [ 📄 Load subtitle file ]  │
+│  Subtitle delay:   -0.5s ▾  │
+│  ── EQUALIZER ────────────── │
+│  ▸ collapsed — sliders +     │
+│     presets when expanded    │
+│  ── NOW PLAYING ──────────── │
+│  🖼 Album art   Title         │
+│                Artist        │
+├──────────────────────────────┤
+│  ── PLAYLIST ────────────── │   pinned BOTTOM —
+│  🔀 Shuffle   🔁 Repeat      │   7 rows max, then
+│  Track 1  ▸  (current)       │   autoscroll
+│  Track 2             ↕  ✕   │
+│  ... (max 7 visible)         │
+├──────────────────────────────┤
+│  ▸ ⚡ Power                   │
+└──────────────────────────────┘
+```
+
+### Screen 2 — 📁 Drive browser (from Local → Files)
+```
+┌──────────────────────────────┐
+│  ◀ Back          Select file │
+├──────────────────────────────┤
+│  My PC ▸  This PC            │
+│  ── DRIVES ───────────────── │
+│  💽 C:  Windows              │
+│  💽 D:  Movies               │
+│  💽 E:  Backup               │
+├──────────────────────────────┤
+│  📁 Videos    📁 Music       │
+│  ▶ Movie1.mkv        ▶  ▶ + │
+│  ▶ Song2.mp3         ▶  ▶ + │
+│  (only media files shown)    │
+│  ▶ tap file = play on PC     │
+│  + tap + = add to playlist   │
+├──────────────────────────────┤
+│        [ Play selected ]     │
+└──────────────────────────────┘
+```
+
+### Screen 3 — ⬇ Subtitle download (from Local → Tracks & subtitles)
+```
+┌──────────────────────────────┐
+│  ◀ Back         Subtitles    │
+├──────────────────────────────┤
+│  [ Search for subtitles… ]   │
+│  [ 🔍 Search ]               │
+│  ── LANGUAGE ─────────────── │
+│  [EN][FR][ES][DE][+]         │
+│  ── RESULTS ──────────────── │
+│  Movie.2024.1080p  EN ⬇     │
+│  Movie.2024.BluRay  FR ⬇    │
+│  Status: ✔ Downloaded       │
+├──────────────────────────────┤
+│  ▸ ⚡ Power                   │
+└──────────────────────────────┘
+```
+
+### Screen 4 — 📺 M3U chip
+```
+┌──────────────────────────────┐
+│  [ LOCAL ] [ M3U ] [ WEB ]   │
+├──────────────────────────────┤
+│  Now Playing  ESPN HD  45:12│
+├──────────────────────────────┤
+│  ── TRANSPORT ────────────── │
+│  ⏮◀ ▶/⏸ ▶⏭    ⏹            │
+│  ────●────────  seek (VOD)   │
+│  🔊 ──●──────  ── 🔇          │
+│  ── EXTRAS ───────────────── │
+│  [ 🖼 PiP ]  [ ⛶ Fullscreen ]│
+│  ── SOURCES ──────────────── │
+│  [ ➕ Add source ]            │   → name + URL field only
+│  ▸ Sports Pack     (7 srcs)  │
+│  ▸ News Mix        (URL)     │
+│  ── CHANNELS ─────────────── │
+│  [ 🔍 Search… ]  [★ filter]  │
+│  ▾ SPORTS  (12)              │
+│    ⭐ ESPN HD        ▶ ▶     │
+│    ☆ Sky Sports      ▶ ▶     │
+├──────────────────────────────┤
+│  ▸ ⚡ Power                   │
+└──────────────────────────────┘
+```
+
+### Screen 5 — 🌐 Web chip
+```
+┌──────────────────────────────┐
+│  [ LOCAL ] [ M3U ] [ WEB ]   │
+├──────────────────────────────┤
+│  Now Playing   (web page)    │
+├──────────────────────────────┤
+│  ── ACTIVE PAGE ──────────── │
+│  🌐 youtube.com/watch?v=…    │
+│  "How to build a PC"         │
+│  ── BOOKMARKS ────────────── │
+│  [ ⭐ Add current page ]      │
+│  ▸ YouTube            ✕      │   tap = opens in
+│  ▸ GitHub             ✕      │   active tab on PC
+│  ── MEDIA CONTROL ────────── │
+│   (only when video detected) │
+│  ▶/⏸                        │
+│  ───────●────────  seek      │
+│  4:32 / 12:05                │
+│  🔊 ──●────  ── ⛶ Fullscreen │
+├──────────────────────────────┤
+│  ▸ ⚡ Power                   │
+└──────────────────────────────┘
+```
+
+### Screen 6 — PC Settings: Mobile Remote section (QR)
+```
+┌──────────────────────────────┐
+│  Mobile Remote               │
+│   ┌──────────────┐           │
+│   │  ░░▒▒▓▓▒▒░░  │           │   QR code
+│   └──────────────┘           │
+│  Scan with your phone camera │
+│  (or open:                   │
+│   http://192.168.1.5:8765)   │
+│  ● Remote server: ON         │
+└──────────────────────────────┘
+```
+
+## R.4 Technical notes (for the build phase)
+
+- **Deps:** uncomment `aiohttp>=3.9`, `qrcode[pil]>=7.4` in `requirements-dev-full.txt`.
+- **Server:** aiohttp on `0.0.0.0:8765`; starts at the end of `main()` bootstrap; stops on `aboutToQuit`.
+- **§4.1 stays intact:** the remote is a new *doorway* onto the existing `Actions`/`AppController` — no action is re-implemented on the phone side.
+- **Drive browser:** small new Python API (list drives → list folder → media-only filter) served over HTTP; forward slashes in paths (Windows gotcha); gated only by the QR/URL access.
+- **Web media control:** reuse `WebViewHost.ExecuteScriptAsync` (already in `modes/web/webview2_host.py`), addressed to the **active tab only** via `BrowserContext.activeTabIndex`.
+- **Subtitle download:** reuse the `core/subtitles.py` backend.
+- **Power:** Sleep / Shutdown via OS command; release `core/power.py` `PowerGuard` before shutdown.
+- **Real-time status:** WebSocket (or SSE) pushed PC → phone; phone sends commands, PC executes and confirms.
+
+## R.5 Acceptance — Phase R (build-time)
+
+Build tasks and verification boxes live in **CHECKLIST.md → PHASE R**. Sign-off = every box ticked; regression: Phases 1–3 still pass, `tools/check_isolation.py` passes.
+
+## R.6 Build log (owner fixations — what was done, when)
+
+Each step lands with: new tests green · full regression green · isolation green · no player code path modified.
+
+| Date | Step | What landed | Status |
+|---|---|---|---|
+| 2026-08-08 | 1 — Server skeleton | `remote/` package (§R.4): aiohttp server on `0.0.0.0:<port>` (default 8765, ephemeral for tests), `/` + `/health` routes, dedicated daemon thread + own asyncio loop, **guarded start** (no aiohttp → app runs exactly as before, warning only), starts as **last** startup step in `main.py`, stops **first** in `on_quit()`. Settings `remote.enabled` / `remote.port` defaults. `aiohttp>=3.9` activated in `requirements-dev-full.txt`. `tools/check_isolation.py`: `PHASE_R_DISCLOSED` + `remote/` in dangling-ref scan. Tests: `tests/test_remote_server.py` (8). Baseline before: 331 passed — after: 339 passed, 0 failed. | ✅ landed |
+| 2026-08-08 | 2 — QR + pairing | `remote/qr.py` (guarded qrcode → PNG bytes, `/qr.png` route), **Settings → Mobile Remote** section in `ui/panels/SettingsDialog.qml` (QR image + live URL via `RemoteBridge.serverUrl`), `qrcode[pil]>=7.4` activated. | ✅ landed |
+| 2026-08-08 | 3 — Status channel | `remote/status.py` (thread-safe StatusStore) + `remote/bridge.py` poller (500 ms Qt-thread snapshot: player, now-playing, tracks, playlist, m3u, web, eq, subs) + `/api/status` + **SSE `/api/events`** (push on version change). PC is source of truth; server thread reads only plain dicts. | ✅ landed |
+| 2026-08-08 | 4 — Command channel | `RemoteBridge.request()` emits a **`QueuedConnection` signal** → `_dispatch` runs on the Qt thread, mapping ~45 actions onto the *existing* `AppController`/engine/context methods (§4.1, no re-implementation). `POST /api/cmd`. Signals `toggleFullscreenRequested` (Main.qml → actionHost) and `togglePipRequested` (M3UTransport → `pipOpen`) for window PiP/fullscreen. | ✅ landed |
+| 2026-08-08 | 5 — Common shell + chips | `remote/static/` phone web app (`index.html`/`style.css`/`app.js`): aurora-glass theme, header + connection dot, 3 chips that switch the PC's mode, Now Playing bar, ⚡ Power expander. Served at `/` + `/static/*`. | ✅ landed |
+| 2026-08-08 | 6 — Local chip | Drive browser (`remote/drives.py` + `/api/drives` + `/api/browse`; all drives, media-only filter, forward slashes), transport/volume/±10 s/speed, tracks & subtitles incl. **subtitle download** (subs.search/download/languages), **playlist pinned bottom, 7 rows max + autoscroll**, equalizer (presets/preamp/bands/reset). | ✅ landed |
+| 2026-08-08 | 7 — M3U chip | Sources (list/add-by-URL-only/remove/load), grouped channels (client-side expand, play by view row), search/filter, favourites (star + filter), PiP + Fullscreen buttons. | ✅ landed |
+| 2026-08-08 | 8 — Web chip | Active-page card + bookmarks (list/add/remove/open-in-active-tab) via existing `BookmarksStore`; **universal media control**: `get_media_probe_script()` in `webview2_runtime.py`, `WebMessageReceived` → `mediaStatusChanged`, `WebViewHost.media_control()` (play/pause/toggle/seek/seekBy/volume/mute/fullscreen), `BrowserContext.mediaControl()`/`media_status()` on the **active tab only**. DRM sites documented as the exception. | ✅ landed |
+| 2026-08-08 | 9 — Power + polish | ⚡ Power (collapsed) → Sleep / Shutdown via `remote/power.py` (injectable OS commands; `PowerGuard` untouched — app shutdown path already releases it). Full sweep: 27 new remote tests, **366 passed / 47 skipped, 0 failed**, isolation OK, `py_compile` OK, live end-to-end smoke test OK (UI + QR PNG + SSE + queued command). | ✅ landed |
+| 2026-08-08 | **Audit pass** | Full end-to-end re-audit: (1) `RemoteBridge.stop()` added — status poller halted in `on_quit` before engine teardown; (2) phone UI fixes — M3U groups now key on the actual grouping mode (category/country/language) and remember expand/collapse across pushes, playlist autoscroll only on track change (no fighting user scroll), sliders not overwritten mid-drag, file **＋ add-to-playlist** and **"Add this folder"** buttons added per §R.2 spec; (3) dead code removed, server stop nulls its runner/site refs; (4) demo fakes `subs.languages` setter. Re-verified: **366 passed / 47 skipped / 0 failed**, isolation OK, syntax OK, `node --check` OK, live endpoints re-tested. | ✅ done |
+
+---
+
 ## 7. Visual Design *(applies to all phases — set in Phase 1)*
 
 **Aurora glass.** Deep charcoal base, slow-drifting aurora gradient, frosted panels floating above.
@@ -1046,7 +1304,7 @@ Deliberately excluded from all three phases to keep each shippable:
 
 | Feature | Why deferred |
 |---|---|
-| **Mobile remote + QR** | Was Phase-scoped in v2.0; it's a whole second UI with its own server, and it must mirror each mode's control set — which doesn't stabilise until Phase 3. Building it earlier means building it twice. **Own phase after v1.0.** |
+| **Mobile remote + QR** | Was Phase-scoped in v2.0; it's a whole second UI with its own server, and it must mirror each mode's control set — which doesn't stabilise until Phase 3. Building it earlier means building it twice. **Own phase after v1.0 — full spec locked in §R (v4.2, 8 Aug 2026); implementation started 8 Aug 2026 by owner decision (see §R.6).** |
 | Seek-bar frame thumbnails | Needs a second decoder instance; nice-to-have |
 | Bookmark folders | v1 flat list is enough |
 | Tab favicons | v1 flat list is enough; WebView2 exposes favicons (`FaviconChanged`) — easy post-v1.0 if wanted |
@@ -1054,7 +1312,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | libVLC 4 GPU path | Blocked on upstream release (§0.5) |
 | Chromecast / DLNA | Out of scope |
 
-**Note:** the remote was in v2.0's build order at 3–4 days. Moving it out is why v3.0's total is shorter despite adding phase overhead. It isn't lost — it's sequenced correctly.
+**Note:** the remote was in v2.0's build order at 3–4 days. Moving it out is why v3.0's total is shorter despite adding phase overhead. It isn't lost — it's sequenced correctly, and its **full spec now exists in §R** (v4.2) so nothing needs re-deciding when the build starts.
 
 ---
 
@@ -1123,7 +1381,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | **Modes independently testable** | all | ✅ §A + per-phase acceptance |
 | **One machine, three channels** | all | ✅ §B — shared vocabulary, per-mode layout |
 | **Mini Mode v1.1: Local compact bar 400×44, grip only drag, prev/seek ±10/play/stop/next/volume/mute/return, hairline top seek + circular play ring, vertical volume pop-up, always-on-top top-center, no close from mini, auto-return on finished** | 4 | ✅ §M — shell state not ModeSpec, 44px = TitleBar height |
-| Mobile remote + QR | post-v1.0 | ⏸ §8 |
+| Mobile remote + QR | post-v1.0 | 🚧 **Implementation in progress (owner 8 Aug 2026)** — spec §R v4.2, build log §R.6 |
 
 **One conscious trade-off, bounded:** 4K60 needs Turbo Mode (§0.5). *The separate-window limitation from earlier drafts is resolved — see §P3.2.*
 
@@ -1139,7 +1397,7 @@ py -3.12 -m venv .venv && .venv\Scripts\activate
 pip install PySide6 python-vlc
 ```
 
-*(Phase 3 adds `pythonnet` — the bridge to Windows' built-in Edge WebView2 — plus the vendored WebView2 SDK bridge files (`Microsoft.Web.WebView2.Core.dll` + `WebView2Loader.dll`, §P3.2). `aiohttp`/`qrcode` not until the remote. Install per phase — a smaller surface is easier to debug.)*
+*(Phase 3 adds `pythonnet` — the bridge to Windows' built-in Edge WebView2 — plus the vendored WebView2 SDK bridge files (`Microsoft.Web.WebView2.Core.dll` + `WebView2Loader.dll`, §P3.2). `aiohttp`/`qrcode` not until the remote — see §R (spec locked v4.2). Install per phase — a smaller surface is easier to debug.)*
 
 Then build **Milestone 1.0** and nothing else. Prove the glass sits over the video at 60 fps before writing a single line of application UI.
 

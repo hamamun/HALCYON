@@ -43,6 +43,7 @@ class WebViewHost(QObject):
     fullscreenChanged = Signal(bool)
     downloadRequested = Signal(str)
     certificateError = Signal(str)
+    mediaStatusChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -56,6 +57,10 @@ class WebViewHost(QObject):
         self._bounds = (0, 0, 1, 1)
         self._visible = False
         self._initializing = False
+        #: Latest media-probe result from the loaded page (web chip §R.2).
+        #: Written on the Qt thread (WebMessageReceived) and read by the
+        #: remote bridge poller on the Qt thread — no locking needed.
+        self._media_status: dict = {"found": False}
 
         self.controller: Any = None
         self.webview: Any = None
@@ -187,6 +192,18 @@ class WebViewHost(QObject):
             # controller disappear on an older WebView2 runtime.
             logger.debug("could not install webdriver compatibility script: %s", exc)
 
+        # Media probe (Phase R web chip, §R.2): every page reports the state
+        # of its main media element via postMessage; the host turns those into
+        # mediaStatusChanged + media_status(). Purely additive and fully
+        # wrapped, so a page that lacks chrome.webview still works normally.
+        try:
+            task = self.webview.AddScriptToExecuteOnDocumentCreatedAsync(
+                webview2_runtime.get_media_probe_script()
+            )
+            self._pending_tasks.append(task)
+        except Exception as exc:
+            logger.debug("could not install media probe script: %s", exc)
+
     @staticmethod
     def _set_setting(settings: Any, name: str, value: Any) -> None:
         try:
@@ -259,6 +276,30 @@ class WebViewHost(QObject):
             except Exception:
                 self.certificateError.emit("")
 
+        def web_message_received(_sender: Any, args: Any) -> None:
+            # Phase R web chip (§R.2): the injected media probe posts here.
+            try:
+                if hasattr(args, "TryGetWebMessageAsString"):
+                    raw = args.TryGetWebMessageAsString()
+                else:  # pragma: no cover — older SDKs expose WebMessageAsJson
+                    raw = args.WebMessageAsJson
+            except Exception:
+                raw = None
+            if not raw:
+                return
+            try:
+                msg = json.loads(raw)
+            except (TypeError, ValueError):
+                return
+            if not isinstance(msg, dict) or msg.get("halcyon") != "media":
+                return
+            self._media_status = {
+                key: msg.get(key)
+                for key in ("found", "paused", "currentTime", "duration",
+                            "volume", "muted", "hasVideo")
+            }
+            self.mediaStatusChanged.emit()
+
         self._subscribe("NavigationStarting", navigation_starting)
         self._subscribe("NavigationCompleted", navigation_completed)
         self._subscribe("SourceChanged", source_changed)
@@ -268,6 +309,7 @@ class WebViewHost(QObject):
         self._subscribe("ContainsFullScreenElementChanged", fullscreen_changed)
         self._subscribe("FaviconChanged", favicon_changed)
         self._subscribe("DownloadStarting", download_starting)
+        self._subscribe("WebMessageReceived", web_message_received)
         self._subscribe("ServerCertificateErrorDetected", certificate_error)
 
     def _subscribe(self, event_name: str, callback: Callable[..., None]) -> None:
@@ -435,6 +477,63 @@ class WebViewHost(QObject):
             self._pending_tasks.append(task)
         except Exception as exc:
             logger.debug("WebView2 exit fullscreen script failed: %s", exc)
+
+    def media_status(self) -> dict:
+        """Latest media-probe result from the active page (web chip §R.2)."""
+        return dict(self._media_status)
+
+    def media_control(self, action: str, value=None) -> None:
+        """Drive the page's main media element (web chip §R.2).
+
+        Universal control: play/pause/toggle/seek/seekBy/volume/mute/fullscreen
+        on whichever element the probe picks (largest video). Fire-and-forget
+        via ExecuteScriptAsync, exactly like the existing exit_fullscreen /
+        pause_media helpers — the page itself owns the element, Halcyon only
+        asks. DRM pages (Netflix-class) may ignore the request; that is the
+        documented limit (§R.2).
+        """
+        if self.webview is None:
+            return
+        payload = json.dumps({"a": action, "v": value})
+        script = r"""
+(() => {
+  const pick = () => {
+    try {
+      const all = Array.from(document.querySelectorAll('video, audio'));
+      if (!all.length) return null;
+      let best = all[0];
+      for (const m of all) {
+        const area = (m.videoWidth || 0) * (m.videoHeight || 0);
+        const bestArea = (best.videoWidth || 0) * (best.videoHeight || 0);
+        if (area > bestArea) best = m;
+      }
+      return best;
+    } catch (e) { return null; }
+  };
+  const m = pick();
+  if (!m) return false;
+  const p = %s;
+  try {
+    if (p.a === 'play' && typeof m.play === 'function') m.play();
+    else if (p.a === 'pause' && typeof m.pause === 'function') m.pause();
+    else if (p.a === 'toggle') { if (m.paused && typeof m.play === 'function') m.play(); else if (typeof m.pause === 'function') m.pause(); }
+    else if (p.a === 'seek') m.currentTime = Number(p.v) || 0;
+    else if (p.a === 'seekBy') m.currentTime = (m.currentTime || 0) + (Number(p.v) || 0);
+    else if (p.a === 'volume') m.volume = Math.max(0, Math.min(1, Number(p.v) || 0));
+    else if (p.a === 'mute') m.muted = !!p.v;
+    else if (p.a === 'fullscreen') {
+      const fs = m.requestFullscreen || m.webkitRequestFullscreen || m.mozRequestFullScreen || m.msRequestFullscreen;
+      if (typeof fs === 'function') { const r = fs.call(m); if (r && typeof r.catch === 'function') r.catch(() => {}); }
+    }
+  } catch (e) { return false; }
+  return true;
+})();
+""" % payload
+        try:
+            task = self.webview.ExecuteScriptAsync(script)
+            self._pending_tasks.append(task)
+        except Exception as exc:
+            logger.debug("WebView2 media control %s failed: %s", action, exc)
 
     def pause_media(self) -> None:
         """Ask the document to pause all playing audio and video elements (§P3.3)."""

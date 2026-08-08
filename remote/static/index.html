@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0e14">
+<title>Halcyon Remote</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="aurora a1"></div><div class="aurora a2"></div><div class="aurora a3"></div>
+
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">
+        <span class="logo">◉</span><span class="word">HALCYON</span>
+      </div>
+      <div class="conn"><span id="connDot" class="dot"></span><span id="connText">connecting…</span></div>
+    </header>
+
+    <nav id="chips">
+      <button class="chip" data-mode="local">Local</button>
+      <button class="chip" data-mode="m3u">M3U</button>
+      <button class="chip" data-mode="web">Web</button>
+    </nav>
+
+    <section id="nowPlaying">
+      <div class="np-art" id="npArt">▶</div>
+      <div class="np-meta">
+        <div class="np-title" id="npTitle">Nothing playing</div>
+        <div class="np-sub" id="npSub"></div>
+      </div>
+      <div class="np-time" id="npTime">–:––</div>
+    </section>
+
+    <main id="content">
+
+      <!-- ============ LOCAL ============ -->
+      <section class="screen" id="screen-local">
+        <div class="card">
+          <div class="card-title">Transport</div>
+          <div class="transport">
+            <button class="tbtn" data-cmd="previous" title="Previous">⏮</button>
+            <button class="tbtn big" data-cmd="playPause" title="Play/Pause">▶</button>
+            <button class="tbtn" data-cmd="next" title="Next">⏭</button>
+            <button class="tbtn" data-cmd="stop" title="Stop">⏹</button>
+          </div>
+          <div class="seekrow">
+            <span class="t-mini" id="tCur">0:00</span>
+            <input type="range" id="seek" min="0" max="1000" value="0">
+            <span class="t-mini" id="tDur">0:00</span>
+          </div>
+          <div class="row2">
+            <button class="mini" data-cmd="seekBack">−10s</button>
+            <select id="rate" title="Speed">
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1" selected>1.0×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+              <option value="1.75">1.75×</option>
+              <option value="2">2.0×</option>
+            </select>
+            <button class="mini" data-cmd="seekFwd">+10s</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Volume</div>
+          <div class="volrow">
+            <span id="volIcon">🔊</span>
+            <input type="range" id="vol" min="0" max="100" value="80">
+            <button class="mini" id="muteBtn">Mute</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Files</div>
+          <button class="wide" id="browseBtn">📁 Browse drives</button>
+          <button class="wide ghost" id="addFolderBtn">➕ Add folder to playlist</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Tracks &amp; Subtitles</div>
+          <label class="lbl">Audio track
+            <select id="audioTrack"><option value="-1">—</option></select>
+          </label>
+          <label class="lbl">Subtitles
+            <select id="subTrack"><option value="-1">Off</option></select>
+          </label>
+          <div class="row2">
+            <button class="mini" id="subDelayMinus">Delay −0.5s</button>
+            <button class="mini" id="subDelayPlus">Delay +0.5s</button>
+          </div>
+          <button class="wide ghost" id="subsDownloadBtn">⬇ Download subtitles</button>
+          <button class="wide ghost" id="subsFileBtn">📄 Load subtitle file</button>
+        </div>
+
+        <div class="card" id="eqCard">
+          <div class="card-title" id="eqToggle">Equalizer ▾</div>
+          <div id="eqBody">
+            <label class="lbl">Preset
+              <select id="eqPreset"><option value="-1">—</option></select>
+            </label>
+            <label class="lbl">Preamp
+              <input type="range" id="eqPreamp" min="-20" max="20" step="0.5" value="0">
+              <span class="val" id="eqPreampVal">0.0 dB</span>
+            </label>
+            <div id="eqBands"></div>
+            <button class="wide ghost" id="eqReset">Reset</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Now playing</div>
+          <div class="np-row"><div class="np-art lg" id="npArtLg">▶</div>
+            <div><div class="np-title" id="npTitleLg">—</div><div class="np-sub" id="npSubLg"></div></div>
+          </div>
+        </div>
+
+        <!-- Playlist: pinned at the bottom, max 7 rows visible, autoscroll -->
+        <div class="card" id="playlistWrap">
+          <div id="playlistHead">
+            <div class="card-title">Playlist</div>
+            <button class="mini" id="shuffleBtn" title="Shuffle">🔀</button>
+            <button class="mini" id="repeatBtn" title="Repeat">🔁</button>
+            <button class="mini" id="clearPlBtn" title="Clear">🗑</button>
+          </div>
+          <div id="playlist"></div>
+        </div>
+      </section>
+
+      <!-- ============ M3U ============ -->
+      <section class="screen" id="screen-m3u" hidden>
+        <div class="card">
+          <div class="card-title">Channel transport</div>
+          <div class="transport">
+            <button class="tbtn" data-cmd="previous" title="Prev channel">⏮◀</button>
+            <button class="tbtn big" data-cmd="playPause" title="Play/Pause">▶</button>
+            <button class="tbtn" data-cmd="next" title="Next channel">▶⏭</button>
+            <button class="tbtn" data-cmd="stop" title="Stop">⏹</button>
+          </div>
+          <div class="row2 extras">
+            <button class="mini" id="pipBtn">🖼 PiP</button>
+            <button class="mini" id="fsBtn">⛶ Fullscreen</button>
+          </div>
+          <div class="volrow">
+            <span id="volIcon2">🔊</span>
+            <input type="range" id="vol2" min="0" max="100" value="80">
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Sources</div>
+          <div id="m3uSources"></div>
+          <button class="wide" id="addSourceBtn">➕ Add source (URL)</button>
+          <div class="status" id="m3uStatus"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Channels</div>
+          <div class="row2">
+            <input type="search" id="m3uFilter" placeholder="Search channels…">
+            <select id="m3uGrouping">
+              <option value="category">By category</option>
+              <option value="country">By country</option>
+              <option value="none">No group</option>
+            </select>
+          </div>
+          <label class="lbl switch"><input type="checkbox" id="m3uFavOnly"> Favourites only</label>
+          <div id="m3uChannels" class="chanlist"></div>
+        </div>
+      </section>
+
+      <!-- ============ WEB ============ -->
+      <section class="screen" id="screen-web" hidden>
+        <div class="card">
+          <div class="card-title">Active page</div>
+          <div class="page-title" id="webTitle">—</div>
+          <div class="page-url" id="webUrl">—</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Bookmarks</div>
+          <button class="wide" id="addBmBtn">⭐ Add current page</button>
+          <div id="webBookmarks" class="chanlist"></div>
+        </div>
+
+        <div class="card" id="webMediaCard">
+          <div class="card-title">Media on page</div>
+          <div id="webMediaNone" class="status">No video on this page</div>
+          <div id="webMediaBody" hidden>
+            <div class="transport">
+              <button class="tbtn" id="wmBack" title="Back">◀</button>
+              <button class="tbtn big" id="wmPlay" title="Play/Pause">▶</button>
+              <button class="tbtn" id="wmFwd" title="Forward">▶</button>
+            </div>
+            <div class="seekrow">
+              <span class="t-mini" id="wmCur">0:00</span>
+              <input type="range" id="wmSeek" min="0" max="1000" value="0">
+              <span class="t-mini" id="wmDur">0:00</span>
+            </div>
+            <div class="volrow">
+              <span id="wmVolIcon">🔊</span>
+              <input type="range" id="wmVol" min="0" max="100" value="100">
+              <button class="mini" id="wmFs">⛶ Fullscreen</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer id="power">
+      <button class="powerbar" id="powerToggle">▸ ⚡ Power</button>
+      <div class="powerbody" id="powerBody" hidden>
+        <button class="wide" id="sleepBtn">😴 Sleep</button>
+        <button class="wide danger" id="shutdownBtn">⏻ Shutdown</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ============ FILE BROWSER OVERLAY ============ -->
+  <div class="overlay" id="fileOverlay" hidden>
+    <div class="sheet">
+      <header class="sheet-head">
+        <button class="mini" id="fbClose">✕</button>
+        <div class="sheet-title" id="fbTitle">Select file</div>
+        <button class="mini" id="fbUp">▲</button>
+      </header>
+      <div class="breadcrumb" id="fbPath">My PC</div>
+      <div class="sheet-body" id="fbBody"></div>
+      <button class="wide" id="fbAddFolderBtn" hidden>📁 Add this folder</button>
+    </div>
+  </div>
+
+  <!-- ============ SUBTITLE DOWNLOAD OVERLAY ============ -->
+  <div class="overlay" id="subsOverlay" hidden>
+    <div class="sheet">
+      <header class="sheet-head">
+        <button class="mini" id="sbClose">✕</button>
+        <div class="sheet-title">Download subtitles</div>
+      </header>
+      <div class="sheet-body">
+        <input type="search" id="sbQuery" placeholder="Search…">
+        <button class="wide" id="sbSearch">🔍 Search</button>
+        <div class="chiprow" id="sbLangs"></div>
+        <div class="status" id="sbStatus"></div>
+        <div id="sbResults"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ADD SOURCE MODAL ============ -->
+  <div class="overlay" id="srcOverlay" hidden>
+    <div class="modal">
+      <div class="card">
+        <div class="card-title">Add source (URL)</div>
+        <input type="text" id="srcName" placeholder="Name (e.g. Sports Pack)">
+        <input type="url" id="srcUrl" placeholder="https://…/playlist.m3u8">
+        <div class="row2">
+          <button class="wide ghost" id="srcCancel">Cancel</button>
+          <button class="wide" id="srcOk">Add</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
