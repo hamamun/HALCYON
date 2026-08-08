@@ -119,7 +119,7 @@ class RemoteBridge(QObject):
         snap: dict = {"app": "halcyon", "serverUrl": self._server_url}
         controller, engine = self._controller, self._engine
 
-        mode = getattr(controller, "activeMode", lambda: "local")() if controller else "local"
+        mode = getattr(controller, "activeMode", "local") if controller else "local"
         snap["mode"] = mode
 
         # ---- player -----------------------------------------------------
@@ -400,7 +400,7 @@ class RemoteBridge(QObject):
     # ------------------------------------------------------- player cmds ----
     def _uses_player(self) -> bool:
         try:
-            mode = self._controller.activeMode() if self._controller else ""
+            mode = self._controller.activeMode if self._controller else ""
         except Exception:
             mode = ""
         return mode in PLAYER_MODES
