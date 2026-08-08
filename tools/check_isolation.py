@@ -109,6 +109,19 @@ PHASE4_DISCLOSED = [
     "Halcyon/Shell/qmldir",
 ]
 
+#: Disclosed Phase-R (v1.2) Mobile Remote additions — post-v1.0 §R. The remote
+#: lives in its own top-level ``remote/`` package (outside the shared chassis
+#: on purpose: its job is to mirror *every* mode's control set, so it must be
+#: allowed to reach modes, like core/modes.py). It needs lifecycle hooks in
+#: the bootstrap (start as the last startup step, stop first on quit) and two
+#: settings defaults (remote.enabled / remote.port). Owner decision 2026-08-08
+#: to begin implementation; each step lands with the full regression suite and
+#: isolation green, and the player's own code paths are untouched.
+PHASE_R_DISCLOSED = [
+    "main.py",
+    "core/settings.py",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -233,7 +246,7 @@ def check_no_dangling_mode_refs(modes: list[str]) -> list[Failure]:
     mode that is not installed."""
     failures: list[Failure] = []
     known = set(modes)
-    search_dirs = [ROOT / d for d in SHARED_DIRS] + [ROOT / "ui", ROOT / "tests"]
+    search_dirs = [ROOT / d for d in SHARED_DIRS] + [ROOT / "remote", ROOT / "ui", ROOT / "tests"]
     for directory in search_dirs:
         for py in python_files(directory):
             rel = py.relative_to(ROOT)
@@ -273,7 +286,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

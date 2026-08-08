@@ -136,4 +136,12 @@ Item {
             item.closing.connect(function() { root.pipOpen = false; });
         }
     }
+
+    // Phase R mobile remote (v1.2): the phone's PiP button flips the same
+    // flag this bar's own PiP button flips — one state, two doorways (§4.1).
+    property var remoteBridge: typeof RemoteBridge !== "undefined" ? RemoteBridge : null
+    Connections {
+        target: root.remoteBridge
+        function onTogglePipRequested() { root.pipOpen = !root.pipOpen }
+    }
 }

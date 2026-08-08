@@ -198,6 +198,70 @@ Dialog {
 
         Column {
             width: parent.width
+            spacing: Theme.spaceMd
+
+            Text {
+                text: "Mobile Remote"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeBody
+                font.weight: Theme.weightBold
+                color: Theme.text
+            }
+
+            // QR encodes http://<lan-ip>:<port> — served by the app itself on
+            // the PC, so localhost is the right address to fetch the image.
+            Image {
+                id: remoteQr
+                width: 160
+                height: 160
+                anchors.horizontalCenter: parent.horizontalCenter
+                source: "http://127.0.0.1:" + Settings.get("remote.port", 8765) + "/qr.png"
+                fillMode: Image.PreserveAspectFit
+                onStatusChanged: {
+                    if (remoteQr.status === Image.Error) {
+                        remoteQr.source = ""
+                        remoteUrlText.text = "Remote server unavailable — install aiohttp and qrcode."
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: "Scan with your phone camera to control Halcyon, or type the address below."
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeTiny
+                color: Theme.textFaint
+            }
+
+            Text {
+                id: remoteUrlText
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: (typeof RemoteBridge !== "undefined" && RemoteBridge)
+                      ? RemoteBridge.serverUrl : "http://<this-PC-IP>:" + Settings.get("remote.port", 8765)
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeTiny
+                color: Theme.accent
+            }
+
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: "Same Wi-Fi only. The remote starts automatically with Halcyon."
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeTiny
+                color: Theme.textFaint
+            }
+        }
+
+        Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
+
+        Column {
+            width: parent.width
             spacing: 2
             Text {
                 text: "Halcyon v1.0.0 — Every format. One pane of glass."

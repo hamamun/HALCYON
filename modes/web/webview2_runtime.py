@@ -582,6 +582,56 @@ def get_anti_bot_init_script() -> str:
     )
 
 
+def get_media_probe_script() -> str:
+    """Injected into every page: report the main media element's state.
+
+    Phase R (web chip, §R.2). Runs entirely inside the page every 600 ms and
+    posts a JSON message to the host via ``chrome.webview.postMessage``. The
+    selection logic — prefer the largest ``<video>``, fall back to the first
+    media element — mirrors the PC's own pause_media() reach (shadow roots
+    included). Fully wrapped so any page without the WebView2 bridge still
+    behaves normally.
+    """
+    return r"""
+(() => {
+  if (window.__halcyonMediaProbe) return;
+  window.__halcyonMediaProbe = true;
+  const pickMain = () => {
+    try {
+      const all = Array.from(document.querySelectorAll('video, audio'));
+      if (!all.length) return null;
+      let best = all[0];
+      for (const m of all) {
+        const area = (m.videoWidth || 0) * (m.videoHeight || 0);
+        const bestArea = (best.videoWidth || 0) * (best.videoHeight || 0);
+        if (area > bestArea) best = m;
+      }
+      return best;
+    } catch (e) { return null; }
+  };
+  const post = (data) => {
+    try {
+      if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+        window.chrome.webview.postMessage(JSON.stringify(data));
+      }
+    } catch (e) {}
+  };
+  const report = () => {
+    const m = pickMain();
+    if (!m) { post({ halcyon: 'media', found: false }); return; }
+    const dur = (typeof m.duration === 'number' && isFinite(m.duration)) ? m.duration : 0;
+    post({
+      halcyon: 'media', found: true, paused: !!m.paused,
+      currentTime: m.currentTime || 0, duration: dur,
+      volume: m.volume || 0, muted: !!m.muted,
+      hasVideo: m.tagName === 'VIDEO'
+    });
+  };
+  try { setInterval(report, 600); report(); } catch (e) {}
+})();
+"""
+
+
 def resolve_url_or_search(query: str) -> str:
     """Turn address-bar text into a URL or the configured Google search URL."""
     text = (query or "").strip()

@@ -1156,4 +1156,18 @@ Shell {
     SettingsDialog {
         id: settingsDialog
     }
+
+    // ---- Phase R mobile remote (v1.2) ------------------------------------
+    // The remote is a second doorway onto the same action host (§4.1): these
+    // Connections translate bridge requests into the identical existing
+    // actions. `remoteBridge` is null when the bridge is absent (tests,
+    // older launchers) — a Connections on null is a silent no-op.
+    property var remoteBridge: typeof RemoteBridge !== "undefined" ? RemoteBridge : null
+
+    Connections {
+        target: window.remoteBridge
+        function onToggleFullscreenRequested() {
+            if (window.remoteBridge) actionHost.toggleFullscreen()
+        }
+    }
 }

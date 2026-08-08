@@ -325,6 +325,10 @@ class ChannelModel(QAbstractListModel):
             urls.discard(url)
         self.set_favourites(urls)
 
+    def is_favourite(self, url: str) -> bool:
+        """True when ``url`` is starred — used by the mobile remote snapshot."""
+        return str(url).strip() in self._favourite_urls
+
     # ------------------------------------------------------------ internals --
     #: Set by the context: the function that actually opens a URL in the
     #: shared engine. Kept injectable so the model stays testable headless.

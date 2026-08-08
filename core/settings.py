@@ -65,6 +65,9 @@ DEFAULTS: dict[str, Any] = {
     "subs.delayMs": 0,
     "subs.scale": 1.0,
     "subs.encoding": "",
+    # mobile remote (Phase R, §R.4)
+    "remote.enabled": True,
+    "remote.port": 8765,
 }
 
 
