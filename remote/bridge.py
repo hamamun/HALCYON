@@ -63,6 +63,13 @@ class RemoteBridge(QObject):
         self._equalizer = equalizer
         self._subs = subs
         self._contexts: dict[str, QObject] = {}
+        # Resume is announced by AppController only when a newly opened file
+        # has a meaningful saved position. Keep it in the remote snapshot so
+        # the phone can offer the same choice as the desktop toast.
+        self._resume: dict = {"available": False, "path": "", "time": 0}
+        resume_signal = getattr(controller, "resumePrompted", None)
+        if resume_signal is not None:
+            resume_signal.connect(self._on_resume_prompted)
 
         self.store = StatusStore()
         self._server_url = ""
@@ -105,6 +112,15 @@ class RemoteBridge(QObject):
         self.commandRequested.emit(action, payload or {})
 
     # ------------------------------------------------------------- status ----
+    @Slot(str, int)
+    def _on_resume_prompted(self, path: str, position_ms: int) -> None:
+        self._resume = {
+            "available": bool(path and position_ms > 0),
+            "path": str(path or ""),
+            "time": max(0, int(position_ms)),
+        }
+        self.publish_now()
+
     def stop(self) -> None:
         """Stop the status poller. Idempotent; called on app shutdown so the
         bridge never reads engine state after the engine is torn down."""
@@ -144,6 +160,7 @@ class RemoteBridge(QObject):
                     player["subsAvailable"] = bool(controller.subtitlesAvailable)
                 except Exception:
                     pass
+        player["resume"] = dict(self._resume)
         snap["player"] = player
 
         # ---- now playing ------------------------------------------------
@@ -377,6 +394,14 @@ class RemoteBridge(QObject):
     def _cmd_stop(self, _p: dict) -> None:
         if self._uses_player() and self._controller is not None:
             self._controller.stop()
+        self._resume = {"available": False, "path": "", "time": 0}
+
+    def _cmd_startOver(self, p: dict) -> None:
+        if self._uses_player() and self._controller is not None:
+            path = str(p.get("path", ""))
+            if path:
+                self._controller.startOver(path)
+                self._resume = {"available": False, "path": "", "time": 0}
 
     def _cmd_next(self, _p: dict) -> None:
         if self._uses_player() and self._controller is not None:
@@ -438,6 +463,7 @@ class RemoteBridge(QObject):
     def _cmd_openPath(self, p: dict) -> None:
         path = str(p.get("path", ""))
         if path and self._controller is not None:
+            self._resume = {"available": False, "path": "", "time": 0}
             self._controller.openPath(path)
 
     def _cmd_addPaths(self, p: dict) -> None:
@@ -599,7 +625,13 @@ class RemoteBridge(QObject):
     # -------------------------------------------------------------- subs cmds --
     def _cmd_subs_search(self, p: dict) -> None:
         if self._subs is not None:
-            self._subs.search(str(p.get("query", "")))
+            query = str(p.get("query", "")).strip()
+            # The desktop dialog pre-fills its query. The remote has no
+            # desktop text field, so use the current media stem as the same
+            # fallback when the phone submits an empty field.
+            if not query and self._controller is not None:
+                query = str(getattr(self._controller, "currentFileStem", "") or "")
+            self._subs.search(query)
 
     def _cmd_subs_download(self, p: dict) -> None:
         if self._subs is not None:

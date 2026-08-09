@@ -245,7 +245,11 @@ async function browseDir(path) {
 }
 
 /* ----------------------------- subtitle download ----------------------------- */
-$("subsDownloadBtn").addEventListener("click", () => { $("subsOverlay").hidden = false; });
+$("subsDownloadBtn").addEventListener("click", () => {
+  const name = SNAP && SNAP.subs && SNAP.subs.mediaName;
+  if (name && !$("sbQuery").value.trim()) $("sbQuery").value = name;
+  $("subsOverlay").hidden = false;
+});
 $("sbClose").addEventListener("click", () => { $("subsOverlay").hidden = true; });
 $("sbSearch").addEventListener("click", () => cmd("subs.search", { query: $("sbQuery").value }));
 $("sbQuery").addEventListener("keydown", (e) => {
@@ -550,8 +554,11 @@ function render(snap) {
     ? "M3U · " + snap.m3u.currentChannel : (np.label ? "Local" : "");
 
   const p = snap.player || {};
-  $("tCur").textContent = fmtTime(p.time || 0);
-  $("tDur").textContent = fmtTime(p.duration || 0);
+  // The engine reports player clock values in milliseconds. The web-media
+  // API below uses seconds, so keep this conversion local to the native-player
+  // remote UI.
+  $("tCur").textContent = fmtTime((p.time || 0) / 1000);
+  $("tDur").textContent = fmtTime((p.duration || 0) / 1000);
   if (p.duration > 0) {
     const f = ((p.position != null ? p.position : (p.time || 0) / p.duration) * 1000);
     if (!isDragging($("seek"))) $("seek").value = Math.max(0, Math.min(1000, f));
@@ -561,6 +568,18 @@ function render(snap) {
   $("volIcon").textContent = p.muted || p.volume === 0 ? "🔇" : "🔊";
   $("volIcon2").textContent = p.muted || p.volume === 0 ? "🔇" : "🔊";
   $("muteBtn").textContent = p.muted ? "Unmute" : "Mute";
+
+  // Resume is a one-shot choice for the media open that triggered it. The
+  // bridge clears it after Start Over, stop, or a new open.
+  const resume = p.resume || {};
+  const resumeBox = $("resumeBox");
+  if (resumeBox) {
+    resumeBox.hidden = !resume.available;
+    if (resume.available) {
+      $("resumeText").textContent = "Resume from " + fmtTime((resume.time || 0) / 1000) + "?";
+      $("resumeStartOver").onclick = () => cmd("startOver", { path: resume.path });
+    }
+  }
 
   // play/pause button state
   document.querySelectorAll(".tbtn.big").forEach((b) => {
