@@ -41,7 +41,6 @@ pytest>=8.0
 # Owner decision 2026-08-08: implementation in progress.
 aiohttp>=3.9
 qrcode[pil]>=7.4
-pip install aiohttp qrcode
 # =============================================================================
 
 # Note:
