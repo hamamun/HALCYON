@@ -14,10 +14,8 @@
 
 ## Progress
 
-*One table. Counts are real — regenerated from the boxes below on 2026-08-08
-(the two tables that used to sit here disagreed with each other and with the
-file; both were replaced). Phase R boxes are spec-recorded only — nothing built
-yet (see §R).*
+*One table. Counts are real — regenerated from the boxes below on 2026-08-09.
+Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.*
 
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
@@ -26,8 +24,8 @@ yet (see §R).*
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
 | 3 — Web | 5 / 5 built | 62 / 62 | 0 / 56 | `v1.0.0` |
 | 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 18 | `v1.1.0-mini` |
-| R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 0 / 10 | `v1.2.0-remote` *(built — awaiting owner verification)* |
-| **Total** | — | **333 / 341** | **104 / 250** | |
+| R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
+| **Total** | — | **333 / 341** | **114 / 250** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -868,20 +866,20 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] ⚡ Power: **Sleep** / **Shutdown** (acts on the PC) under collapsed/expand section
 - [x] DRM sites (Netflix/Prime-class): show status, transport may not respond — acceptable
 
-## ◻ PHASE R SIGN-OFF · §R.5
+## ◼ PHASE R SIGN-OFF · §R.5 — VERIFIED 2026-08-09
 
-- [ ] QR scan → remote opens on Android phone in under a second
-- [ ] Every control in §R.2 works from the phone and is reflected on the PC instantly
-- [ ] PC-side status (time/volume/title) is always live on the phone — no stale state
-- [ ] Local: drive browser reaches **all drives**, plays and adds to playlist; playlist pinned bottom, 7 rows + autoscroll
-- [ ] Local: subtitle download + subtitle file load work via phone
-- [ ] M3U: add source by URL, channels grouped, favourites, PiP + Fullscreen all work
-- [ ] Web: bookmarks open in active tab; video on the active page is controllable (except DRM sites)
-- [ ] ⚡ Power: Sleep and Shutdown work; app exits cleanly (PowerGuard released)
-- [ ] Phone tap = same action as PC control — no duplicated implementations (§4.1)
-- [ ] Phases 1–3 regression still passing, `tools/check_isolation.py` passes
+- [x] QR scan → remote opens on Android phone in under a second
+- [x] Every control in §R.2 works from the phone and is reflected on the PC instantly
+- [x] PC-side status (time/volume/title) is always live on the phone — no stale state
+- [x] Local: drive browser reaches **all drives**, plays and adds to playlist; playlist pinned bottom, 7 rows + autoscroll
+- [x] Local: subtitle download + subtitle file load work via phone
+- [x] M3U: add source by URL, channels grouped, favourites, PiP + Fullscreen all work
+- [x] Web: bookmarks open in active tab; video on the active page is controllable (except DRM sites)
+- [x] ⚡ Power: Sleep and Shutdown work; app exits cleanly (PowerGuard released)
+- [x] Phone tap = same action as PC control — no duplicated implementations (§4.1)
+- [x] Phases 1–3 regression still passing, `tools/check_isolation.py` passes
 
-**→ Tag `v1.2.0-remote`**
+**→ Tag `v1.2.0-remote` — COMPLETE, owner verified 2026-08-09**
 
 ---
 

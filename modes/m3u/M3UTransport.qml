@@ -1,6 +1,7 @@
 import QtQuick
 import Halcyon.Ui
 import Halcyon.Transport
+import QtQuick.Window
 
 // M3U's control bar — §B.4, §P2.3, owner decision 2026-08-02.
 //
@@ -143,5 +144,20 @@ Item {
     Connections {
         target: root.remoteBridge
         function onTogglePipRequested() { root.pipOpen = !root.pipOpen }
+    }
+
+    // ----------------------------------------------------- keyboard — M3U §P2
+    // P toggles PiP in M3U only (Local uses P for Previous, so avoid conflict
+    // by scoping this Shortcut to this bar's lifetime, i.e. M3U mode active)
+    Shortcut {
+        sequence: "P"
+        context: Qt.WindowShortcut
+        onActivated: root.pipOpen = !root.pipOpen
+    }
+    // Ctrl+P also toggles PiP — secondary, no conflict
+    Shortcut {
+        sequence: "Ctrl+P"
+        context: Qt.WindowShortcut
+        onActivated: root.pipOpen = !root.pipOpen
     }
 }

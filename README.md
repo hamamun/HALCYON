@@ -18,6 +18,8 @@ See [`HALCYON_PLAN.md`](HALCYON_PLAN.md) for the architecture and
 | **1 — Local** | `v0.1.0-local` | ✅ complete / signed off — frozen at tag `v0.1.0-local` |
 | **2 — M3U** | `v0.2.0-m3u` | ✅ complete / signed off — frozen at tag `v0.2.0-m3u` |
 | **3 — Web** | `v1.0.0` | ✅ complete / signed off — full Halcyon v1.0.0 release |
+| **4 — Mini v1.1** | `v1.1.0-mini` | ✅ built — compact 400×44 bar |
+| **R — Remote v1.2** | `v1.2.0-remote` | ✅ **complete / verified 2026-08-09** — phone remote, QR in Settings, real-time sync, Local/M3U/Web control, Power |
 
 Phase 2 & 3 guard: `python tools/check_isolation.py --phase 3` verifies that new
 modes touch nothing frozen without disclosure.
@@ -33,22 +35,26 @@ modes touch nothing frozen without disclosure.
 
 ---
 
-## Setup
+## Setup (zero-coder — single file)
+
+All Python dependencies are now in **one file**: `requirements.txt` (merged 2026-08-09 from the old 3 files).
+
+**Windows / PowerShell / CMD:**
 
 ```bash
 py -3.12 -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements-phase1.txt
-# Required for the Web mode as well. Quote it so PowerShell/CMD do not treat
-# the greater-than sign as output redirection.
-pip install "pythonnet>=3.0"
+pip install -r requirements.txt
 ```
 
-Or install all development dependencies at once:
+**Alternative (if `pip` alone doesn't work):**
 
 ```bash
-pip install -r requirements-dev-full.txt
+python -m pip install -r requirements.txt
 ```
+
+That's it — Local + M3U + Web + Remote + tests all installed.
+Old files `requirements-phase1.txt`, `requirements-dev.txt`, `requirements-dev-full.txt` have been removed.
 
 ### Fetching libVLC (not committed — ~60 MB)
 

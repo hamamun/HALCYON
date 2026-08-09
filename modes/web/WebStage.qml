@@ -97,6 +97,180 @@ Rectangle {
     onWidthChanged: scheduleBrowserSurfaceSync()
     onHeightChanged: scheduleBrowserSurfaceSync()
 
+    // -------------------- helpers for keyboard shortcuts §P3
+    function goNextTab() {
+        if (!browser || browser.tabCount <= 1) return
+        var next = (browser.activeTabIndex + 1) % browser.tabCount
+        browser.setActiveTab(next)
+    }
+    function goPrevTab() {
+        if (!browser || browser.tabCount <= 1) return
+        var prev = browser.activeTabIndex - 1
+        if (prev < 0) prev = browser.tabCount - 1
+        browser.setActiveTab(prev)
+    }
+    function closeActiveTab() {
+        if (!browser || browser.tabCount === 0) return
+        browser.closeTab(browser.activeTabIndex)
+    }
+    function focusAddressBar() {
+        if (addressBar && typeof addressBar.focusInput === "function")
+            addressBar.focusInput()
+    }
+
+    // -------------------- keyboard shortcuts — Web mode only §P3.4
+    // All gated on stageActive so they don't fire while Local/M3U is active
+    // (keep_stage_alive keeps this stage alive hidden). No conflict with
+    // player shortcuts because Main.qml returns early when mediaKeys=false.
+    Item {
+        id: webShortcuts
+
+        Shortcut {
+            sequence: "Ctrl+T"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.addTab("")
+        }
+        Shortcut {
+            sequence: "Ctrl+N"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.addTab("")
+        }
+        Shortcut {
+            sequence: "Ctrl+W"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount > 0
+            onActivated: webStage.closeActiveTab()
+        }
+        Shortcut {
+            sequence: "Ctrl+Tab"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: webStage.goNextTab()
+        }
+        Shortcut {
+            sequence: "Ctrl+Shift+Tab"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: webStage.goPrevTab()
+        }
+        Shortcut {
+            sequence: "Ctrl+PageDown"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: webStage.goNextTab()
+        }
+        Shortcut {
+            sequence: "Ctrl+PageUp"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: webStage.goPrevTab()
+        }
+        Shortcut {
+            sequence: "Ctrl+R"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.reloadOrStop()
+        }
+        Shortcut {
+            sequence: "F5"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.reloadOrStop()
+        }
+        Shortcut {
+            sequence: "Alt+Left"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.goBack()
+        }
+        Shortcut {
+            sequence: "Alt+Right"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser
+            onActivated: if (webStage.browser) webStage.browser.goForward()
+        }
+        Shortcut {
+            sequence: "Ctrl+L"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive
+            onActivated: webStage.focusAddressBar()
+        }
+        Shortcut {
+            sequence: "Alt+D"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive
+            onActivated: webStage.focusAddressBar()
+        }
+        Shortcut {
+            sequence: "Ctrl+D"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && !!webStage.browser.activeTab.url
+            onActivated: {
+                if (!webStage.browser) return
+                var tab = webStage.browser.activeTab
+                if (tab && tab.url && !tab.internal)
+                    webStage.browser.addBookmark(tab.title || tab.url, tab.url)
+            }
+        }
+        // Ctrl+1..8 = switch to tab N, Ctrl+9 = last tab (Edge/Chrome convention)
+        Shortcut {
+            sequence: "Ctrl+1"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 1
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(0)
+        }
+        Shortcut {
+            sequence: "Ctrl+2"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 2
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(1)
+        }
+        Shortcut {
+            sequence: "Ctrl+3"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 3
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(2)
+        }
+        Shortcut {
+            sequence: "Ctrl+4"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 4
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(3)
+        }
+        Shortcut {
+            sequence: "Ctrl+5"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 5
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(4)
+        }
+        Shortcut {
+            sequence: "Ctrl+6"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 6
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(5)
+        }
+        Shortcut {
+            sequence: "Ctrl+7"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 7
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(6)
+        }
+        Shortcut {
+            sequence: "Ctrl+8"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 8
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(7)
+        }
+        Shortcut {
+            sequence: "Ctrl+9"
+            context: Qt.WindowShortcut
+            enabled: webStage.stageActive && !!webStage.browser && webStage.browser.tabCount >= 2
+            onActivated: if (webStage.browser) webStage.browser.setActiveTab(webStage.browser.tabCount - 1)
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

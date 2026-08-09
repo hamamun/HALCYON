@@ -1,0 +1,33 @@
+# =============================================================================
+# HALCYON — Unified Requirements (All Phases)
+# Replaces: requirements-phase1.txt + requirements-dev.txt + requirements-dev-full.txt
+# Merged 2026-08-09 — single file install for zero-coder setup.
+# =============================================================================
+
+# --- Core (Local Mode) — Phase 1 ---
+# Frameless glass UI + libVLC zero-copy video path
+PySide6==6.11.1
+python-vlc==3.0.21203
+
+# --- Web Mode — Phase 3 ---
+# pythonnet = COM bridge to Windows built-in Edge WebView2 (Route A).
+# The WebView2 Runtime itself is OS-provided (Windows 11 / eligible Win10).
+pythonnet>=3.0
+
+# --- Testing & Quality ---
+pytest>=8.0
+
+# --- Mobile Remote — Phase R v1.2 (server + QR) ---
+# Tiny aiohttp server (0.0.0.0:8765) + QR code in PC Settings → Mobile Remote
+aiohttp>=3.9
+qrcode[pil]>=7.4
+
+# --- Notes (not pip packages) ---
+# 1. libVLC binaries (3.0.21 win64) → vendor/vlc/ (see README)
+#    - libvlc.dll, libvlccore.dll, plugins/
+# 2. WebView2 SDK bridge files (from NuGet Microsoft.Web.WebView2) → vendor/webview2/
+#    - Microsoft.Web.WebView2.Core.dll (788 KB)
+#    - WebView2Loader.dll (win-x64 native)
+#    These are bridges only — the engine is Windows' built-in Edge WebView2.
+# 3. Nuitka (packaging) — install separately when needed:
+#    pip install nuitka
