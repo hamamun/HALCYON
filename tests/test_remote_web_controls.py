@@ -15,3 +15,12 @@ def test_web_volume_is_sent_while_slider_is_moving():
     assert "requestAnimationFrame" in source
     assert "sendWebVolume(v, false);" in source
     assert "sendWebVolume(Number(e.target.value) / 100, true);" in source
+
+
+def test_local_remote_volume_is_sent_while_slider_is_moving():
+    """Local remote volume must also receive intermediate slider values."""
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert '$(sliderId).addEventListener("input"' in source
+    assert "sendPlayerVolume(e.target.value, false);" in source
+    assert "sendPlayerVolume(e.target.value, true);" in source

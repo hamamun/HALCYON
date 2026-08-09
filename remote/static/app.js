@@ -85,9 +85,44 @@ $("seek").addEventListener("change", (e) => {
   cmd("seekFraction", { f: Number(e.target.value) / 1000 });
 });
 
+let PLAYER_VOLUME_PENDING = null;
+let PLAYER_VOLUME_FRAME = null;
+
+// Native-player volume uses the same range-input rule as Web media: `input`
+// gives live updates while dragging, while `change` guarantees the final
+// value is committed after the finger/mouse is released.
+function sendPlayerVolume(value, commit) {
+  const next = Math.max(0, Math.min(100, Number(value) || 0));
+  PLAYER_VOLUME_PENDING = next;
+
+  if (commit) {
+    if (PLAYER_VOLUME_FRAME !== null) {
+      cancelAnimationFrame(PLAYER_VOLUME_FRAME);
+      PLAYER_VOLUME_FRAME = null;
+    }
+    const finalValue = PLAYER_VOLUME_PENDING;
+    PLAYER_VOLUME_PENDING = null;
+    cmd("setVolume", { volume: finalValue });
+    return;
+  }
+
+  if (PLAYER_VOLUME_FRAME !== null) return;
+  PLAYER_VOLUME_FRAME = requestAnimationFrame(() => {
+    PLAYER_VOLUME_FRAME = null;
+    const frameValue = PLAYER_VOLUME_PENDING;
+    PLAYER_VOLUME_PENDING = null;
+    if (frameValue !== null) {
+      cmd("setVolume", { volume: frameValue });
+    }
+  });
+}
+
 function bindVolume(sliderId) {
+  $(sliderId).addEventListener("input", (e) => {
+    sendPlayerVolume(e.target.value, false);
+  });
   $(sliderId).addEventListener("change", (e) => {
-    cmd("setVolume", { volume: Number(e.target.value) });
+    sendPlayerVolume(e.target.value, true);
   });
 }
 bindVolume("vol");
