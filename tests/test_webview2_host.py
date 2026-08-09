@@ -86,3 +86,25 @@ def test_webview2_host_does_not_try_to_fullscreen_its_qobject_parent():
     assert "showFullScreen" not in source
     assert "showNormal" not in source
     assert "fullscreenChanged.emit" in source
+
+
+def test_remote_fullscreen_media_command_is_a_document_toggle():
+    """The second remote press must call exitFullscreen, not request again."""
+    host = WebViewHost()
+
+    class FakeWebView:
+        def __init__(self):
+            self.scripts = []
+
+        def ExecuteScriptAsync(self, script):
+            self.scripts.append(script)
+            return None
+
+    host.webview = FakeWebView()
+    host.media_control("fullscreen")
+    script = host.webview.scripts[-1]
+
+    assert "const activeFullscreen = document.fullscreenElement" in script
+    assert "const exit = document.exitFullscreen" in script
+    assert "if (activeFullscreen)" in script
+    assert "m.requestFullscreen" in script

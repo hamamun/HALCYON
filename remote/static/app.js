@@ -40,6 +40,8 @@ let SNAP = null;         // latest snapshot
 let FILE = { path: null, mode: "play" };   // drive browser state
 let SUBL = new Set();    // subtitle language selection
 let WEBM = null;         // last web media status
+let WM_VOLUME_PENDING = null;
+let WM_VOLUME_FRAME = null;
 let EQOPEN = true;       // equalizer accordion
 let M3U_EXPANDED = null; // remembered expanded groups (null = auto first time)
 let M3U_LAST_HTML = "";  // cached html to avoid DOM churn + innerHTML normalization mismatch
@@ -83,9 +85,44 @@ $("seek").addEventListener("change", (e) => {
   cmd("seekFraction", { f: Number(e.target.value) / 1000 });
 });
 
+let PLAYER_VOLUME_PENDING = null;
+let PLAYER_VOLUME_FRAME = null;
+
+// Native-player volume uses the same range-input rule as Web media: `input`
+// gives live updates while dragging, while `change` guarantees the final
+// value is committed after the finger/mouse is released.
+function sendPlayerVolume(value, commit) {
+  const next = Math.max(0, Math.min(100, Number(value) || 0));
+  PLAYER_VOLUME_PENDING = next;
+
+  if (commit) {
+    if (PLAYER_VOLUME_FRAME !== null) {
+      cancelAnimationFrame(PLAYER_VOLUME_FRAME);
+      PLAYER_VOLUME_FRAME = null;
+    }
+    const finalValue = PLAYER_VOLUME_PENDING;
+    PLAYER_VOLUME_PENDING = null;
+    cmd("setVolume", { volume: finalValue });
+    return;
+  }
+
+  if (PLAYER_VOLUME_FRAME !== null) return;
+  PLAYER_VOLUME_FRAME = requestAnimationFrame(() => {
+    PLAYER_VOLUME_FRAME = null;
+    const frameValue = PLAYER_VOLUME_PENDING;
+    PLAYER_VOLUME_PENDING = null;
+    if (frameValue !== null) {
+      cmd("setVolume", { volume: frameValue });
+    }
+  });
+}
+
 function bindVolume(sliderId) {
+  $(sliderId).addEventListener("input", (e) => {
+    sendPlayerVolume(e.target.value, false);
+  });
   $(sliderId).addEventListener("change", (e) => {
-    cmd("setVolume", { volume: Number(e.target.value) });
+    sendPlayerVolume(e.target.value, true);
   });
 }
 bindVolume("vol");
@@ -674,6 +711,35 @@ function renderWeb(web) {
   }
 }
 
+// Media volume is sent at the browser's paint rate while the finger/mouse is
+// moving.  The old handler only sent the final `change` event, so the page
+// received one large jump instead of the intermediate slider values.
+function sendWebVolume(value, commit) {
+  const next = Math.max(0, Math.min(1, Number(value) || 0));
+  WM_VOLUME_PENDING = next;
+
+  if (commit) {
+    if (WM_VOLUME_FRAME !== null) {
+      cancelAnimationFrame(WM_VOLUME_FRAME);
+      WM_VOLUME_FRAME = null;
+    }
+    const finalValue = WM_VOLUME_PENDING;
+    WM_VOLUME_PENDING = null;
+    cmd("web.media", { action: "volume", value: finalValue });
+    return;
+  }
+
+  if (WM_VOLUME_FRAME !== null) return;
+  WM_VOLUME_FRAME = requestAnimationFrame(() => {
+    WM_VOLUME_FRAME = null;
+    const frameValue = WM_VOLUME_PENDING;
+    WM_VOLUME_PENDING = null;
+    if (frameValue !== null) {
+      cmd("web.media", { action: "volume", value: frameValue });
+    }
+  });
+}
+
 // Media control handlers – live input + change commit
 if ($("wmPlay")) {
   $("wmPlay").addEventListener("click", () => {
@@ -702,10 +768,17 @@ if ($("wmPlay")) {
   if ($("wmVol")) {
     $("wmVol").addEventListener("input", (e) => {
       const v = Number(e.target.value) / 100;
+      if (WEBM) {
+        WEBM.volume = v;
+        WEBM.muted = false;
+      }
       $("wmVolIcon").textContent = v === 0 ? "🔇" : "🔊";
       if ($("wmMute")) $("wmMute").textContent = v === 0 ? "Unmute" : "Mute";
+      sendWebVolume(v, false);
     });
-    $("wmVol").addEventListener("change", (e) => cmd("web.media", { action: "volume", value: Number(e.target.value) / 100 }));
+    $("wmVol").addEventListener("change", (e) => {
+      sendWebVolume(Number(e.target.value) / 100, true);
+    });
   }
   const doMuteToggle = () => {
     if (!WEBM) return;

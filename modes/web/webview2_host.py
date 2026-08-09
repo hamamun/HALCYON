@@ -576,8 +576,26 @@ class WebViewHost(QObject):
     else if (p.a === 'volume') { m.volume = Math.max(0, Math.min(1, Number(p.v) || 0)); m.muted = false; }
     else if (p.a === 'mute') { if (typeof p.v === 'boolean') m.muted = !!p.v; else m.muted = !m.muted; }
     else if (p.a === 'fullscreen') {
-      const fs = m.requestFullscreen || m.webkitRequestFullscreen || m.mozRequestFullScreen || m.msRequestFullscreen;
-      if (typeof fs === 'function') { const r = fs.call(m); if (r && typeof r.catch === 'function') r.catch(() => {}); }
+      // This remote action is a toggle.  Calling requestFullscreen() again
+      // while the document is already fullscreen is a no-op in Chromium, so
+      // the second press used to leave the window stuck in fullscreen.
+      const activeFullscreen = document.fullscreenElement
+        || document.webkitFullscreenElement
+        || document.mozFullScreenElement
+        || document.msFullscreenElement;
+      if (activeFullscreen) {
+        const exit = document.exitFullscreen
+          || document.webkitExitFullscreen
+          || document.mozCancelFullScreen
+          || document.msExitFullscreen;
+        if (typeof exit === 'function') {
+          const r = exit.call(document);
+          if (r && typeof r.catch === 'function') r.catch(() => {});
+        }
+      } else {
+        const fs = m.requestFullscreen || m.webkitRequestFullscreen || m.mozRequestFullScreen || m.msRequestFullscreen;
+        if (typeof fs === 'function') { const r = fs.call(m); if (r && typeof r.catch === 'function') r.catch(() => {}); }
+      }
     }
   } catch (e) { return false; }
   return true;
