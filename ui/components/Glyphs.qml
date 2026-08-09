@@ -119,4 +119,7 @@ QtObject {
     // and E903 is unassigned in Segoe Fluent Icons — it renders as tofu.
     readonly property string expandPanel:   chevronLeft    // widen  ← 
     readonly property string collapsePanel: "\u203A"   // narrow →
+
+    // Settings tabs
+    readonly property string keyboard:      "\uE8F6"   // Keyboard
 }
