@@ -13,6 +13,7 @@ bounds only while the page itself owns HTML fullscreen.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from typing import Any, Callable
@@ -289,16 +290,44 @@ class WebViewHost(QObject):
                 return
             try:
                 msg = json.loads(raw)
-            except (TypeError, ValueError):
+            except Exception:
                 return
             if not isinstance(msg, dict) or msg.get("halcyon") != "media":
                 return
-            self._media_status = {
-                key: msg.get(key)
-                for key in ("found", "paused", "currentTime", "duration",
-                            "volume", "muted", "hasVideo")
-            }
-            self.mediaStatusChanged.emit()
+            try:
+                found = bool(msg.get("found"))
+            except Exception:
+                found = False
+            if not found:
+                self._media_status = {"found": False}
+            else:
+                # Normalize to expected types for remote bridge + QML
+                try:
+                    ct = float(msg.get("currentTime") or 0.0)
+                except Exception:
+                    ct = 0.0
+                try:
+                    du = float(msg.get("duration") or 0.0)
+                except Exception:
+                    du = 0.0
+                try:
+                    vol = msg.get("volume")
+                    vol = float(vol) if vol is not None else 1.0
+                except Exception:
+                    vol = 1.0
+                self._media_status = {
+                    "found": True,
+                    "paused": bool(msg.get("paused")),
+                    "currentTime": ct,
+                    "duration": du,
+                    "volume": vol,
+                    "muted": bool(msg.get("muted")),
+                    "hasVideo": bool(msg.get("hasVideo")),
+                }
+            try:
+                self.mediaStatusChanged.emit()
+            except Exception:
+                pass
 
         self._subscribe("NavigationStarting", navigation_starting)
         self._subscribe("NavigationCompleted", navigation_completed)
@@ -494,17 +523,42 @@ class WebViewHost(QObject):
         """
         if self.webview is None:
             return
-        payload = json.dumps({"a": action, "v": value})
+        try:
+            payload = json.dumps({"a": action, "v": value})
+        except Exception:
+            payload = '{"a": "%s"}' % (action or "toggle")
+        # Upgraded picker: includes shadowRoot + iframe traversal, mirrors pause_media robustness
         script = r"""
 (() => {
+  const collectMedia = (root, out) => {
+    if (!root) return;
+    try {
+      const nodes = root.querySelectorAll ? root.querySelectorAll('video, audio') : [];
+      for (const n of nodes) out.push(n);
+    } catch(e){}
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of all) {
+        if (el.shadowRoot) collectMedia(el.shadowRoot, out);
+        if (el.tagName === 'IFRAME') {
+          try { if (el.contentDocument) collectMedia(el.contentDocument, out); } catch(e){}
+          try { if (el.contentWindow && el.contentWindow.document) collectMedia(el.contentWindow.document, out); } catch(e){}
+        }
+      }
+    } catch(e){}
+  };
   const pick = () => {
     try {
-      const all = Array.from(document.querySelectorAll('video, audio'));
+      const all = [];
+      collectMedia(document, all);
       if (!all.length) return null;
       let best = all[0];
       for (const m of all) {
         const area = (m.videoWidth || 0) * (m.videoHeight || 0);
         const bestArea = (best.videoWidth || 0) * (best.videoHeight || 0);
+        const isPlaying = !m.paused && !m.ended && m.readyState > 2;
+        const bestIsPlaying = !best.paused && !best.ended && best.readyState > 2;
+        if (isPlaying && !bestIsPlaying) { best = m; continue; }
         if (area > bestArea) best = m;
       }
       return best;
@@ -514,13 +568,13 @@ class WebViewHost(QObject):
   if (!m) return false;
   const p = %s;
   try {
-    if (p.a === 'play' && typeof m.play === 'function') m.play();
-    else if (p.a === 'pause' && typeof m.pause === 'function') m.pause();
-    else if (p.a === 'toggle') { if (m.paused && typeof m.play === 'function') m.play(); else if (typeof m.pause === 'function') m.pause(); }
+    if (p.a === 'play') { const r = m.play(); if (r && r.catch) r.catch(()=>{}); }
+    else if (p.a === 'pause') m.pause();
+    else if (p.a === 'toggle') { if (m.paused) { const r = m.play(); if (r && r.catch) r.catch(()=>{}); } else m.pause(); }
     else if (p.a === 'seek') m.currentTime = Number(p.v) || 0;
     else if (p.a === 'seekBy') m.currentTime = (m.currentTime || 0) + (Number(p.v) || 0);
-    else if (p.a === 'volume') m.volume = Math.max(0, Math.min(1, Number(p.v) || 0));
-    else if (p.a === 'mute') m.muted = !!p.v;
+    else if (p.a === 'volume') { m.volume = Math.max(0, Math.min(1, Number(p.v) || 0)); m.muted = false; }
+    else if (p.a === 'mute') { if (typeof p.v === 'boolean') m.muted = !!p.v; else m.muted = !m.muted; }
     else if (p.a === 'fullscreen') {
       const fs = m.requestFullscreen || m.webkitRequestFullscreen || m.mozRequestFullScreen || m.msRequestFullscreen;
       if (typeof fs === 'function') { const r = fs.call(m); if (r && typeof r.catch === 'function') r.catch(() => {}); }
