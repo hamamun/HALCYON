@@ -246,11 +246,7 @@ class RemoteBridge(QObject):
             except Exception:
                 pass
 
-        model = None
-        try:
-            model = ctx.channels()
-        except Exception:
-            model = None
+        model = self._m3u_channels()
         if model is not None:
             for key, attr in (
                 ("grouping", "grouping"), ("favouritesOnly", "favouritesOnly"),
@@ -510,6 +506,16 @@ class RemoteBridge(QObject):
     def _m3u(self):
         return self._contexts.get("m3u")
 
+    def _m3u_channels(self):
+        ctx = self._m3u()
+        if ctx is None:
+            return None
+        try:
+            ch = getattr(ctx, "channels", None)
+            return ch() if callable(ch) else ch
+        except Exception:
+            return None
+
     def _cmd_m3u_addSource(self, p: dict) -> None:
         ctx = self._m3u()
         if ctx is not None:
@@ -526,34 +532,34 @@ class RemoteBridge(QObject):
             ctx.loadSource(str(p.get("id", "")))
 
     def _cmd_m3u_playRow(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().play_index(int(p.get("row", -1)))
+        model = self._m3u_channels()
+        if model is not None:
+            model.play_index(int(p.get("row", -1)))
 
     def _cmd_m3u_setFavourite(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().set_favourite_url(str(p.get("url", "")), bool(p.get("on", False)))
+        model = self._m3u_channels()
+        if model is not None:
+            model.set_favourite_url(str(p.get("url", "")), bool(p.get("on", False)))
 
     def _cmd_m3u_setFilter(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().setFilter(str(p.get("text", "")))
+        model = self._m3u_channels()
+        if model is not None:
+            model.setFilter(str(p.get("text", "")))
 
     def _cmd_m3u_setGrouping(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().setGrouping(str(p.get("mode", "category")))
+        model = self._m3u_channels()
+        if model is not None:
+            model.setGrouping(str(p.get("mode", "category")))
 
     def _cmd_m3u_setFavouritesOnly(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().setFavouritesOnly(bool(p.get("on", False)))
+        model = self._m3u_channels()
+        if model is not None:
+            model.setFavouritesOnly(bool(p.get("on", False)))
 
     def _cmd_m3u_toggleGroup(self, p: dict) -> None:
-        ctx = self._m3u()
-        if ctx is not None:
-            ctx.channels().toggleGroup(str(p.get("key", "")))
+        model = self._m3u_channels()
+        if model is not None:
+            model.toggleGroup(str(p.get("key", "")))
 
     def _cmd_m3u_retry(self, _p: dict) -> None:
         ctx = self._m3u()

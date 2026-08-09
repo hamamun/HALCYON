@@ -209,3 +209,67 @@ def test_m3u_snapshot(bridge):
     assert m3u["channels"][0]["name"] == "News1"
     assert m3u["channels"][0]["fav"] is True
     assert m3u["channels"][0]["current"] is True
+
+
+def test_m3u_snapshot_and_commands_with_property_context(bridge):
+    class FakeChannel:
+        def __init__(self, name, url, group):
+            self.name, self.url, self.group = name, url, group
+            self.country = self.language = ""
+            self.logo = ""
+
+    class FakeModel:
+        def __init__(self):
+            self.calls = []
+        def grouping(self): return "category"
+        def favouritesOnly(self): return False
+        def expandedGroup(self): return "News"
+        def count(self): return 2
+        def currentIndex(self): return 0
+        def channel_at(self, i):
+            return [FakeChannel("News1", "http://x/1", "News"),
+                    FakeChannel("Sport1", "http://x/2", "Sport")][i]
+        def is_favourite(self, url): return url.endswith("/1")
+        def play_index(self, row): self.calls.append(("play_index", row))
+        def set_favourite_url(self, url, on): self.calls.append(("set_favourite_url", url, on))
+        def setFilter(self, text): self.calls.append(("setFilter", text))
+        def setGrouping(self, mode): self.calls.append(("setGrouping", mode))
+        def setFavouritesOnly(self, on): self.calls.append(("setFavouritesOnly", on))
+        def toggleGroup(self, key): self.calls.append(("toggleGroup", key))
+
+    class FakeM3UContextWithProperty(QObject):
+        def __init__(self):
+            super().__init__()
+            self._model = FakeModel()
+        def sources(self): return [{"id": "s1", "name": "Pack"}]
+        def sourcesFull(self): return False
+        def currentSourceName(self): return "Pack"
+        def loading(self): return False
+        def statusMessage(self): return "ok"
+        def statusIsError(self): return False
+        def currentChannelName(self): return "News1"
+        @property
+        def channels(self): return self._model
+
+    ctx = FakeM3UContextWithProperty()
+    bridge.register_context("m3u", ctx)
+    bridge._controller.mode = "m3u"
+    bridge.publish_now()
+    snap = bridge.store.snapshot()
+    m3u = snap["m3u"]
+    assert m3u["channelCount"] == 2
+    assert m3u["channels"][0]["name"] == "News1"
+
+    bridge.request("m3u.playRow", {"row": 1})
+    bridge.request("m3u.setFavourite", {"url": "http://x/1", "on": True})
+    bridge.request("m3u.setFilter", {"text": "bbc"})
+    bridge.request("m3u.setGrouping", {"mode": "country"})
+    bridge.request("m3u.setFavouritesOnly", {"on": True})
+    bridge.request("m3u.toggleGroup", {"key": "News"})
+    pump()
+    assert ("play_index", 1) in ctx._model.calls
+    assert ("set_favourite_url", "http://x/1", True) in ctx._model.calls
+    assert ("setFilter", "bbc") in ctx._model.calls
+    assert ("setGrouping", "country") in ctx._model.calls
+    assert ("setFavouritesOnly", True) in ctx._model.calls
+    assert ("toggleGroup", "News") in ctx._model.calls

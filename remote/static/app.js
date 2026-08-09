@@ -92,7 +92,8 @@ bindVolume("vol2");
 // drag by overwriting the value under their finger.
 function isDragging(el) { return el === document.activeElement; }
 
-$("muteBtn").addEventListener("click", () => cmd("toggleMute", {}));
+if ($("muteBtn")) $("muteBtn").addEventListener("click", () => cmd("toggleMute", {}));
+if ($("muteBtn2")) $("muteBtn2").addEventListener("click", () => cmd("toggleMute", {}));
 $("rate").addEventListener("change", (e) => cmd("setRate", { rate: Number(e.target.value) }));
 
 $("subDelayMinus").addEventListener("click", () => cmd("adjustSubtitleDelay", { delta: -500 }));
@@ -568,6 +569,7 @@ function render(snap) {
   $("volIcon").textContent = p.muted || p.volume === 0 ? "🔇" : "🔊";
   $("volIcon2").textContent = p.muted || p.volume === 0 ? "🔇" : "🔊";
   $("muteBtn").textContent = p.muted ? "Unmute" : "Mute";
+  if ($("muteBtn2")) $("muteBtn2").textContent = p.muted ? "Unmute" : "Mute";
 
   // Resume is a one-shot choice for the media open that triggered it. The
   // bridge clears it after Start Over, stop, or a new open.
