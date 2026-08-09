@@ -133,13 +133,24 @@ class RemoteBridge(QObject):
                 ("volume", "volume"), ("rate", "rate"),
             ):
                 try:
-                    player[key] = getattr(engine, attr)()
+                    val = getattr(engine, attr)
+                    player[key] = val() if callable(val) else val
+                except Exception:
+                    pass
+            # hasVideo and subsAvailable come from the controller/tracks
+            if controller:
+                try:
+                    player["hasVideo"] = bool(controller.hasVideo)
+                    player["subsAvailable"] = bool(controller.subtitlesAvailable)
                 except Exception:
                     pass
         snap["player"] = player
 
         # ---- now playing ------------------------------------------------
-        label = getattr(controller, "currentPlaybackLabel", lambda: "")() if controller else ""
+        label = ""
+        if controller:
+            lp = getattr(controller, "currentPlaybackLabel", None)
+            label = lp() if callable(lp) else lp
         stem = getattr(controller, "currentFileStem", "") if controller else ""
         snap["nowPlaying"] = {"label": label or "", "stem": stem or ""}
 
@@ -147,26 +158,16 @@ class RemoteBridge(QObject):
         tracks: dict = {"audio": [], "currentAudio": -1, "subtitle": [],
                         "currentSubtitle": -1, "delayMs": 0}
         if controller is not None:
-            try:
-                tracks["audio"] = list(controller.audioTracks())
-            except Exception:
-                pass
-            try:
-                tracks["subtitle"] = list(controller.subtitleTracks())
-            except Exception:
-                pass
-            try:
-                tracks["currentAudio"] = int(controller.currentAudioId())
-            except Exception:
-                pass
-            try:
-                tracks["currentSubtitle"] = int(controller.currentSubtitleId())
-            except Exception:
-                pass
-            try:
-                tracks["delayMs"] = int(controller.subtitleDelayMs())
-            except Exception:
-                pass
+            for key, attr in (
+                ("audio", "audioTracks"), ("subtitle", "subtitleTracks"),
+                ("currentAudio", "currentAudioId"), ("currentSubtitle", "currentSubtitleId"),
+                ("delayMs", "subtitleDelayMs")
+            ):
+                try:
+                    val = getattr(controller, attr)
+                    tracks[key] = val() if callable(val) else val
+                except Exception:
+                    pass
         snap["tracks"] = tracks
 
         # ---- local playlist ----------------------------------------------
@@ -198,18 +199,12 @@ class RemoteBridge(QObject):
             out["count"] = len(rows)
         except Exception:
             pass
-        try:
-            out["currentIndex"] = int(ctx.currentIndex())
-        except Exception:
-            pass
-        try:
-            out["repeatMode"] = int(ctx.repeatMode())
-        except Exception:
-            pass
-        try:
-            out["shuffle"] = bool(ctx.shuffle())
-        except Exception:
-            pass
+        for key, attr in (("currentIndex", "currentIndex"), ("repeatMode", "repeatMode"), ("shuffle", "shuffle")):
+            try:
+                val = getattr(ctx, attr)
+                out[key] = val() if callable(val) else val
+            except Exception:
+                pass
         return out
 
     def _m3u_snapshot(self, mode: str) -> dict:
@@ -221,34 +216,18 @@ class RemoteBridge(QObject):
         ctx = self._contexts.get("m3u")
         if ctx is None:
             return out
-        try:
-            out["sources"] = list(ctx.sources())
-        except Exception:
-            pass
-        try:
-            out["sourcesFull"] = bool(ctx.sourcesFull())
-        except Exception:
-            pass
-        try:
-            out["currentSource"] = str(ctx.currentSourceName())
-        except Exception:
-            pass
-        try:
-            out["loading"] = bool(ctx.loading())
-        except Exception:
-            pass
-        try:
-            out["status"] = str(ctx.statusMessage())
-        except Exception:
-            pass
-        try:
-            out["statusIsError"] = bool(ctx.statusIsError())
-        except Exception:
-            pass
-        try:
-            out["currentChannel"] = str(ctx.currentChannelName())
-        except Exception:
-            pass
+        
+        for key, attr in (
+            ("sources", "sources"), ("sourcesFull", "sourcesFull"),
+            ("currentSource", "currentSourceName"), ("loading", "loading"),
+            ("status", "statusMessage"), ("statusIsError", "statusIsError"),
+            ("currentChannel", "currentChannelName")
+        ):
+            try:
+                val = getattr(ctx, attr)
+                out[key] = val() if callable(val) else val
+            except Exception:
+                pass
 
         model = None
         try:
@@ -256,25 +235,23 @@ class RemoteBridge(QObject):
         except Exception:
             model = None
         if model is not None:
-            try:
-                out["grouping"] = str(model.grouping())
-            except Exception:
-                pass
-            try:
-                out["favouritesOnly"] = bool(model.favouritesOnly())
-            except Exception:
-                pass
-            try:
-                out["expandedGroup"] = str(model.expandedGroup())
-            except Exception:
-                pass
+            for key, attr in (
+                ("grouping", "grouping"), ("favouritesOnly", "favouritesOnly"),
+                ("expandedGroup", "expandedGroup")
+            ):
+                try:
+                    val = getattr(model, attr)
+                    out[key] = val() if callable(val) else val
+                except Exception:
+                    pass
             # The channel list is only useful while M3U is the active mode and
             # only as big as the current view (filtered/grouped) — bound it.
             if mode == "m3u":
                 try:
-                    count = int(model.count())
+                    count = int(model.count() if callable(model.count) else model.count)
                     out["channelCount"] = count
                     rows = []
+                    cur_idx = int(model.currentIndex() if callable(model.currentIndex) else model.currentIndex)
                     for i in range(count):
                         ch = model.channel_at(i)
                         if ch is None:
@@ -283,7 +260,7 @@ class RemoteBridge(QObject):
                             "name": ch.name, "url": ch.url, "group": ch.group,
                             "country": ch.country, "language": ch.language,
                             "logo": ch.logo, "fav": model.is_favourite(ch.url),
-                            "current": i == int(model.currentIndex()),
+                            "current": i == cur_idx,
                         })
                     out["channels"] = rows
                 except Exception:
@@ -297,30 +274,16 @@ class RemoteBridge(QObject):
         ctx = self._contexts.get("web")
         if ctx is None:
             return out
-        try:
-            out["tabCount"] = int(ctx.tabCount())
-        except Exception:
-            pass
-        try:
-            out["tabs"] = list(ctx.tabs())
-        except Exception:
-            pass
-        try:
-            out["activeTab"] = dict(ctx.activeTab())
-        except Exception:
-            pass
-        try:
-            out["runtimeAvailable"] = bool(ctx.runtimeAvailable())
-        except Exception:
-            pass
-        try:
-            out["bookmarks"] = list(ctx.bookmarkItems())
-        except Exception:
-            pass
-        try:
-            out["activeTabBookmarked"] = bool(ctx.activeTabBookmarked())
-        except Exception:
-            pass
+        for key, attr in (
+            ("tabCount", "tabCount"), ("tabs", "tabs"), ("activeTab", "activeTab"),
+            ("runtimeAvailable", "runtimeAvailable"), ("bookmarks", "bookmarkItems"),
+            ("activeTabBookmarked", "activeTabBookmarked")
+        ):
+            try:
+                val = getattr(ctx, attr)
+                out[key] = val() if callable(val) else val
+            except Exception:
+                pass
         try:
             probe = getattr(ctx, "media_status", None)
             if probe is not None:
@@ -334,24 +297,18 @@ class RemoteBridge(QObject):
         eq = self._equalizer
         if eq is None:
             return out
+        for key, attr in (
+            ("presets", "presetNames"), ("currentPreset", "currentPreset"),
+            ("bands", "bandLabels"), ("preamp", "preamp")
+        ):
+            try:
+                val = getattr(eq, attr)
+                out[key] = val() if callable(val) else val
+            except Exception:
+                pass
         try:
-            out["presets"] = list(eq.presetNames())
-        except Exception:
-            pass
-        try:
-            out["currentPreset"] = int(eq.currentPreset())
-        except Exception:
-            pass
-        try:
-            out["bands"] = list(eq.bandLabels())
-        except Exception:
-            pass
-        try:
-            out["amps"] = [float(eq.amp_at(b)) for b in range(len(out["bands"]))]
-        except Exception:
-            pass
-        try:
-            out["preamp"] = float(eq.preamp())
+            if hasattr(eq, "amp_at"):
+                out["amps"] = [float(eq.amp_at(b)) for b in range(len(out["bands"]))]
         except Exception:
             pass
         return out
