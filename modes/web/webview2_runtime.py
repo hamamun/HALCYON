@@ -585,30 +585,55 @@ def get_anti_bot_init_script() -> str:
 def get_media_probe_script() -> str:
     """Injected into every page: report the main media element's state.
 
-    Phase R (web chip, §R.2). Runs entirely inside the page every 600 ms and
-    posts a JSON message to the host via ``chrome.webview.postMessage``. The
-    selection logic — prefer the largest ``<video>``, fall back to the first
-    media element — mirrors the PC's own pause_media() reach (shadow roots
-    included). Fully wrapped so any page without the WebView2 bridge still
+    Phase R (web chip, §R.2). Runs entirely inside the page and
+    posts a JSON message to the host via ``chrome.webview.postMessage``.
+    Upgraded vs original: includes shadowRoot + iframe traversal,
+    picks playing element preferentially over largest, and hooks
+    timeupdate/play/pause/volumechange for low-latency remote seekbar.
+    Fully wrapped so any page without the WebView2 bridge still
     behaves normally.
     """
     return r"""
 (() => {
   if (window.__halcyonMediaProbe) return;
   window.__halcyonMediaProbe = true;
+
+  const collectMedia = (root, out) => {
+    if (!root) return;
+    try {
+      const nodes = root.querySelectorAll ? root.querySelectorAll('video, audio') : [];
+      for (const n of nodes) out.push(n);
+    } catch(e) {}
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of all) {
+        if (el.shadowRoot) collectMedia(el.shadowRoot, out);
+        if (el.tagName === 'IFRAME') {
+          try { if (el.contentDocument) collectMedia(el.contentDocument, out); } catch(e) {}
+          try { if (el.contentWindow && el.contentWindow.document) collectMedia(el.contentWindow.document, out); } catch(e) {}
+        }
+      }
+    } catch(e) {}
+  };
+
   const pickMain = () => {
     try {
-      const all = Array.from(document.querySelectorAll('video, audio'));
+      const all = [];
+      collectMedia(document, all);
       if (!all.length) return null;
       let best = all[0];
       for (const m of all) {
         const area = (m.videoWidth || 0) * (m.videoHeight || 0);
         const bestArea = (best.videoWidth || 0) * (best.videoHeight || 0);
+        const isPlaying = !m.paused && !m.ended && m.readyState > 2;
+        const bestIsPlaying = !best.paused && !best.ended && best.readyState > 2;
+        if (isPlaying && !bestIsPlaying) { best = m; continue; }
         if (area > bestArea) best = m;
       }
       return best;
     } catch (e) { return null; }
   };
+
   const post = (data) => {
     try {
       if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
@@ -616,18 +641,58 @@ def get_media_probe_script() -> str:
       }
     } catch (e) {}
   };
+
+  let lastReport = 0;
   const report = () => {
-    const m = pickMain();
-    if (!m) { post({ halcyon: 'media', found: false }); return; }
-    const dur = (typeof m.duration === 'number' && isFinite(m.duration)) ? m.duration : 0;
-    post({
-      halcyon: 'media', found: true, paused: !!m.paused,
-      currentTime: m.currentTime || 0, duration: dur,
-      volume: m.volume || 0, muted: !!m.muted,
-      hasVideo: m.tagName === 'VIDEO'
-    });
+    try {
+      const m = pickMain();
+      if (!m) { post({ halcyon: 'media', found: false }); return; }
+      const dur = (typeof m.duration === 'number' && isFinite(m.duration)) ? m.duration : 0;
+      // Throttle timeupdate bursts: at most ~5 per sec, but still post immediately on play/pause
+      const now = Date.now();
+      const payload = {
+        halcyon: 'media', found: true, paused: !!m.paused,
+        currentTime: m.currentTime || 0, duration: dur,
+        volume: typeof m.volume === 'number' ? m.volume : 1,
+        muted: !!m.muted,
+        hasVideo: (m.tagName === 'VIDEO') || ((m.videoWidth||0) > 0)
+      };
+      lastReport = now;
+      post(payload);
+    } catch(e) {}
   };
-  try { setInterval(report, 600); report(); } catch (e) {}
+
+  const hookMedia = (m) => {
+    try {
+      if (m.__halcyonHooked) return;
+      m.__halcyonHooked = true;
+      ['play','pause','volumechange','ratechange','emptied'].forEach(ev => {
+        try { m.addEventListener(ev, () => setTimeout(report, 30), {passive:true}); } catch(e){}
+      });
+      try { m.addEventListener('timeupdate', () => { const n=Date.now(); if (n-lastReport>350) report(); }, {passive:true}); } catch(e){}
+    } catch(e){}
+  };
+
+  const scanAndHook = () => {
+    try {
+      const all = []; collectMedia(document, all);
+      for (const mm of all) hookMedia(mm);
+    } catch(e){}
+  };
+
+  try {
+    // Immediate + periodic + observers
+    report();
+    setInterval(() => { scanAndHook(); report(); }, 400);
+    scanAndHook();
+    // Watch for dynamically added video elements
+    try {
+      const obs = new MutationObserver(() => { scanAndHook(); });
+      obs.observe(document.documentElement||document.body, {childList:true, subtree:true});
+    } catch(e){}
+    // Also report when tab becomes visible
+    try { document.addEventListener('visibilitychange', () => { if (!document.hidden) report(); }); } catch(e){}
+  } catch (e) {}
 })();
 """
 

@@ -576,28 +576,67 @@ function bindChannelActions(box, count) {
 }
 
 /* ----------------------------- Web ----------------------------- */
+let WEB_BM_LAST_HTML = "";
+let WEB_BM_LAST_SIG = "";
+
 $("addBmBtn").addEventListener("click", () => {
   if (SNAP && SNAP.web.activeTab && SNAP.web.activeTab.url) {
     cmd("web.bookmarkAdd", { title: SNAP.web.activeTab.title || "", url: SNAP.web.activeTab.url });
   }
 });
 
+if ($("webBackBtn")) {
+  $("webBackBtn").addEventListener("click", () => cmd("web.back", {}));
+  $("webFwdBtn").addEventListener("click", () => cmd("web.forward", {}));
+  $("webReloadBtn").addEventListener("click", () => cmd("web.reload", {}));
+}
+
 function renderWeb(web) {
-  $("webTitle").textContent = (web.activeTab && web.activeTab.title) || "—";
-  $("webUrl").textContent = (web.activeTab && web.activeTab.url) || "—";
+  const tab = web.activeTab || {};
+  const title = tab.title || tab.url || "—";
+  const url = tab.url || "—";
+  $("webTitle").textContent = title;
+  $("webUrl").textContent = url;
+  const tc = $("webTabCount");
+  if (tc) {
+    const count = web.tabCount || 0;
+    const idx = (web.tabs && tab.id) ? (web.tabs.findIndex(t=>t.id===tab.id)+1) : 0;
+    tc.textContent = count ? (idx ? `Tab ${idx}/${count}` : `${count} tabs`) : "";
+  }
+
+  // --- Bookmarks with caching for perf ---
   const bm = $("webBookmarks");
-  const bmHtml = (web.bookmarks || []).map((b, i) =>
-    `<div class="row"><button class="play" data-bm-open="${i}">🌐</button>` +
-    `<div class="rname">${esc(b.title || b.url)}</div>` +
-    `<button data-bm-del="${i}" title="Remove">✕</button></div>`).join("")
-    || '<div class="status">No bookmarks yet</div>';
-  if (bm.innerHTML !== bmHtml) {
+  const list = web.bookmarks || [];
+  const sig = list.length + "|" + (list[0]?.url||"") + "|" + list.filter(b=>b.title).length + "|" + (list.map(b=>b.url).join(",").slice(0,200));
+  let bmHtml = "";
+  if (list.length) {
+    bmHtml = list.map((b, i) =>
+      `<div class="row"><button class="play" data-bm-open="${i}" title="Open in new tab">🌐</button>` +
+      `<div class="rname">${esc(b.title || b.url)}</div>` +
+      `<div class="rsub" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((b.url||'').replace(/^https?:\/\//,''))}</div>` +
+      `<button data-bm-del="${i}" title="Remove">✕</button></div>`).join("");
+  } else {
+    bmHtml = '<div class="status">No bookmarks yet</div>';
+  }
+  if (sig !== WEB_BM_LAST_SIG || bmHtml !== WEB_BM_LAST_HTML) {
     bm.innerHTML = bmHtml;
-    bm.querySelectorAll("[data-bm-open]").forEach((b) =>
+    WEB_BM_LAST_HTML = bmHtml;
+    WEB_BM_LAST_SIG = sig;
+    bm.querySelectorAll("[data-bm-open]").forEach((b) => {
       b.addEventListener("click", () => {
         const it = (web.bookmarks || [])[Number(b.dataset.bmOpen)];
-        if (it) cmd("web.navigate", { url: it.url });
-      }));
+        if (!it) return;
+        // Optimistic UI: show opening immediately, switch chip to web, and open NEW TAB
+        $("webTitle").textContent = it.title || it.url;
+        $("webUrl").textContent = it.url;
+        b.disabled = true;
+        b.textContent = "⏳";
+        cmd("switchMode", { id: "web" });
+        setChip("web");
+        cmd("web.openInNewTab", { url: it.url });
+        setTimeout(() => { b.disabled = false; b.textContent = "🌐"; }, 800);
+      });
+    });
     bm.querySelectorAll("[data-bm-del]").forEach((b) =>
       b.addEventListener("click", () => {
         const it = (web.bookmarks || [])[Number(b.dataset.bmDel)];
@@ -605,9 +644,9 @@ function renderWeb(web) {
       }));
   }
 
-  // media control
+  // media control – unified remote for page's main media element
   const media = web.media;
-  const hasMedia = media && media.found;
+  const hasMedia = !!(media && media.found);
   $("webMediaNone").hidden = hasMedia;
   $("webMediaBody").hidden = !hasMedia;
   if (hasMedia) {
@@ -615,6 +654,8 @@ function renderWeb(web) {
     $("wmPlay").textContent = media.paused ? "▶" : "⏸";
     $("wmCur").textContent = fmtTime(media.currentTime || 0);
     $("wmDur").textContent = fmtTime(media.duration || 0);
+    const mt = $("webMediaType");
+    if (mt) mt.textContent = media.hasVideo ? "Video" : "Audio";
     if (media.duration > 0 && !isDragging($("wmSeek"))) {
       const f = ((media.currentTime || 0) / media.duration) * 1000;
       $("wmSeek").value = Math.max(0, Math.min(1000, f));
@@ -622,20 +663,63 @@ function renderWeb(web) {
     if (!isDragging($("wmVol"))) {
       $("wmVol").value = Math.round((media.volume || 0) * 100);
     }
-    $("wmVolIcon").textContent = media.muted || media.volume === 0 ? "🔇" : "🔊";
+    const muted = !!(media.muted || media.volume === 0);
+    $("wmVolIcon").textContent = muted ? "🔇" : "🔊";
+    if ($("wmMute")) $("wmMute").textContent = muted ? "Unmute" : "Mute";
+    if ($("wmFs")) $("wmFs").disabled = !media.hasVideo;
+  } else {
+    WEBM = null;
+    const mt2 = $("webMediaType");
+    if (mt2) mt2.textContent = "";
   }
 }
 
-$("wmPlay").addEventListener("click", () => cmd("web.media", { action: "toggle" }));
-$("wmBack").addEventListener("click", () => cmd("web.media", { action: "seekBy", value: -15 }));
-$("wmFwd").addEventListener("click", () => cmd("web.media", { action: "seekBy", value: 15 }));
-$("wmSeek").addEventListener("change", (e) => {
-  if (WEBM && WEBM.duration > 0) {
-    cmd("web.media", { action: "seek", value: (Number(e.target.value) / 1000) * WEBM.duration });
+// Media control handlers – live input + change commit
+if ($("wmPlay")) {
+  $("wmPlay").addEventListener("click", () => {
+    if (WEBM) {
+      $("wmPlay").textContent = WEBM.paused ? "⏸" : "▶";
+      WEBM.paused = !WEBM.paused;
+    }
+    cmd("web.media", { action: "toggle" });
+  });
+  if ($("wmBack")) $("wmBack").addEventListener("click", () => cmd("web.media", { action: "seekBy", value: -10 }));
+  if ($("wmFwd")) $("wmFwd").addEventListener("click", () => cmd("web.media", { action: "seekBy", value: 15 }));
+  if ($("wmSeek")) {
+    $("wmSeek").addEventListener("input", (e) => {
+      if (WEBM && WEBM.duration > 0) {
+        const sec = (Number(e.target.value) / 1000) * WEBM.duration;
+        $("wmCur").textContent = fmtTime(sec);
+      }
+    });
+    $("wmSeek").addEventListener("change", (e) => {
+      if (WEBM && WEBM.duration > 0) {
+        const sec = (Number(e.target.value) / 1000) * WEBM.duration;
+        cmd("web.media", { action: "seek", value: sec });
+      }
+    });
   }
-});
-$("wmVol").addEventListener("change", (e) => cmd("web.media", { action: "volume", value: Number(e.target.value) / 100 }));
-$("wmFs").addEventListener("click", () => cmd("web.media", { action: "fullscreen" }));
+  if ($("wmVol")) {
+    $("wmVol").addEventListener("input", (e) => {
+      const v = Number(e.target.value) / 100;
+      $("wmVolIcon").textContent = v === 0 ? "🔇" : "🔊";
+      if ($("wmMute")) $("wmMute").textContent = v === 0 ? "Unmute" : "Mute";
+    });
+    $("wmVol").addEventListener("change", (e) => cmd("web.media", { action: "volume", value: Number(e.target.value) / 100 }));
+  }
+  const doMuteToggle = () => {
+    if (!WEBM) return;
+    const newMuted = !WEBM.muted;
+    WEBM.muted = newMuted;
+    $("wmVolIcon").textContent = newMuted ? "🔇" : "🔊";
+    if ($("wmMute")) $("wmMute").textContent = newMuted ? "Unmute" : "Mute";
+    cmd("web.media", { action: "mute", value: newMuted });
+  };
+  if ($("wmVolIcon")) $("wmVolIcon").addEventListener("click", doMuteToggle);
+  if ($("wmMute")) $("wmMute").addEventListener("click", doMuteToggle);
+  if ($("wmFs")) $("wmFs").addEventListener("click", () => cmd("web.media", { action: "fullscreen" }));
+}
+
 
 /* ----------------------------- power ----------------------------- */
 $("powerToggle").addEventListener("click", () => {

@@ -145,7 +145,12 @@ class RemoteServer:
         return web.json_response(self._bridge.store.snapshot())
 
     async def _handle_events(self, request: web.Request) -> web.StreamResponse:
-        """SSE stream — pushes each new snapshot to the phone."""
+        """SSE stream — pushes each new snapshot to the phone.
+
+        Reduced from 0.4s to 0.15s polling for remote web responsiveness.
+        Bridge also now emits publish_now on tab/bookmark/media changes via
+        QTimer.singleShot(25ms), so bookmark taps feel <200ms.
+        """
         resp = web.StreamResponse(
             headers={
                 "Content-Type": "text/event-stream",
@@ -166,7 +171,7 @@ class RemoteServer:
                             self._bridge.store.snapshot(), ensure_ascii=False
                         )
                         await resp.write(f"data: {payload}\n\n".encode("utf-8"))
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.15)
         except (asyncio.CancelledError, ConnectionResetError, ConnectionError):
             pass
         return resp

@@ -87,6 +87,7 @@ class BrowserContext(QObject):
     addressFocusRequested = Signal()
     windowTitleChanged = Signal()
     contentFullscreenChanged = Signal()
+    mediaStatusChanged = Signal()
 
     def __init__(
         self,
@@ -415,6 +416,26 @@ class BrowserContext(QObject):
             self._sync_hosts()
             self.addressFocusRequested.emit()
         return True
+
+    @Slot(str, result=bool)
+    def openInNewTab(self, url: str = "") -> bool:  # noqa: N802 - QML API
+        """Open URL in a NEW tab (remote bookmark flow, §R.2).
+
+        Always creates a fresh tab instead of reusing the active one,
+        which matches the phone's expectation: tap bookmark = new page.
+        Respects MAX_TABS cap and emits same signals as addTab.
+        """
+        raw = (url or "").strip()
+        if not raw:
+            return False
+        # Delegate to addTab which already resolves search vs URL,
+        # handles BOOKMARKS_URL, cap, active index, and host creation.
+        return self.addTab(raw)
+
+    @Slot(str, result=bool)
+    def openBookmarkInNewTab(self, url: str = "") -> bool:  # noqa: N802
+        """Alias used by remote bridge for clarity."""
+        return self.openInNewTab(url)
 
     @Slot(int, result=bool)
     def closeTab(self, index: int) -> bool:  # noqa: N802 - QML API
@@ -805,6 +826,13 @@ class BrowserContext(QObject):
                 lambda fullscreen, ident=tab_id: self._on_host_fullscreen(ident, fullscreen)
             )
         host.errorOccurred.connect(lambda message, ident=tab_id: self._on_host_error(ident, message))
+        # Media probe (remote web chip) – forward to bridge/QML quickly
+        media_sig = getattr(host, "mediaStatusChanged", None)
+        if media_sig is not None and hasattr(media_sig, "connect"):
+            try:
+                media_sig.connect(lambda ident=tab_id: self._on_host_media_status(ident))
+            except Exception:
+                pass
 
     def _on_host_fullscreen(self, tab_id: str, fullscreen: bool) -> None:
         tab = self._tab_by_id(tab_id)
@@ -853,6 +881,19 @@ class BrowserContext(QObject):
         self._set_content_fullscreen("")
         self._set_runtime_available(False, message or webview2_runtime.get_stage_error_message())
         self._sync_hosts()
+
+    def _on_host_media_status(self, tab_id: str) -> None:
+        """Forward media probe updates from the active host to remote/QML."""
+        try:
+            self.mediaStatusChanged.emit()
+        except Exception:
+            pass
+        try:
+            tab = self._tab_by_id(tab_id)
+            if tab is not None and tab is self._active_tab():
+                self.activeTabChanged.emit()
+        except Exception:
+            pass
 
     def _emit_tab_change(self, tab: _BrowserTab) -> None:
         self.tabsChanged.emit()

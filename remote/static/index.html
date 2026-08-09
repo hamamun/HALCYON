@@ -182,9 +182,14 @@
       <!-- ============ WEB ============ -->
       <section class="screen" id="screen-web" hidden>
         <div class="card">
-          <div class="card-title">Active page</div>
+          <div class="card-title">Active page <span id="webTabCount" class="t-mini" style="float:right;letter-spacing:0"></span></div>
           <div class="page-title" id="webTitle">—</div>
           <div class="page-url" id="webUrl">—</div>
+          <div class="row2" style="margin-top:8px">
+            <button class="mini" id="webBackBtn" title="Back">◀ Back</button>
+            <button class="mini" id="webFwdBtn" title="Forward">Forward ▶</button>
+            <button class="mini" id="webReloadBtn" title="Reload">↻ Reload</button>
+          </div>
         </div>
 
         <div class="card">
@@ -194,24 +199,26 @@
         </div>
 
         <div class="card" id="webMediaCard">
-          <div class="card-title">Media on page</div>
-          <div id="webMediaNone" class="status">No video on this page</div>
+          <div class="card-title">Media on page <span id="webMediaType" class="t-mini" style="float:right;letter-spacing:0;color:var(--dim)"></span></div>
+          <div id="webMediaNone" class="status">No media on this page</div>
           <div id="webMediaBody" hidden>
             <div class="transport">
-              <button class="tbtn" id="wmBack" title="Back">◀</button>
+              <button class="tbtn" id="wmBack" title="Back 10s">◀10</button>
               <button class="tbtn big" id="wmPlay" title="Play/Pause">▶</button>
-              <button class="tbtn" id="wmFwd" title="Forward">▶</button>
+              <button class="tbtn" id="wmFwd" title="Forward 15s">15▶</button>
             </div>
             <div class="seekrow">
               <span class="t-mini" id="wmCur">0:00</span>
               <input type="range" id="wmSeek" min="0" max="1000" value="0">
               <span class="t-mini" id="wmDur">0:00</span>
             </div>
-            <div class="volrow">
-              <span id="wmVolIcon">🔊</span>
-              <input type="range" id="wmVol" min="0" max="100" value="100">
-              <button class="mini" id="wmFs">⛶ Fullscreen</button>
+            <div class="volrow" style="gap:6px">
+              <span id="wmVolIcon" title="Toggle mute" style="cursor:pointer;min-width:22px;text-align:center">🔊</span>
+              <input type="range" id="wmVol" min="0" max="100" value="100" title="Volume">
+              <button class="mini" id="wmMute" title="Mute toggle">Mute</button>
+              <button class="mini" id="wmFs" title="Fullscreen video">⛶ Fs</button>
             </div>
+            <div class="status" id="webMediaHint" style="margin-top:6px;font-size:0.70rem">Remote controls the page's main video – works on any site</div>
           </div>
         </div>
       </section>

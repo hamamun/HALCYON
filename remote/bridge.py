@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 #: Poll cadence for the status snapshot. 500 ms keeps the phone live without
 #: hammering libVLC property reads.
-POLL_MS = 500
+POLL_MS = 300  # reduced from 500 for web media responsiveness (seekbar 400ms probe)
 
 #: Player-bearing modes — where transport commands are legal (§P3.6: Web is
 #: inert; the page owns its own playback).
@@ -104,8 +104,23 @@ class RemoteBridge(QObject):
             self.serverUrlChanged.emit()
 
     def register_context(self, mode_id: str, context: QObject | None) -> None:
-        if context is not None:
-            self._contexts[mode_id] = context
+        if context is None:
+            return
+        self._contexts[mode_id] = context
+        # For web, connect relevant signals so publish_now fires immediately,
+        # not only on the 300 ms timer. Gives <200 ms perceived response
+        # for bookmark taps and media seek.
+        if mode_id == "web":
+            try:
+                for sig_name in ("tabsChanged", "activeTabChanged", "bookmarksChanged",
+                                 "mediaStatusChanged", "activeTabIndexChanged",
+                                 "windowTitleChanged"):
+                    sig = getattr(context, sig_name, None)
+                    if sig is not None and hasattr(sig, "connect"):
+                        # Use a queued singleShot to coalesce rapid media probes
+                        sig.connect(lambda: QTimer.singleShot(25, self.publish_now))
+            except Exception:
+                pass
 
     def context(self, mode_id: str) -> QObject | None:
         return self._contexts.get(mode_id)
@@ -649,6 +664,46 @@ class RemoteBridge(QObject):
         url = str(p.get("url", ""))
         if ctx is not None and url:
             ctx.navigateActive(url)
+
+    def _cmd_web_openInNewTab(self, p: dict) -> None:
+        """Open URL in a NEW tab – primary path for remote bookmarks (§R.2).
+
+        Also ensures Web mode is active on the PC so the new page becomes
+        visible immediately (stage active -> hosts visible).
+        """
+        ctx = self._web()
+        url = str(p.get("url", ""))
+        if ctx is None or not url:
+            return
+        try:
+            # Switch PC to Web if not already – avoids hidden background nav
+            if self._controller is not None:
+                try:
+                    cur = self._controller.activeMode
+                    cur = cur() if callable(cur) else cur
+                except Exception:
+                    cur = ""
+                if cur != "web":
+                    self._controller.setActiveMode("web")
+        except Exception:
+            pass
+        # Add as new tab (respects MAX_TABS)
+        try:
+            # Prefer explicit openInNewTab slot if available (newer BrowserContext)
+            opener = getattr(ctx, "openInNewTab", None) or getattr(ctx, "addTab", None)
+            if callable(opener):
+                opener(url)
+            else:
+                ctx.navigateActive(url)
+        except Exception:
+            try:
+                ctx.navigateActive(url)
+            except Exception:
+                pass
+
+    def _cmd_web_openBookmark(self, p: dict) -> None:
+        """Alias – bookmark tap always opens new tab per UX spec."""
+        self._cmd_web_openInNewTab(p)
 
     def _cmd_web_back(self, _p: dict) -> None:
         ctx = self._web()
