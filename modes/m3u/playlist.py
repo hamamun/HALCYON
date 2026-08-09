@@ -496,7 +496,7 @@ class M3UContext(QObject):
 
         grouping = settings.get_mode("m3u", "grouping", GROUPING_CATEGORY)
         self._model.setGrouping(
-            grouping if grouping in (GROUPING_NONE, GROUPING_CATEGORY, GROUPING_COUNTRY)
+            grouping if grouping in (GROUPING_NONE, GROUPING_CATEGORY, GROUPING_COUNTRY, GROUPING_LANGUAGE)
             else GROUPING_CATEGORY
         )
 
