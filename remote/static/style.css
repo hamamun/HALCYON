@@ -146,6 +146,7 @@ select { cursor: pointer; }
 
 /* ---------- lists ---------- */
 .chanlist { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow-y: auto; }
+#m3uChannels { max-height: calc(10 * 48px); overflow-y: auto; }
 .row { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-radius: var(--radius-s);
   background: rgba(0,0,0,0.18); border: 1px solid transparent; }
 .row.current { border-color: rgba(94,234,212,0.6); background: rgba(94,234,212,0.08); }
