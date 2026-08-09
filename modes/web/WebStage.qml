@@ -120,8 +120,14 @@ Rectangle {
 
     // -------------------- keyboard shortcuts — Web mode only §P3.4
     // All gated on stageActive so they don't fire while Local/M3U is active
-    // (keep_stage_alive keeps this stage alive hidden). No conflict with
-    // player shortcuts because Main.qml returns early when mediaKeys=false.
+    // (keep_stage_alive keeps this stage alive hidden).
+    //
+    // IMPORTANT: These shortcuts are unique to Web mode and DO NOT conflict with
+    // Main.qml shortcuts because:
+    // - Ctrl+1/2/3 for mode switching in Main.qml are DISABLED in Web mode
+    // - Ctrl+L in Main.qml is DISABLED in Web mode (leftPanelAvailable is false)
+    // - Alt+1/2/3 for mode switching in Main.qml are INTENTIONAL for all modes
+    // - Other Web shortcuts (Ctrl+T, Ctrl+R, etc.) don't exist in Main.qml
     Item {
         id: webShortcuts
 
@@ -215,6 +221,8 @@ Rectangle {
             }
         }
         // Ctrl+1..8 = switch to tab N, Ctrl+9 = last tab (Edge/Chrome convention)
+        // These are WEB-SPECIFIC and do NOT conflict with Main.qml's mode-switching shortcuts
+        // because Main.qml disables Ctrl+1/2/3 when activeMode === "web"
         Shortcut {
             sequence: "Ctrl+1"
             context: Qt.WindowShortcut

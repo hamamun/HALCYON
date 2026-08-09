@@ -1018,25 +1018,30 @@ Shell {
 
     // ======================================================================
     // HOTKEYS — §P1.5. Every binding invokes an Actions entry, never a
-    // behaviour of its own. The primary implementation is now in
-    // globalShortcuts (WindowShortcut) so shortcuts work even when a child
-    // TextField has focus — the bug reported for Ctrl+1/2/3. This Keys handler
-    // remains as a fallback for cases where Shortcut context is blocked
-    // (e.g. WebView2 child HWND has native focus).
+    // behaviour of its own. The primary implementation is in globalShortcuts
+    // (WindowShortcut) so shortcuts work even when a child TextField has focus.
+    //
+    // NOTE: Ctrl+1/2/3 for mode switching are ONLY defined in globalShortcuts.
+    // WebStage also defines Ctrl+1/2/3 for tab switching with its own enabled
+    // condition (webStage.stageActive && browser exists). These are mutually
+    // exclusive: when in Web mode, Main.qml's shortcuts are disabled and
+    // WebStage's shortcuts are enabled (and vice versa).
+    //
+    // This Keys handler is a FALLBACK ONLY for special cases where Shortcut
+    // context is blocked (e.g. WebView2 child HWND has native focus that
+    // prevents Qt from receiving the event at all). It requires focus.
     // ======================================================================
     Item {
         anchors.fill: parent
         focus: true
 
-        readonly property bool mediaKeys: !!window.modeSpec && window.modeSpec.mediaKeysEnabled
-
         Keys.onPressed: function(event) {
             window.wakeChrome();
-            var shift = event.modifiers & Qt.ShiftModifier;
             var ctrl = event.modifiers & Qt.ControlModifier;
             var alt = event.modifiers & Qt.AltModifier;
 
-            // Alt+1/2/3 — mode switching always, even in Web (no conflict)
+            // Alt+1/2/3 — mode switching always, even in Web (no conflict with browser shortcuts)
+            // This is a fallback; the primary implementation is in globalShortcuts
             if (alt && !ctrl) {
                 switch (event.key) {
                 case Qt.Key_1: Actions.switchMode("local"); event.accepted = true; return;
@@ -1045,38 +1050,21 @@ Shell {
                 }
             }
 
-            if (ctrl) {
+            // Ctrl+1/2/3 for mode switching — fallback only (primary is in globalShortcuts)
+            // Only fire when NOT in Web mode (Web mode uses Ctrl+1/2/3 for tab switching)
+            if (ctrl && window.activeMode !== "web") {
                 switch (event.key) {
-                // Player/dock commands — gated so Web's own Ctrl+L can still fire
-                case Qt.Key_O:
-                    if (window.usesPlayer()) { Actions.addFiles(); event.accepted = true; return; }
-                    break;
-                case Qt.Key_E:
-                    if (window.rightDockAvailable()) { Actions.showEqualizer(); event.accepted = true; return; }
-                    break;
-                case Qt.Key_L:
-                    if (window.leftPanelAvailable()) { Actions.toggleLeftPanel(); event.accepted = true; return; }
-                    break;
-                case Qt.Key_I:
-                    if (window.rightDockAvailable()) { Actions.toggleRightPanel(); event.accepted = true; return; }
-                    break;
-                case Qt.Key_1:
-                    if (window.activeMode !== "web") { Actions.switchMode("local"); event.accepted = true; return; }
-                    break;
-                case Qt.Key_2:
-                    if (window.activeMode !== "web") { Actions.switchMode("m3u"); event.accepted = true; return; }
-                    break;
-                case Qt.Key_3:
-                    if (window.activeMode !== "web") { Actions.switchMode("web"); event.accepted = true; return; }
-                    break;
+                case Qt.Key_1: Actions.switchMode("local"); event.accepted = true; return;
+                case Qt.Key_2: Actions.switchMode("m3u");   event.accepted = true; return;
+                case Qt.Key_3: Actions.switchMode("web");   event.accepted = true; return;
                 }
-                return;
             }
+
             // Fallback for F when native WebView2 child has focus and WindowShortcut misses
-            if (event.key === Qt.Key_F && !ctrl && !shift && !alt) {
+            if (event.key === Qt.Key_F && !ctrl && !event.modifiers) {
                 Actions.toggleFullscreen(); event.accepted = true; return;
             }
-            // Escape and all other media keys are handled by globalShortcuts WindowShortcut
+            // Other shortcuts (Space, arrows, etc.) are handled by globalShortcuts WindowShortcut
         }
     }
 
