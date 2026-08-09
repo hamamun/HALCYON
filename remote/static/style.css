@@ -157,9 +157,13 @@ select { cursor: pointer; }
 .row button.play { color: var(--accent1); }
 .group { margin-top: 6px; }
 .group-head { display: flex; align-items: center; gap: 8px; padding: 9px 8px; cursor: pointer;
-  border-radius: var(--radius-s); font-weight: 600; font-size: 0.85rem; color: var(--accent2); }
+  border-radius: var(--radius-s); font-weight: 600; font-size: 0.85rem; color: var(--accent2);
+  user-select: none; -webkit-user-select: none; }
 .group-head:active { background: rgba(167,139,250,0.15); }
 .group-head .gcount { color: var(--dim); font-size: 0.72rem; font-weight: 500; }
+.group-head .garrow { color: var(--accent2); min-width: 14px; text-align: center; }
+.gbody { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.gbody[hidden] { display: none !important; }
 
 /* ---------- playlist (pinned bottom, max 7 rows, autoscroll) ---------- */
 #playlistWrap { margin-top: auto; }
