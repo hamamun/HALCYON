@@ -110,7 +110,12 @@ $("clearPlBtn").addEventListener("click", () => {
 
 function renderPlaylist(pl) {
   const box = $("playlist");
-  if (!pl.rows.length) { box.innerHTML = '<div class="status">Playlist is empty</div>'; return; }
+  if (!pl.rows.length) {
+    if (box.innerHTML !== '<div class="status">Playlist is empty</div>') {
+      box.innerHTML = '<div class="status">Playlist is empty</div>';
+    }
+    return;
+  }
   let html = "";
   pl.rows.forEach((row, i) => {
     html += `<div class="row${i === pl.currentIndex ? " current" : ""}">
@@ -121,17 +126,19 @@ function renderPlaylist(pl) {
       <button data-pl="remove" data-i="${i}" title="Remove">✕</button>
     </div>`;
   });
-  box.innerHTML = html;
-  box.querySelectorAll("button[data-pl]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const i = Number(b.dataset.i);
-      const act = b.dataset.pl;
-      if (act === "play") cmd("playIndex", { index: i });
-      else if (act === "up") cmd("moveItem", { from: i, to: Math.max(0, i - 1) });
-      else if (act === "down") cmd("moveItem", { from: i, to: Math.min(pl.rows.length - 1, i + 1) });
-      else if (act === "remove") cmd("clearSelected", { rows: [i] });
+  if (box.innerHTML !== html) {
+    box.innerHTML = html;
+    box.querySelectorAll("button[data-pl]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = Number(b.dataset.i);
+        const act = b.dataset.pl;
+        if (act === "play") cmd("playIndex", { index: i });
+        else if (act === "up") cmd("moveItem", { from: i, to: Math.max(0, i - 1) });
+        else if (act === "down") cmd("moveItem", { from: i, to: Math.min(pl.rows.length - 1, i + 1) });
+        else if (act === "remove") cmd("clearSelected", { rows: [i] });
+      });
     });
-  });
+  }
   // autoscroll the current row into the visible window (7 rows) — only when
   // the current track actually changed, so the list doesn't fight the user's
   // own scrolling on every 500 ms snapshot push.
@@ -250,16 +257,19 @@ function renderSubs(subs) {
   $("sbStatus").textContent = subs.status || "";
   $("sbStatus").className = "status" + (subs.statusIsError ? " err" : subs.status ? " ok" : "");
   const langs = subs.languages || [];
-  $("sbLangs").innerHTML = langs.map((l) =>
+  const langHtml = langs.map((l) =>
     `<button class="langchip${SUBL.has(l) ? " on" : ""}" data-lang="${esc(l)}">${esc(l)}</button>`).join("");
-  $("sbLangs").querySelectorAll(".langchip").forEach((b) =>
-    b.addEventListener("click", () => {
-      const l = b.dataset.lang;
-      if (SUBL.has(l)) SUBL.delete(l); else SUBL.add(l);
-      cmd("subs.languages", { languages: [...SUBL] });
-    }));
+  if ($("sbLangs").innerHTML !== langHtml) {
+    $("sbLangs").innerHTML = langHtml;
+    $("sbLangs").querySelectorAll(".langchip").forEach((b) =>
+      b.addEventListener("click", () => {
+        const l = b.dataset.lang;
+        if (SUBL.has(l)) SUBL.delete(l); else SUBL.add(l);
+        cmd("subs.languages", { languages: [...SUBL] });
+      }));
+  }
   let html = "";
-  const render = (items, label) => {
+  const renderItem = (items, label) => {
     if (!items.length) return;
     html += `<div class="group-head">${label}</div>`;
     items.forEach((it) => {
@@ -268,11 +278,14 @@ function renderSubs(subs) {
         `<button class="mini" data-subs-dl="${esc(it.idx)}"${subs.busyIndex === it.idx ? " disabled" : ""}>⬇</button></div>`;
     });
   };
-  render(subs.best || [], "Best");
-  render(subs.others || [], "Others");
-  $("sbResults").innerHTML = html || '<div class="status">No results yet</div>';
-  $("sbResults").querySelectorAll("[data-subs-dl]").forEach((b) =>
-    b.addEventListener("click", () => cmd("subs.download", { index: Number(b.dataset.subsDl) })));
+  renderItem(subs.best || [], "Best");
+  renderItem(subs.others || [], "Others");
+  html = html || '<div class="status">No results yet</div>';
+  if ($("sbResults").innerHTML !== html) {
+    $("sbResults").innerHTML = html;
+    $("sbResults").querySelectorAll("[data-subs-dl]").forEach((b) =>
+      b.addEventListener("click", () => cmd("subs.download", { index: Number(b.dataset.subsDl) })));
+  }
 }
 
 /* ----------------------------- equalizer ----------------------------- */
@@ -289,11 +302,15 @@ $("eqReset").addEventListener("click", () => cmd("eq.reset", {}));
 
 function renderEq(eq) {
   const sel = $("eqPreset");
-  sel.innerHTML = (eq.presets || []).map((p, i) =>
+  const presetHtml = (eq.presets || []).map((p, i) =>
     `<option value="${i}"${i === eq.currentPreset ? " selected" : ""}>${esc(p)}</option>`).join("")
     || '<option value="-1">—</option>';
-  $("eqPreamp").value = eq.preamp;
-  $("eqPreampVal").textContent = eq.preamp + " dB";
+  if (sel.innerHTML !== presetHtml && !isDragging(sel)) sel.innerHTML = presetHtml;
+
+  if (!isDragging($("eqPreamp"))) {
+    $("eqPreamp").value = eq.preamp;
+    $("eqPreampVal").textContent = eq.preamp + " dB";
+  }
   let html = "";
   (eq.bands || []).forEach((label, i) => {
     const val = (eq.amps && eq.amps[i]) || 0;
@@ -301,15 +318,20 @@ function renderEq(eq) {
       <input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">
       <span class="val">${val} dB</span></label>`;
   });
-  $("eqBands").innerHTML = html;
-  $("eqBands").querySelectorAll(".eqband").forEach((s) => {
-    s.addEventListener("input", () => {
-      s.nextElementSibling.textContent = s.value + " dB";
+  // Only update bands if none of the sliders are being dragged and content changed
+  const bandsBox = $("eqBands");
+  const anyBandDragging = Array.from(bandsBox.querySelectorAll(".eqband")).some(isDragging);
+  if (!anyBandDragging && bandsBox.innerHTML !== html) {
+    bandsBox.innerHTML = html;
+    bandsBox.querySelectorAll(".eqband").forEach((s) => {
+      s.addEventListener("input", () => {
+        s.nextElementSibling.textContent = s.value + " dB";
+      });
+      s.addEventListener("change", () => {
+        cmd("eq.band", { band: Number(s.dataset.band), value: Number(s.value) });
+      });
     });
-    s.addEventListener("change", () => {
-      cmd("eq.band", { band: Number(s.dataset.band), value: Number(s.value) });
-    });
-  });
+  }
 }
 
 /* ----------------------------- M3U ----------------------------- */
@@ -334,7 +356,7 @@ $("m3uFavOnly").addEventListener("change", (e) => cmd("m3u.setFavouritesOnly", {
 
 function renderM3U(m3u) {
   const srcBox = $("m3uSources");
-  srcBox.innerHTML = (m3u.sources || []).map((s, i) =>
+  const srcHtml = (m3u.sources || []).map((s, i) =>
     `<div class="row">
        <button class="play" data-src-load="${esc(s.id)}" title="Load">▶</button>
        <div class="rname">${esc(s.name || s.id)}</div>
@@ -342,10 +364,13 @@ function renderM3U(m3u) {
        <button data-src-del="${esc(s.id)}" title="Remove">✕</button>
      </div>`).join("")
     || '<div class="status">No sources yet — add one below</div>';
-  srcBox.querySelectorAll("[data-src-load]").forEach((b) =>
-    b.addEventListener("click", () => cmd("m3u.loadSource", { id: b.dataset.srcLoad })));
-  srcBox.querySelectorAll("[data-src-del]").forEach((b) =>
-    b.addEventListener("click", () => { if (confirm("Remove this source?")) cmd("m3u.removeSource", { id: b.dataset.srcDel }); }));
+  if (srcBox.innerHTML !== srcHtml) {
+    srcBox.innerHTML = srcHtml;
+    srcBox.querySelectorAll("[data-src-load]").forEach((b) =>
+      b.addEventListener("click", () => cmd("m3u.loadSource", { id: b.dataset.srcLoad })));
+    srcBox.querySelectorAll("[data-src-del]").forEach((b) =>
+      b.addEventListener("click", () => { if (confirm("Remove this source?")) cmd("m3u.removeSource", { id: b.dataset.srcDel }); }));
+  }
 
   $("m3uStatus").textContent = m3u.status || "";
   $("m3uStatus").className = "status" + (m3u.statusIsError ? " err" : m3u.status ? " ok" : "");
@@ -358,13 +383,17 @@ function renderM3U(m3u) {
   const grouping = m3u.grouping || "none";
   const box = $("m3uChannels");
   if (!channels.length) {
-    box.innerHTML = m3u.loading ? '<div class="status">Loading channels…</div>'
+    const emptyHtml = m3u.loading ? '<div class="status">Loading channels…</div>'
       : '<div class="status">Load a source to see channels</div>';
+    if (box.innerHTML !== emptyHtml) box.innerHTML = emptyHtml;
     return;
   }
   if (grouping === "none") {
-    box.innerHTML = channels.map((ch, i) => channelRow(ch, i)).join("");
-    bindChannelActions(box, channels.length);
+    const flatHtml = channels.map((ch, i) => channelRow(ch, i)).join("");
+    if (box.innerHTML !== flatHtml) {
+      box.innerHTML = flatHtml;
+      bindChannelActions(box, channels.length);
+    }
     return;
   }
   // Group key must match the server's grouping mode — category/country/
@@ -395,15 +424,17 @@ function renderM3U(m3u) {
     if (open) html += groups[k].map((i) => channelRow(channels[i], i)).join("");
     html += "</div>";
   });
-  box.innerHTML = html;
-  box.querySelectorAll(".group-head").forEach((h) =>
-    h.addEventListener("click", () => {
-      const g = h.dataset.g;
-      const body = h.nextElementSibling;
-      if (body) { body.hidden = !body.hidden; h.firstChild.textContent = body.hidden ? "▸ " : "▾ "; }
-      if (body.hidden) M3U_EXPANDED.delete(g); else M3U_EXPANDED.add(g);
-    }));
-  bindChannelActions(box, channels.length);
+  if (box.innerHTML !== html) {
+    box.innerHTML = html;
+    box.querySelectorAll(".group-head").forEach((h) =>
+      h.addEventListener("click", () => {
+        const g = h.dataset.g;
+        const body = h.nextElementSibling;
+        if (body) { body.hidden = !body.hidden; h.firstChild.textContent = body.hidden ? "▸ " : "▾ "; }
+        if (body.hidden) M3U_EXPANDED.delete(g); else M3U_EXPANDED.add(g);
+      }));
+    bindChannelActions(box, channels.length);
+  }
 }
 
 function channelRow(ch, i) {
@@ -440,21 +471,24 @@ function renderWeb(web) {
   $("webTitle").textContent = (web.activeTab && web.activeTab.title) || "—";
   $("webUrl").textContent = (web.activeTab && web.activeTab.url) || "—";
   const bm = $("webBookmarks");
-  bm.innerHTML = (web.bookmarks || []).map((b, i) =>
+  const bmHtml = (web.bookmarks || []).map((b, i) =>
     `<div class="row"><button class="play" data-bm-open="${i}">🌐</button>` +
     `<div class="rname">${esc(b.title || b.url)}</div>` +
     `<button data-bm-del="${i}" title="Remove">✕</button></div>`).join("")
     || '<div class="status">No bookmarks yet</div>';
-  bm.querySelectorAll("[data-bm-open]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const it = (web.bookmarks || [])[Number(b.dataset.bmOpen)];
-      if (it) cmd("web.navigate", { url: it.url });
-    }));
-  bm.querySelectorAll("[data-bm-del]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const it = (web.bookmarks || [])[Number(b.dataset.bmDel)];
-      if (it) cmd("web.bookmarkRemove", { url: it.url });
-    }));
+  if (bm.innerHTML !== bmHtml) {
+    bm.innerHTML = bmHtml;
+    bm.querySelectorAll("[data-bm-open]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const it = (web.bookmarks || [])[Number(b.dataset.bmOpen)];
+        if (it) cmd("web.navigate", { url: it.url });
+      }));
+    bm.querySelectorAll("[data-bm-del]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const it = (web.bookmarks || [])[Number(b.dataset.bmDel)];
+        if (it) cmd("web.bookmarkRemove", { url: it.url });
+      }));
+  }
 
   // media control
   const media = web.media;
@@ -466,11 +500,13 @@ function renderWeb(web) {
     $("wmPlay").textContent = media.paused ? "▶" : "⏸";
     $("wmCur").textContent = fmtTime(media.currentTime || 0);
     $("wmDur").textContent = fmtTime(media.duration || 0);
-    if (media.duration > 0) {
+    if (media.duration > 0 && !isDragging($("wmSeek"))) {
       const f = ((media.currentTime || 0) / media.duration) * 1000;
       $("wmSeek").value = Math.max(0, Math.min(1000, f));
     }
-    $("wmVol").value = Math.round((media.volume || 0) * 100);
+    if (!isDragging($("wmVol"))) {
+      $("wmVol").value = Math.round((media.volume || 0) * 100);
+    }
     $("wmVolIcon").textContent = media.muted || media.volume === 0 ? "🔇" : "🔊";
   }
 }
@@ -510,13 +546,10 @@ function render(snap) {
   const np = snap.nowPlaying || {};
   const title = np.label || np.stem || "Nothing playing";
   $("npTitle").textContent = title;
-  $("npTitleLg").textContent = np.label || np.stem || "—";
   $("npSub").textContent = (snap.m3u && snap.m3u.currentChannel && snap.mode === "m3u")
     ? "M3U · " + snap.m3u.currentChannel : (np.label ? "Local" : "");
-  $("npSubLg").textContent = snap.mode === "m3u" && snap.m3u ? "M3U" : snap.mode === "web" ? "Web" : "Local";
 
   const p = snap.player || {};
-  $("npTime").textContent = fmtTime(p.time || 0) + " / " + fmtTime(p.duration || 0);
   $("tCur").textContent = fmtTime(p.time || 0);
   $("tDur").textContent = fmtTime(p.duration || 0);
   if (p.duration > 0) {
@@ -537,13 +570,24 @@ function render(snap) {
   // tracks
   const tr = snap.tracks || {};
   const audioSel = $("audioTrack");
-  audioSel.innerHTML = (tr.audio || []).map((t) =>
+  const audioHtml = (tr.audio || []).map((t) =>
     `<option value="${t.id}"${t.id === tr.currentAudio ? " selected" : ""}>${esc(t.label)}</option>`).join("")
     || '<option value="-1">—</option>';
+  if (audioSel.innerHTML !== audioHtml && !isDragging(audioSel)) audioSel.innerHTML = audioHtml;
+  audioSel.disabled = (tr.audio || []).length <= 1;
+
   const subSel = $("subTrack");
-  subSel.innerHTML = (tr.subtitle || []).map((t) =>
+  const subHtml = (tr.subtitle || []).map((t) =>
     `<option value="${t.id}"${t.id === tr.currentSubtitle ? " selected" : ""}>${esc(t.label)}</option>`).join("")
     || '<option value="-1">Off</option>';
+  if (subSel.innerHTML !== subHtml && !isDragging(subSel)) subSel.innerHTML = subHtml;
+  subSel.disabled = !p.hasVideo || (tr.subtitle || []).length <= 1;
+
+  // show/hide subtitle delay and buttons based on video/subs availability
+  const subExtra = $("subDelayMinus").parentElement;
+  if (subExtra) subExtra.hidden = !p.hasVideo;
+  if ($("subsDownloadBtn")) $("subsDownloadBtn").hidden = !p.hasVideo;
+  if ($("subsFileBtn")) $("subsFileBtn").hidden = !p.hasVideo;
 
   renderPlaylist(snap.playlist || { rows: [] });
   renderM3U(snap.m3u || {});

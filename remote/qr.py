@@ -28,7 +28,7 @@ def qr_png_bytes(url: str, box_size: int = 8, border: int = 2) -> bytes | None:
     qr = qrcode.QRCode(border=border, box_size=box_size)
     qr.add_data(url)
     qr.make(fit=True)
-    image = qr.make_image(fill_color="white", back_color="black")
+    image = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
