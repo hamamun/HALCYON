@@ -42,6 +42,9 @@ let SUBL = new Set();    // subtitle language selection
 let WEBM = null;         // last web media status
 let EQOPEN = true;       // equalizer accordion
 let M3U_EXPANDED = null; // remembered expanded groups (null = auto first time)
+let M3U_LAST_HTML = "";  // cached html to avoid DOM churn + innerHTML normalization mismatch
+let M3U_LAST_COUNT = -1;
+let M3U_LAST_GROUPING = "";
 let PL_LAST_CUR = -1;    // last rendered playlist currentIndex (autoscroll guard)
 
 /* ----------------------------- chips ----------------------------- */
@@ -355,9 +358,44 @@ $("srcOk").addEventListener("click", () => {
   }
 });
 
-$("m3uFilter").addEventListener("input", (e) => cmd("m3u.setFilter", { text: e.target.value }));
-$("m3uGrouping").addEventListener("change", (e) => cmd("m3u.setGrouping", { mode: e.target.value }));
-$("m3uFavOnly").addEventListener("change", (e) => cmd("m3u.setFavouritesOnly", { on: e.target.checked }));
+$("m3uFilter").addEventListener("input", (e) => {
+  cmd("m3u.setFilter", { text: e.target.value });
+  // show clear filter affordance immediately
+  const cf = $("clearM3uFilterBtn");
+  if (cf) cf.style.display = e.target.value.trim() ? "" : ($("m3uFavOnly").checked ? "" : "none");
+});
+$("m3uGrouping").addEventListener("change", (e) => {
+  M3U_LAST_HTML = ""; // grouping change forces rebuild
+  cmd("m3u.setGrouping", { mode: e.target.value });
+});
+$("m3uFavOnly").addEventListener("change", (e) => {
+  M3U_LAST_HTML = "";
+  cmd("m3u.setFavouritesOnly", { on: e.target.checked });
+});
+
+const clearM3uBtn = $("clearM3uBtn");
+if (clearM3uBtn) {
+  clearM3uBtn.addEventListener("click", () => {
+    if (confirm("Clear loaded playlist? This removes all channels and stops playback.")) {
+      M3U_EXPANDED = null;
+      M3U_LAST_HTML = "";
+      cmd("clearPlaylist", {});
+    }
+  });
+}
+const clearM3uFilterBtn = $("clearM3uFilterBtn");
+if (clearM3uFilterBtn) {
+  clearM3uFilterBtn.addEventListener("click", () => {
+    $("m3uFilter").value = "";
+    M3U_LAST_HTML = "";
+    cmd("m3u.setFilter", { text: "" });
+    if ($("m3uFavOnly").checked) {
+      $("m3uFavOnly").checked = false;
+      cmd("m3u.setFavouritesOnly", { on: false });
+    }
+    clearM3uFilterBtn.style.display = "none";
+  });
+}
 
 function renderM3U(m3u) {
   const srcBox = $("m3uSources");
@@ -380,64 +418,126 @@ function renderM3U(m3u) {
   $("m3uStatus").textContent = m3u.status || "";
   $("m3uStatus").className = "status" + (m3u.statusIsError ? " err" : m3u.status ? " ok" : "");
 
-  $("m3uGrouping").value = m3u.grouping || "category";
-  $("m3uFavOnly").checked = !!m3u.favouritesOnly;
+  if (!isDragging($("m3uGrouping"))) $("m3uGrouping").value = m3u.grouping || "category";
+  if (!isDragging($("m3uFavOnly"))) $("m3uFavOnly").checked = !!m3u.favouritesOnly;
+
+  const clearBtn = $("clearM3uBtn");
+  if (clearBtn) clearBtn.hidden = !(m3u.channels && m3u.channels.length);
+  const cfBtn = $("clearM3uFilterBtn");
+  if (cfBtn) {
+    const hasFilter = !!($("m3uFilter").value.trim() || m3u.favouritesOnly);
+    cfBtn.style.display = hasFilter ? "" : "none";
+  }
 
   // channels: flat view in snapshot order — play by array index (§P2.3)
   const channels = m3u.channels || [];
   const grouping = m3u.grouping || "none";
   const box = $("m3uChannels");
+
   if (!channels.length) {
     const emptyHtml = m3u.loading ? '<div class="status">Loading channels…</div>'
       : '<div class="status">Load a source to see channels</div>';
-    if (box.innerHTML !== emptyHtml) box.innerHTML = emptyHtml;
+    if (M3U_LAST_HTML !== emptyHtml || M3U_LAST_COUNT !== 0) {
+      box.innerHTML = emptyHtml;
+      M3U_LAST_HTML = emptyHtml;
+      M3U_LAST_COUNT = 0;
+      M3U_LAST_GROUPING = grouping;
+      M3U_EXPANDED = null;
+    }
     return;
   }
+
+  const LIMIT_NONE = 400;
+  const LIMIT_GROUP = 600;
+
+  // ------------------------------------------------- no grouping: flat, limited
   if (grouping === "none") {
-    const flatHtml = channels.map((ch, i) => channelRow(ch, i)).join("");
-    if (box.innerHTML !== flatHtml) {
+    const truncated = channels.length > LIMIT_NONE;
+    const display = truncated ? channels.slice(0, LIMIT_NONE) : channels;
+    let flatHtml = display.map((ch, i) => channelRow(ch, i)).join("");
+    if (truncated) flatHtml += `<div class="status">Showing ${LIMIT_NONE} of ${channels.length} – use search or grouping to narrow</div>`;
+    // Use content hash that includes fav/current so star fill updates
+    const sig = grouping + "|" + channels.length + "|" + (channels[0]?.url || "") + "|" + channels.filter(c=>c.fav).length + "|" + channels.filter(c=>c.current).length;
+    if (M3U_LAST_HTML !== flatHtml || M3U_LAST_COUNT !== channels.length || M3U_LAST_GROUPING !== sig) {
       box.innerHTML = flatHtml;
+      M3U_LAST_HTML = flatHtml;
+      M3U_LAST_COUNT = channels.length;
+      M3U_LAST_GROUPING = sig;
       bindChannelActions(box, channels.length);
     }
     return;
   }
-  // Group key must match the server's grouping mode — category/country/
-  // language — so the phone's groups agree with the PC's (§R.2).
+
+  // ------------------------------------------------- grouped view
   const groupKey = (ch) => {
     const raw = grouping === "country" ? ch.country
       : grouping === "language" ? ch.language : ch.group;
-    return raw || (grouping === "none" ? "" : "Unknown");
+    return raw || "Unknown";
   };
   const groups = {};
   channels.forEach((ch, i) => {
     const key = groupKey(ch);
     (groups[key] = groups[key] || []).push(i);
   });
-  // Remember the user's expand/collapse across snapshot pushes (500 ms).
+
+  // Remember expand/collapse across snapshots, but init with current playing + first 3
   if (M3U_EXPANDED === null) {
     M3U_EXPANDED = new Set();
-    Object.keys(groups).forEach((k, i) => {
-      if (i < 3 || channels[groups[k][0]].current) M3U_EXPANDED.add(k);
+    const keys = Object.keys(groups);
+    // Sort keys for deterministic first-3
+    keys.sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase()));
+    keys.forEach((k, idx) => {
+      const hasCurrent = groups[k].some(ii => channels[ii].current);
+      if (idx < 3 || hasCurrent) M3U_EXPANDED.add(k);
     });
   } else {
-    M3U_EXPANDED = new Set(Object.keys(groups).filter((k) => M3U_EXPANDED.has(k)));
+    const existing = new Set(Object.keys(groups));
+    M3U_EXPANDED = new Set([...M3U_EXPANDED].filter(k => existing.has(k)));
+    if (M3U_EXPANDED.size === 0) {
+      for (const k of Object.keys(groups)) {
+        if (groups[k].some(ii => channels[ii].current)) { M3U_EXPANDED.add(k); break; }
+      }
+    }
   }
+
+  const sortedKeys = Object.keys(groups).sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase()));
   let html = "";
-  Object.keys(groups).forEach((k) => {
+  sortedKeys.forEach((k) => {
     const open = M3U_EXPANDED.has(k);
-    html += `<div class="group"><div class="group-head" data-g="${esc(k)}">${open ? "▾" : "▸"} ${esc(k)} <span class="gcount">${groups[k].length}</span></div>`;
-    if (open) html += groups[k].map((i) => channelRow(channels[i], i)).join("");
-    html += "</div>";
+    const count = groups[k].length;
+    html += `<div class="group"><div class="group-head" data-g="${esc(k)}"><span class="garrow">${open ? "▾" : "▸"}</span> ${esc(k)} <span class="gcount">${count}</span></div>`;
+    html += `<div class="gbody"${open ? "" : ' hidden'}>`;
+    if (open) {
+      let idxs = groups[k];
+      const truncated = idxs.length > LIMIT_GROUP;
+      if (truncated) idxs = idxs.slice(0, LIMIT_GROUP);
+      html += idxs.map(i => channelRow(channels[i], i)).join("");
+      if (truncated) html += `<div class="status">Showing ${LIMIT_GROUP} of ${count} in this group – search to narrow</div>`;
+    }
+    html += `</div></div>`;
   });
-  if (box.innerHTML !== html) {
+
+  const favSig = channels.filter(c=>c.fav).length;
+  const curSig = channels.findIndex(c=>c.current);
+  const sig = grouping + "|" + channels.length + "|" + sortedKeys.length + "|" + [...M3U_EXPANDED].sort().join(",") + "|" + favSig + "|" + curSig;
+
+  if (M3U_LAST_HTML !== html || M3U_LAST_GROUPING !== sig) {
     box.innerHTML = html;
-    box.querySelectorAll(".group-head").forEach((h) =>
+    M3U_LAST_HTML = html;
+    M3U_LAST_GROUPING = sig;
+    M3U_LAST_COUNT = channels.length;
+
+    box.querySelectorAll(".group-head").forEach((h) => {
       h.addEventListener("click", () => {
         const g = h.dataset.g;
-        const body = h.nextElementSibling;
-        if (body) { body.hidden = !body.hidden; h.firstChild.textContent = body.hidden ? "▸ " : "▾ "; }
-        if (body.hidden) M3U_EXPANDED.delete(g); else M3U_EXPANDED.add(g);
-      }));
+        if (!g) return;
+        if (M3U_EXPANDED.has(g)) M3U_EXPANDED.delete(g);
+        else M3U_EXPANDED.add(g);
+        // Immediate re-render using current snapshot, no need to wait for SSE
+        M3U_LAST_HTML = "";
+        renderM3U(m3u);
+      });
+    });
     bindChannelActions(box, channels.length);
   }
 }
@@ -453,15 +553,25 @@ function channelRow(ch, i) {
 
 function bindChannelActions(box, count) {
   box.querySelectorAll("[data-ch-play]").forEach((b) =>
-    b.addEventListener("click", () => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       const i = Number(b.dataset.chPlay);
       if (i >= 0 && i < count) cmd("m3u.playRow", { row: i });
     }));
   box.querySelectorAll("[data-ch-fav]").forEach((b) =>
-    b.addEventListener("click", () => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       const i = Number(b.dataset.chFav);
       const ch = (SNAP && SNAP.m3u.channels && SNAP.m3u.channels[i]) || null;
-      if (ch) cmd("m3u.setFavourite", { url: ch.url, on: !ch.fav });
+      if (ch) {
+        // optimistic UI: toggle immediately so star fills without waiting 400ms
+        const rowEl = b.closest(".row");
+        if (rowEl) {
+          b.textContent = ch.fav ? "☆" : "★";
+          b.classList.toggle("on", !ch.fav);
+        }
+        cmd("m3u.setFavourite", { url: ch.url, on: !ch.fav });
+      }
     }));
 }
 

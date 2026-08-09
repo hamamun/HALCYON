@@ -73,6 +73,10 @@ class RemoteBridge(QObject):
 
         self.store = StatusStore()
         self._server_url = ""
+        # Cache for heavy M3U channel snapshot — rebuilt only when the model
+        # actually changes, not on every 500 ms tick (§R.4 perf for thousands).
+        self._m3u_cache_sig = None
+        self._m3u_cache_rows: list[dict] = []
 
         # The explicit QueuedConnection is load-bearing: with AutoConnection
         # Qt compares the *emitting object's* thread (this bridge, which lives
@@ -263,19 +267,56 @@ class RemoteBridge(QObject):
                 try:
                     count = int(model.count() if callable(model.count) else model.count)
                     out["channelCount"] = count
-                    rows = []
-                    cur_idx = int(model.currentIndex() if callable(model.currentIndex) else model.currentIndex)
-                    for i in range(count):
-                        ch = model.channel_at(i)
-                        if ch is None:
-                            continue
-                        rows.append({
-                            "name": ch.name, "url": ch.url, "group": ch.group,
-                            "country": ch.country, "language": ch.language,
-                            "logo": ch.logo, "fav": model.is_favourite(ch.url),
-                            "current": i == cur_idx,
-                        })
-                    out["channels"] = rows
+                    # Build a signature that changes only when the visible list
+                    # really changes — avoids rebuilding 15k dicts every 500 ms.
+                    try:
+                        total = int(model.totalCount if callable(model.totalCount) else getattr(model, "totalCount", 0))
+                    except Exception:
+                        total = 0
+                    try:
+                        grouping_val = model.grouping
+                    except Exception:
+                        grouping_val = ""
+                    try:
+                        fav_only = bool(model.favouritesOnly)
+                    except Exception:
+                        fav_only = False
+                    try:
+                        filt = getattr(model, "_filter", "")
+                    except Exception:
+                        filt = ""
+                    try:
+                        cur_idx = int(model.currentIndex() if callable(model.currentIndex) else model.currentIndex)
+                    except Exception:
+                        cur_idx = -1
+                    try:
+                        fav_set = frozenset(getattr(model, "_favourite_urls", set()) or set())
+                    except Exception:
+                        fav_set = frozenset()
+                    try:
+                        ch_id = id(getattr(model, "_channels", None))
+                    except Exception:
+                        ch_id = 0
+                    sig = (ch_id, count, total, grouping_val, fav_only, filt, cur_idx, fav_set)
+
+                    if sig == self._m3u_cache_sig and self._m3u_cache_rows:
+                        out["channels"] = self._m3u_cache_rows
+                    else:
+                        rows = []
+                        # cur_idx already computed above
+                        for i in range(count):
+                            ch = model.channel_at(i)
+                            if ch is None:
+                                continue
+                            rows.append({
+                                "name": ch.name, "url": ch.url, "group": ch.group,
+                                "country": ch.country, "language": ch.language,
+                                "logo": ch.logo, "fav": model.is_favourite(ch.url),
+                                "current": i == cur_idx,
+                            })
+                        self._m3u_cache_sig = sig
+                        self._m3u_cache_rows = rows
+                        out["channels"] = rows
                 except Exception:
                     pass
         return out
@@ -482,6 +523,8 @@ class RemoteBridge(QObject):
     def _cmd_clearPlaylist(self, _p: dict) -> None:
         if self._controller is not None:
             self._controller.clearPlaylist()
+        self._m3u_cache_sig = None
+        self._m3u_cache_rows = []
 
     def _cmd_cycleRepeat(self, _p: dict) -> None:
         if self._controller is not None:
@@ -530,6 +573,8 @@ class RemoteBridge(QObject):
         ctx = self._m3u()
         if ctx is not None:
             ctx.loadSource(str(p.get("id", "")))
+        self._m3u_cache_sig = None
+        self._m3u_cache_rows = []
 
     def _cmd_m3u_playRow(self, p: dict) -> None:
         model = self._m3u_channels()
@@ -538,33 +583,57 @@ class RemoteBridge(QObject):
 
     def _cmd_m3u_setFavourite(self, p: dict) -> None:
         model = self._m3u_channels()
-        if model is not None:
-            model.set_favourite_url(str(p.get("url", "")), bool(p.get("on", False)))
+        ctx = self._m3u()
+        if model is None:
+            return
+        url = str(p.get("url", "")).strip()
+        on = bool(p.get("on", False))
+        if not url:
+            return
+        # Persist to the per-source store when we have a saved source — mirrors
+        # QML's toggleFavourite path which updates both model and store.
+        if ctx is not None:
+            try:
+                source_id = getattr(ctx, "_current_source_id", "") or ""
+                fav_store = getattr(ctx, "_favourites", None)
+                if source_id and fav_store is not None:
+                    fav_store.set(source_id, url, on)
+            except Exception:
+                pass
+        model.set_favourite_url(url, on)
+        # Invalidate channel cache so the new fav flag is sent immediately.
+        self._m3u_cache_sig = None
 
     def _cmd_m3u_setFilter(self, p: dict) -> None:
         model = self._m3u_channels()
         if model is not None:
             model.setFilter(str(p.get("text", "")))
+        self._m3u_cache_sig = None
 
     def _cmd_m3u_setGrouping(self, p: dict) -> None:
         model = self._m3u_channels()
         if model is not None:
             model.setGrouping(str(p.get("mode", "category")))
+        self._m3u_cache_sig = None
 
     def _cmd_m3u_setFavouritesOnly(self, p: dict) -> None:
         model = self._m3u_channels()
         if model is not None:
             model.setFavouritesOnly(bool(p.get("on", False)))
+        self._m3u_cache_sig = None
 
     def _cmd_m3u_toggleGroup(self, p: dict) -> None:
         model = self._m3u_channels()
         if model is not None:
             model.toggleGroup(str(p.get("key", "")))
+        self._m3u_cache_sig = None
 
     def _cmd_m3u_retry(self, _p: dict) -> None:
         ctx = self._m3u()
         if ctx is not None:
             ctx.retry()
+        self._m3u_cache_sig = None
+        self._m3u_cache_rows = []
 
     def _cmd_m3u_clearStatus(self, _p: dict) -> None:
         ctx = self._m3u()
