@@ -43,6 +43,11 @@ Rectangle {
         urlInput.focus = false
     }
 
+    function focusInput() {
+        urlInput.forceActiveFocus()
+        urlInput.selectAll()
+    }
+
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: Theme.spaceSm

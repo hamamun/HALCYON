@@ -1018,7 +1018,11 @@ Shell {
 
     // ======================================================================
     // HOTKEYS — §P1.5. Every binding invokes an Actions entry, never a
-    // behaviour of its own.
+    // behaviour of its own. The primary implementation is now in
+    // globalShortcuts (WindowShortcut) so shortcuts work even when a child
+    // TextField has focus — the bug reported for Ctrl+1/2/3. This Keys handler
+    // remains as a fallback for cases where Shortcut context is blocked
+    // (e.g. WebView2 child HWND has native focus).
     // ======================================================================
     Item {
         anchors.fill: parent
@@ -1030,73 +1034,121 @@ Shell {
             window.wakeChrome();
             var shift = event.modifiers & Qt.ShiftModifier;
             var ctrl = event.modifiers & Qt.ControlModifier;
+            var alt = event.modifiers & Qt.AltModifier;
+
+            // Alt+1/2/3 — mode switching always, even in Web (no conflict)
+            if (alt && !ctrl) {
+                switch (event.key) {
+                case Qt.Key_1: Actions.switchMode("local"); event.accepted = true; return;
+                case Qt.Key_2: Actions.switchMode("m3u");   event.accepted = true; return;
+                case Qt.Key_3: Actions.switchMode("web");   event.accepted = true; return;
+                }
+            }
 
             if (ctrl) {
                 switch (event.key) {
-                // These are player/dock commands, not browser shortcuts. In
-                // Web they are inert: no media dialog and no empty dock.
+                // Player/dock commands — gated so Web's own Ctrl+L can still fire
                 case Qt.Key_O:
-                    if (window.usesPlayer()) Actions.addFiles();
-                    event.accepted = true; return;
-                case Qt.Key_E: Actions.showEqualizer();  event.accepted = true; return;
-                case Qt.Key_L: Actions.toggleLeftPanel();  event.accepted = true; return;
-                case Qt.Key_I: Actions.toggleRightPanel(); event.accepted = true; return;
+                    if (window.usesPlayer()) { Actions.addFiles(); event.accepted = true; return; }
+                    break;
+                case Qt.Key_E:
+                    if (window.rightDockAvailable()) { Actions.showEqualizer(); event.accepted = true; return; }
+                    break;
+                case Qt.Key_L:
+                    if (window.leftPanelAvailable()) { Actions.toggleLeftPanel(); event.accepted = true; return; }
+                    break;
+                case Qt.Key_I:
+                    if (window.rightDockAvailable()) { Actions.toggleRightPanel(); event.accepted = true; return; }
+                    break;
+                case Qt.Key_1:
+                    if (window.activeMode !== "web") { Actions.switchMode("local"); event.accepted = true; return; }
+                    break;
+                case Qt.Key_2:
+                    if (window.activeMode !== "web") { Actions.switchMode("m3u"); event.accepted = true; return; }
+                    break;
+                case Qt.Key_3:
+                    if (window.activeMode !== "web") { Actions.switchMode("web"); event.accepted = true; return; }
+                    break;
                 }
-            }
-
-            if (event.key === Qt.Key_Escape) {
-                // Mini Mode: Esc returns to normal §M.5
-                if (window.miniModeActive) {
-                    window.leaveMiniMode();
-                    event.accepted = true;
-                    return;
-                }
-                // 1st Esc: close fullscreen panels (both together), stay fullscreen.
-                // 2nd Esc: exit fullscreen. Mirrors YouTube / video player UX.
-                if (window.fullscreen
-                    && (window.leftPanelOpen || window.rightPanelOpen)) {
-                    var hadLeft = window.leftPanelOpen && window.leftPanelAvailable();
-                    var hadRight = window.rightPanelOpen && window.rightDockAvailable();
-                    if (hadLeft || hadRight) {
-                        if (window.leftPanelOpen) {
-                            window.leftPanelOpen = false;
-                            Settings.set("window.leftPanelVisible", false);
-                        }
-                        if (window.rightPanelOpen) {
-                            window.rightPanelOpen = false;
-                            Settings.set("window.rightPanelVisible", false);
-                        }
-                        window.wakeChrome();
-                        event.accepted = true;
-                        return;
-                    }
-                }
-                Actions.exitFullscreen();
-                event.accepted = true;
                 return;
             }
-
-            if (!mediaKeys)
-                return;                  // Web mode: media keys are inert (§P3.6)
-
-            switch (event.key) {
-            case Qt.Key_Space:  Actions.playPause(); break;
-            case Qt.Key_Left:   Actions.seekRelative(shift ? -60000 : -10000); break;
-            case Qt.Key_Right:  Actions.seekRelative(shift ?  60000 :  10000); break;
-            case Qt.Key_Up:     Actions.adjustVolume(5); break;
-            case Qt.Key_Down:   Actions.adjustVolume(-5); break;
-            case Qt.Key_M:      Actions.toggleMute(); break;
-            case Qt.Key_F:      Actions.toggleFullscreen(); break;
-            case Qt.Key_S:      Actions.cycleSubtitleTrack(); break;
-            case Qt.Key_A:      Actions.cycleAudioTrack(); break;
-            case Qt.Key_L:      Actions.cycleRepeat(); break;
-            case Qt.Key_BracketLeft:  Actions.stepRate(-1); break;
-            case Qt.Key_BracketRight: Actions.stepRate(1); break;
-            case Qt.Key_Delete: Actions.clearSelected(); break;
-            default: return;
+            // Fallback for F when native WebView2 child has focus and WindowShortcut misses
+            if (event.key === Qt.Key_F && !ctrl && !shift && !alt) {
+                Actions.toggleFullscreen(); event.accepted = true; return;
             }
-            event.accepted = true;
+            // Escape and all other media keys are handled by globalShortcuts WindowShortcut
         }
+    }
+
+    // ----------------------------------------------------------------
+    // GLOBAL SHORTCUTS — WindowShortcut so they fire even when a child
+    // TextField/ListView has focus (Keys.onPressed above only fires when
+    // the Item itself has focus). Media keys are gated by
+    // isTextInputFocused to avoid typing 'f', 'm', etc in a search box
+    // triggering fullscreen/mute.
+    // This guarantees Ctrl+1/2/3 always work — the bug the owner reported.
+    // ----------------------------------------------------------------
+    Item {
+        id: globalShortcuts
+
+        property bool isTextInputFocused: {
+            var item = window.activeFocusItem;
+            if (!item) return false;
+            // GlassField / TextField / TextInput all have text + cursorPosition
+            if (typeof item.text !== "undefined" && typeof item.cursorPosition !== "undefined")
+                return true;
+            return false;
+        }
+        readonly property bool mediaKeys: !!window.modeSpec && window.modeSpec.mediaKeysEnabled
+        readonly property bool canMedia: mediaKeys && !isTextInputFocused
+
+        // --- Mode switching — always global, no conflict ---
+        // Ctrl+1/2/3 switches modes when NOT in Web (in Web, Ctrl+1..9 switches tabs — standard browser UX)
+        Shortcut { sequence: "Ctrl+1"; context: Qt.WindowShortcut; enabled: window.activeMode !== "web"; onActivated: Actions.switchMode("local") }
+        Shortcut { sequence: "Ctrl+2"; context: Qt.WindowShortcut; enabled: window.activeMode !== "web"; onActivated: Actions.switchMode("m3u") }
+        Shortcut { sequence: "Ctrl+3"; context: Qt.WindowShortcut; enabled: window.activeMode !== "web"; onActivated: Actions.switchMode("web") }
+        // Alt+1/2/3 switches modes even in Web — no conflict with Web tab switching
+        Shortcut { sequence: "Alt+1"; context: Qt.WindowShortcut; onActivated: Actions.switchMode("local") }
+        Shortcut { sequence: "Alt+2"; context: Qt.WindowShortcut; onActivated: Actions.switchMode("m3u") }
+        Shortcut { sequence: "Alt+3"; context: Qt.WindowShortcut; onActivated: Actions.switchMode("web") }
+
+        // --- Fullscreen — global even in Web ---
+        Shortcut { sequence: "F"; context: Qt.WindowShortcut; enabled: !globalShortcuts.isTextInputFocused; onActivated: Actions.toggleFullscreen() }
+
+        // --- Panels / file dialogs — gated ---
+        Shortcut { sequence: "Ctrl+O"; context: Qt.WindowShortcut; enabled: window.usesPlayer(); onActivated: Actions.addFiles() }
+        Shortcut { sequence: "Ctrl+E"; context: Qt.WindowShortcut; enabled: window.rightDockAvailable(); onActivated: Actions.showEqualizer() }
+        Shortcut { sequence: "Ctrl+L"; context: Qt.WindowShortcut; enabled: window.leftPanelAvailable(); onActivated: Actions.toggleLeftPanel() }
+        Shortcut { sequence: "Ctrl+I"; context: Qt.WindowShortcut; enabled: window.rightDockAvailable(); onActivated: Actions.toggleRightPanel() }
+
+        // --- Media — gated by mediaKeys and not typing ---
+        Shortcut { sequence: "Space"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.playPause() }
+        Shortcut { sequence: "Left"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.seekRelative(-10000) }
+        Shortcut { sequence: "Shift+Left"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.seekRelative(-60000) }
+        Shortcut { sequence: "Right"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.seekRelative(10000) }
+        Shortcut { sequence: "Shift+Right"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.seekRelative(60000) }
+        Shortcut { sequence: "Up"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.adjustVolume(5) }
+        Shortcut { sequence: "Down"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.adjustVolume(-5) }
+        Shortcut { sequence: "M"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.toggleMute() }
+        Shortcut { sequence: "S"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.cycleSubtitleTrack() }
+        Shortcut { sequence: "A"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.cycleAudioTrack() }
+        Shortcut { sequence: "L"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.cycleRepeat() }
+        Shortcut { sequence: "N"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.next() }
+        Shortcut { sequence: "Shift+N"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.previous() }
+        Shortcut { sequence: "P"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia && window.activeMode !== "m3u"; onActivated: Actions.previous() }
+        Shortcut { sequence: "["; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.stepRate(-1) }
+        Shortcut { sequence: "]"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.stepRate(1) }
+        Shortcut { sequence: "Delete"; context: Qt.WindowShortcut; enabled: globalShortcuts.canMedia; onActivated: Actions.clearSelected() }
+        // Escape is also a global shortcut for reliability (Keys above may miss when WebView2 child has focus)
+        Shortcut { sequence: "Escape"; context: Qt.WindowShortcut; onActivated: {
+            if (window.miniModeActive) { window.leaveMiniMode(); return; }
+            if (window.fullscreen && (window.leftPanelOpen || window.rightPanelOpen)) {
+                if (window.leftPanelOpen && window.leftPanelAvailable()) { window.leftPanelOpen = false; Settings.set("window.leftPanelVisible", false); }
+                if (window.rightPanelOpen && window.rightDockAvailable()) { window.rightPanelOpen = false; Settings.set("window.rightPanelVisible", false); }
+                window.wakeChrome(); return;
+            }
+            Actions.exitFullscreen();
+        } }
     }
 
     // ======================================================================

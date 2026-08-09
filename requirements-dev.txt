@@ -1,3 +1,0 @@
--r requirements-phase1.txt
-pytest>=8.0
-pythonnet>=3.0
