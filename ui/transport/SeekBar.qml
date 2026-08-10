@@ -115,7 +115,7 @@ Item {
         height: 22
         width: tipText.implicitWidth + Theme.spaceMd
         radius: Theme.radiusSmall
-        color: Qt.rgba(0.043, 0.055, 0.078, 0.94)
+        color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.94)
         border.width: 1
         border.color: Theme.glassBorder
         y: -height - Theme.spaceSm

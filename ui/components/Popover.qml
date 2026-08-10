@@ -32,7 +32,7 @@ Popup {
 
     background: Rectangle {
         radius: Theme.radiusControl
-        color: Qt.rgba(0.043, 0.055, 0.078, 0.94)   // base, near-opaque
+        color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.94)   // base, near-opaque
         border.width: 1
         border.color: Theme.glassBorder
     }

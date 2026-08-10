@@ -52,6 +52,9 @@ DEFAULTS: dict[str, Any] = {
     "ui.timeDisplayRemaining": False,
     "ui.osdEnabled": True,
     "ui.autoHideDelayMs": 2500,
+    # appearance — "color" (animated Aurora, default) or "dark" (full black,
+    # glossy glass, monochrome). See ui/Theme.qml.
+    "ui.theme": "color",
     # video / engine
     "video.backend": "auto",  # auto | i420 | rv32
     "video.adjustEnabled": False,

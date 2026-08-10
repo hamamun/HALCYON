@@ -107,7 +107,7 @@ Item {
         width: statusRow.implicitWidth + Theme.spaceLg * 2
         height: 40
         radius: Theme.radiusPill
-        color: Qt.rgba(0.043, 0.055, 0.078, 0.72)
+        color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.72)
         border.width: 1
         border.color: Theme.glassBorder
 
@@ -160,7 +160,7 @@ Item {
         width: resumeRow.implicitWidth + Theme.spaceLg * 2
         height: 40
         radius: Theme.radiusPill
-        color: Qt.rgba(0.043, 0.055, 0.078, 0.85)
+        color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.85)
         border.width: 1
         border.color: Theme.glassBorder
 
@@ -258,7 +258,7 @@ Item {
         width: 220
         height: 56
         radius: Theme.radiusControl
-        color: Qt.rgba(0.043, 0.055, 0.078, 0.72)
+        color: Qt.rgba(Theme.base.r, Theme.base.g, Theme.base.b, 0.72)
         border.width: 1
         border.color: Theme.glassBorder
 

@@ -229,7 +229,9 @@ Item {
                 width: 36
                 height: 36
                 property real progress: root.displayPosition
+                property color ringColor: Theme.accent
                 onProgressChanged: requestPaint()
+                onRingColorChanged: requestPaint()
 
                 onPaint: {
                     var ctx = getContext("2d");
@@ -249,7 +251,7 @@ Item {
                         ctx.beginPath();
                         ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress, false);
                         ctx.lineWidth = 2.2;
-                        ctx.strokeStyle = "#5EEAD4";
+                        ctx.strokeStyle = ring.ringColor;
                         ctx.stroke();
                     }
                 }

@@ -11,6 +11,9 @@ Item {
     id: root
 
     property bool animate: true
+    // Dark mode is flat, static black — no colour, no motion, no blur pass
+    // to pay for. The field/vignette below simply don't run.
+    readonly property bool darkMode: Theme.darkMode
 
     Rectangle {
         anchors.fill: parent
@@ -33,7 +36,7 @@ Item {
             y: -parent.height * 0.3
 
             SequentialAnimation on x {
-                running: root.animate
+                running: root.animate && !root.darkMode
                 loops: Animation.Infinite
                 NumberAnimation { to: field.width * 0.25; duration: 32000; easing.type: Easing.InOutSine }
                 NumberAnimation { to: -field.width * 0.2; duration: 32000; easing.type: Easing.InOutSine }
@@ -50,7 +53,7 @@ Item {
             y: parent.height * 0.35
 
             SequentialAnimation on y {
-                running: root.animate
+                running: root.animate && !root.darkMode
                 loops: Animation.Infinite
                 NumberAnimation { to: field.height * 0.05; duration: 41000; easing.type: Easing.InOutSine }
                 NumberAnimation { to: field.height * 0.4;  duration: 41000; easing.type: Easing.InOutSine }
@@ -67,7 +70,7 @@ Item {
             y: parent.height * 0.55
 
             SequentialAnimation on x {
-                running: root.animate
+                running: root.animate && !root.darkMode
                 loops: Animation.Infinite
                 NumberAnimation { to: field.width * 0.5;  duration: 55000; easing.type: Easing.InOutSine }
                 NumberAnimation { to: field.width * 0.05; duration: 55000; easing.type: Easing.InOutSine }
@@ -78,6 +81,7 @@ Item {
     MultiEffect {
         anchors.fill: parent
         source: field
+        visible: !root.darkMode
         blurEnabled: true
         blur: 1.0
         blurMax: 64
@@ -85,8 +89,10 @@ Item {
     }
 
     // Vignette keeps the centre calm so content reads clearly over it.
+    // Skipped in Dark mode — the base rectangle above is already flat black.
     Rectangle {
         anchors.fill: parent
+        visible: !root.darkMode
         gradient: Gradient {
             GradientStop { position: 0.0; color: Qt.rgba(0.043, 0.055, 0.078, 0.35) }
             GradientStop { position: 0.5; color: "transparent" }
