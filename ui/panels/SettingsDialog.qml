@@ -542,9 +542,10 @@ Dialog {
                                 anchors.left: parent.left
                                 anchors.leftMargin: Theme.spaceMd
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: categoryDelegate.isExpanded ? Glyphs.chevronDown : Glyphs.chevronRight
-                                font.family: Theme.fontFamilyIcons
-                                font.pixelSize: 12
+                                text: categoryDelegate.isExpanded ? Glyphs.chevronDown : "\u203A"
+                                font.family: categoryDelegate.isExpanded ? Theme.fontFamilyIcons : Theme.fontFamily
+                                font.pixelSize: categoryDelegate.isExpanded ? 12 : 16
+                                font.weight: categoryDelegate.isExpanded ? Font.Normal : Font.Bold
                                 color: Theme.textMuted
                             }
 
