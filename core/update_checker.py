@@ -1,21 +1,22 @@
 """Vendor dependency update checker — §U.
 
 Checks whether the vendored VLC and WebView2 files are up to date.
-Reads local file versions, compares against known latest, and provides
-download URLs + file placement guidance to the QML Update tab.
-
-The checker is lightweight: it reads DLL product-version stamps from
-``vendor/vlc/`` and ``vendor/webview2/`` and reports what it finds.
-A future enhancement can add HTTP checks against upstream release pages;
-the QML side is already structured to display results from either source.
+Reads local file versions, queries live online sources in a background thread,
+compares local against latest online versions, and provides download URLs +
+file placement guidance to the QML Update tab.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
+import ssl
 import subprocess
 import sys
+import threading
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from core import paths
 
 log = logging.getLogger(__name__)
 
-# ── Known latest versions (update when new releases ship) ──────────────
+# ── Known latest versions (fallback when offline) ──────────────────────
 VLC_KNOWN_LATEST = "3.0.21"
 WEBVIEW2_KNOWN_LATEST = "1.0.2903"
 
@@ -63,31 +64,39 @@ WEBVIEW2_PLACE_PATHS = [
 class UpdateChecker(QObject):
     """Checks vendor dependency versions and guides the user through updates.
 
-    Exposed to QML as the ``UpdateChecker`` context property.  The Update tab
-    in Settings calls ``checkUpdates()`` and reads results from signals and
-    properties.
+    Exposed to QML as the ``UpdateChecker`` context property. The Update tab
+    in Settings calls ``checkUpdates()`` / ``cancelCheck()`` and reads results
+    from signals and properties.
     """
 
     checkStarted = Signal()
     checkFinished = Signal("QVariant")  # dict with full results
+    checkCancelled = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._checking = False
+        self._cancelled = False
+        self._worker_thread: threading.Thread | None = None
+
         self._vlcCurrentVersion = self._detect_vlc_version()
         self._webview2CurrentVersion = self._detect_webview2_version()
         self._lastResult: dict[str, Any] = {}
         # Sensible default so QML bindings never see null
         self._updateAvailable: dict[str, Any] = {
+            "anyUpdate": False,
+            "checkedOnline": False,
             "vlc": {
                 "update": False,
                 "current": self._vlcCurrentVersion,
                 "latest": VLC_KNOWN_LATEST,
+                "online": False,
             },
             "webview2": {
                 "update": False,
                 "current": self._webview2CurrentVersion,
                 "latest": WEBVIEW2_KNOWN_LATEST,
+                "online": False,
             },
         }
 
@@ -159,6 +168,125 @@ class UpdateChecker(QObject):
             pass
         return None
 
+    # ──────────────────────────────────────────────────── online fetching ──
+
+    def _fetch_url(self, url: str, timeout: float = 5.0) -> bytes | None:
+        """Fetch content from *url* with timeout and cancellation check."""
+        if self._cancelled:
+            return None
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Halcyon-UpdateChecker/1.0 (Windows NT 10.0; Win64; x64)"},
+        )
+        ctx = ssl.create_default_context()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                if resp.status == 200:
+                    return resp.read()
+        except Exception as exc:
+            log.debug("HTTP fetch failed for %s: %s", url, exc)
+        return None
+
+    def _fetch_online_vlc_version(self) -> tuple[str, bool]:
+        """Fetch the latest VLC version from live online sources.
+
+        Returns tuple: (version_string, online_success_bool)
+        """
+        urls = [
+            "https://download.videolan.org/pub/videolan/vlc/",
+            "https://update.videolan.org/vlc/status.xml",
+        ]
+        for url in urls:
+            if self._cancelled:
+                break
+            data = self._fetch_url(url, timeout=5.0)
+            if not data:
+                continue
+            try:
+                content = data.decode("utf-8", errors="ignore")
+                # XML check: <version>3.0.21</version>
+                xml_match = re.search(
+                    r"<version>\s*(\d+\.\d+\.\d+(?:\.\d+)?)\s*</version>",
+                    content,
+                    re.IGNORECASE,
+                )
+                if xml_match:
+                    ver = xml_match.group(1).strip()
+                    log.info("Found online VLC version from XML status: %s", ver)
+                    return ver, True
+
+                # Directory listing check: href="3.0.21/"
+                matches = re.findall(
+                    r'href=["\']?(\d+\.\d+\.\d+(?:\.\d+)?)/?["\']?', content
+                )
+                if matches:
+                    valid_versions = []
+                    for m in matches:
+                        t = self._parse_version_tuple(m)
+                        if t and t[0] >= 3:  # VLC 3.x or 4.x
+                            valid_versions.append((t, m))
+                    if valid_versions:
+                        valid_versions.sort(key=lambda x: x[0])
+                        latest_str = valid_versions[-1][1]
+                        log.info("Found online VLC version from directory listing: %s", latest_str)
+                        return latest_str, True
+            except Exception as exc:
+                log.warning("Error parsing VLC online version from %s: %s", url, exc)
+
+        return VLC_KNOWN_LATEST, False
+
+    def _fetch_online_webview2_version(self) -> tuple[str, bool]:
+        """Fetch the latest Microsoft.Web.WebView2 version from NuGet API.
+
+        Returns tuple: (version_string, online_success_bool)
+        """
+        urls = [
+            "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/index.json",
+            "https://www.nuget.org/packages/Microsoft.Web.WebView2",
+        ]
+        for url in urls:
+            if self._cancelled:
+                break
+            data = self._fetch_url(url, timeout=5.0)
+            if not data:
+                continue
+            try:
+                content = data.decode("utf-8", errors="ignore")
+                if url.endswith(".json"):
+                    doc = json.loads(content)
+                    versions = doc.get("versions", [])
+                    valid_versions = []
+                    for v in versions:
+                        if "-" not in v:  # filter out pre-releases
+                            t = self._parse_version_tuple(v)
+                            if t and t[0] >= 1:
+                                valid_versions.append((t, v))
+                    if valid_versions:
+                        valid_versions.sort(key=lambda x: x[0])
+                        latest_str = valid_versions[-1][1]
+                        log.info("Found online WebView2 version from NuGet API: %s", latest_str)
+                        return latest_str, True
+                else:
+                    matches = re.findall(
+                        r"Microsoft\.Web\.WebView2\s+(\d+\.\d+\.\d+(?:\.\d+)?)",
+                        content,
+                    )
+                    if matches:
+                        valid_versions = []
+                        for m in matches:
+                            t = self._parse_version_tuple(m)
+                            if t:
+                                valid_versions.append((t, m))
+                        if valid_versions:
+                            valid_versions.sort(key=lambda x: x[0])
+                            latest_str = valid_versions[-1][1]
+                            log.info("Found online WebView2 version from NuGet page: %s", latest_str)
+                            return latest_str, True
+            except Exception as exc:
+                log.warning("Error parsing WebView2 online version from %s: %s", url, exc)
+
+        return WEBVIEW2_KNOWN_LATEST, False
+
     # ──────────────────────────────────────────────────── Qt properties ──
 
     @Property(bool, notify=checkFinished)
@@ -185,70 +313,105 @@ class UpdateChecker(QObject):
 
     @Slot()
     def checkUpdates(self) -> None:  # noqa: N802
-        """Run the version check (synchronous — fast disk reads only)."""
+        """Start an asynchronous online update check in a background thread."""
+        if self._checking:
+            return
+
         self._checking = True
+        self._cancelled = False
         self.checkStarted.emit()
 
-        # Re-read versions from disk
-        self._vlcCurrentVersion = self._detect_vlc_version()
-        self._webview2CurrentVersion = self._detect_webview2_version()
-
-        # Compare
-        vlc_update = self._is_update_available(
-            self._vlcCurrentVersion, VLC_KNOWN_LATEST
+        self._worker_thread = threading.Thread(
+            target=self._run_check_thread, daemon=True
         )
-        wv2_update = self._is_update_available(
-            self._webview2CurrentVersion, WEBVIEW2_KNOWN_LATEST
-        )
+        self._worker_thread.start()
 
-        self._updateAvailable = {
-            "vlc": {
-                "update": vlc_update,
-                "current": self._vlcCurrentVersion,
-                "latest": VLC_KNOWN_LATEST,
-            },
-            "webview2": {
-                "update": wv2_update,
-                "current": self._webview2CurrentVersion,
-                "latest": WEBVIEW2_KNOWN_LATEST,
-            },
-        }
+    @Slot()
+    def cancelCheck(self) -> None:  # noqa: N802
+        """Cancel an in-progress update check."""
+        if self._checking:
+            self._cancelled = True
+            self._checking = False
+            self.checkCancelled.emit()
+
+    def _run_check_thread(self) -> None:
+        """Worker thread function performing disk checks + online HTTP checks."""
+        # Step 1: Local disk detection
+        vlc_current = self._detect_vlc_version()
+        wv2_current = self._detect_webview2_version()
+
+        if self._cancelled:
+            self._checking = False
+            return
+
+        # Step 2: Online HTTP fetching
+        vlc_latest, vlc_online = self._fetch_online_vlc_version()
+        if self._cancelled:
+            self._checking = False
+            return
+
+        wv2_latest, wv2_online = self._fetch_online_webview2_version()
+        if self._cancelled:
+            self._checking = False
+            return
+
+        # Step 3: Compare versions
+        vlc_update = self._is_update_available(vlc_current, vlc_latest)
+        wv2_update = self._is_update_available(wv2_current, wv2_latest)
 
         any_update = vlc_update or wv2_update
-        self._lastResult = {
+        checked_online = vlc_online or wv2_online
+
+        result = {
             "anyUpdate": any_update,
+            "checkedOnline": checked_online,
             "vlc": {
                 "update": vlc_update,
-                "current": self._vlcCurrentVersion,
-                "latest": VLC_KNOWN_LATEST,
+                "current": vlc_current,
+                "latest": vlc_latest,
+                "online": vlc_online,
             },
             "webview2": {
                 "update": wv2_update,
-                "current": self._webview2CurrentVersion,
-                "latest": WEBVIEW2_KNOWN_LATEST,
+                "current": wv2_current,
+                "latest": wv2_latest,
+                "online": wv2_online,
             },
         }
 
+        self._vlcCurrentVersion = vlc_current
+        self._webview2CurrentVersion = wv2_current
+        self._updateAvailable = result
+        self._lastResult = result
         self._checking = False
-        self.checkFinished.emit(self._lastResult)
 
-    @staticmethod
-    def _is_update_available(current: str, known_latest: str) -> bool:
-        """True when *current* looks like an older version than *known_latest*.
+        if not self._cancelled:
+            self.checkFinished.emit(result)
+
+    @classmethod
+    def _is_update_available(cls, current: str, latest: str) -> bool:
+        """True when *current* looks like an older version than *latest*.
 
         ``"Not found"`` or ``"Unknown"`` are treated as needing an update
-        because the files are missing or unreadable — the user should place
-        fresh copies.
+        because the files are missing or unreadable.
         """
         if current in ("Not found", "Unknown", ""):
             return True
-        try:
-            cur_parts = [int(x) for x in current.split(".")[:4]]
-            lat_parts = [int(x) for x in known_latest.split(".")[:4]]
-            return cur_parts < lat_parts
-        except (ValueError, IndexError):
-            # Non-numeric version string — cannot compare, assume up to date
-            return False
+        cur_parts = cls._parse_version_tuple(current)
+        lat_parts = cls._parse_version_tuple(latest)
+        return cur_parts < lat_parts
+
+    @staticmethod
+    def _parse_version_tuple(ver_str: str) -> tuple[int, ...]:
+        """Parse version string like '3.0.21' or '1.0.2903.40' to tuple of ints."""
+        clean = ver_str.strip().split("-")[0]
+        parts = []
+        for part in clean.split("."):
+            try:
+                parts.append(int(part))
+            except ValueError:
+                break
+        return tuple(parts) if parts else (0,)
 
     # ──────────────────────────────────────────────────── static data for QML ──
 
