@@ -705,8 +705,9 @@ Dialog {
         property string updateState: "idle"  // idle | checking | result
         property var updateResult: ({
             anyUpdate: false,
-            vlc: { update: false, current: "…", latest: "…" },
-            webview2: { update: false, current: "…", latest: "…" }
+            checkedOnline: false,
+            vlc: { update: false, current: "…", latest: "…", online: false },
+            webview2: { update: false, current: "…", latest: "…", online: false }
         })
 
         Connections {
@@ -715,8 +716,13 @@ Dialog {
                 updateRoot.updateState = "checking"
             }
             function onCheckFinished(result) {
-                updateRoot.updateResult = result
-                updateRoot.updateState = "result"
+                if (updateRoot.updateState === "checking") {
+                    updateRoot.updateResult = result
+                    updateRoot.updateState = "result"
+                }
+            }
+            function onCheckCancelled() {
+                updateRoot.updateState = "idle"
             }
         }
 
@@ -758,7 +764,7 @@ Dialog {
                     tooltip: "Cancel"
                     iconSize: 18
                     enabled: updateRoot.updateState === "checking"
-                    onClicked: updateRoot.updateState = "idle"
+                    onClicked: UpdateChecker.cancelCheck()
                 }
             }
 
@@ -790,7 +796,7 @@ Dialog {
 
                         Text {
                             width: parent.width
-                            text: "Check if VLC and WebView2 have newer versions available."
+                            text: "Check online sources for newer VLC and WebView2 releases."
                             wrapMode: Text.WordWrap
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.fontSizeBody
@@ -828,7 +834,7 @@ Dialog {
                         }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "Checking for updates…"
+                            text: "Checking online sources for updates…"
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.fontSizeBody
                             color: Theme.textMuted
