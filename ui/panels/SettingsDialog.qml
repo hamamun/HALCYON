@@ -40,6 +40,9 @@ Dialog {
             anchors.margins: Theme.spaceMd
             anchors.bottomMargin: 0
             clip: true
+            // Same latent width-collapse trap as the Shortcuts tab — pin it
+            // instead of relying on the accidental implicit width of the texts.
+            contentWidth: width
             ScrollBar.vertical: ThinScrollBar { id: generalScrollBar; enabled: generalScroll.contentHeight > generalScroll.height }
 
             Column {
@@ -317,6 +320,7 @@ Dialog {
             ListElement { category: "Playback"; keys: "M"; action: "Toggle mute"; modeContext: "" }
             ListElement { category: "Playback"; keys: "N"; action: "Next track"; modeContext: "" }
             ListElement { category: "Playback"; keys: "Shift + N"; action: "Previous track"; modeContext: "" }
+            ListElement { category: "Playback"; keys: "P"; action: "Previous track"; modeContext: "Local mode" }
             ListElement { category: "Playback"; keys: "L"; action: "Cycle repeat (off / one / all)"; modeContext: "" }
             ListElement { category: "Playback"; keys: "S"; action: "Cycle subtitles"; modeContext: "" }
             ListElement { category: "Playback"; keys: "A"; action: "Cycle audio tracks"; modeContext: "" }
@@ -342,7 +346,7 @@ Dialog {
             ListElement { category: "Web Browser"; keys: "Alt + Home"; action: "Go to homepage"; modeContext: "Web mode only" }
 
             // System shortcuts
-            ListElement { category: "System"; keys: "Mini mode"; action: "Enter mini player mode"; modeContext: "Local mode, media loaded" }
+            ListElement { category: "System"; keys: "Title-bar button"; action: "Toggle mini player mode"; modeContext: "Local mode, media loaded" }
         }
 
         // Categories with their default expanded state. The model is the single
@@ -437,7 +441,7 @@ Dialog {
                     id: searchField
                     anchors.fill: parent
                     anchors.leftMargin: 28
-                    anchors.rightMargin: Theme.spaceSm
+                    anchors.rightMargin: 26   // leave room for the clear (×) glyph
                     placeholderText: "Search..."
                     placeholderTextColor: Theme.textFaint
                     font.family: Theme.fontFamily
@@ -446,6 +450,36 @@ Dialog {
                     background: Rectangle { color: "transparent" }
                     clip: true
                     onTextChanged: shortcutsRoot.searchQuery = text
+                }
+
+                // Clear button — only while there is text to clear
+                Text {
+                    id: searchClearIcon
+                    objectName: "searchClearIcon"
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spaceSm
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Glyphs.cancel
+                    font.family: Theme.fontFamilyIcons
+                    font.pixelSize: 12
+                    color: searchClearMouse.containsMouse ? Theme.text : Theme.textMuted
+                    visible: searchField.text.length > 0
+
+                    Behavior on color {
+                        ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                    }
+
+                    MouseArea {
+                        id: searchClearMouse
+                        anchors.fill: parent
+                        anchors.margins: -Theme.spaceXs
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            searchField.clear();
+                            searchField.forceActiveFocus();
+                        }
+                    }
                 }
             }
         }
@@ -460,6 +494,12 @@ Dialog {
             anchors.margins: Theme.spaceMd
             anchors.bottomMargin: Theme.spaceSm
             clip: true
+            // ScrollView auto-derives contentWidth from the child's implicit
+            // width. The delegates here are plain Items (implicitWidth 0) plus
+            // a 1-px spacer, so the whole list collapses to one pixel wide and
+            // the cards render stacked on top of each other. Pin the content
+            // width like InfoTab/SubtitleDownloadDialog/TrackPopover already do.
+            contentWidth: width
             ScrollBar.vertical: ThinScrollBar { id: shortcutsScrollBar; enabled: shortcutsScroll.contentHeight > shortcutsScroll.height }
 
             Column {
