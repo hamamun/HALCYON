@@ -17,6 +17,7 @@ Dialog {
     property var ctx: null
     property string errorText: ""
     property string infoText: ""
+    title: "Playlists"
 
     anchors.centerIn: Overlay.overlay
     modal: true
@@ -35,39 +36,6 @@ Dialog {
     onOpened: {
         root.errorText = "";
         sourceList.currentIndex = -1;
-    }
-
-    header: Item {
-        implicitHeight: 40
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.spaceXl
-            text: "Playlists"
-            font.family: Theme.fontFamily
-            font.pixelSize: Theme.fontSizeLarge
-            font.weight: Theme.weightBold
-            color: Theme.text
-        }
-        Text {
-            id: countLabel
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.right: closeBtn.left
-            anchors.rightMargin: Theme.spaceSm
-            text: root.ctx ? sourceList.count + " / " + root.ctx.sourcesMaxCount : ""
-            font.family: Theme.fontFamilyMono
-            font.pixelSize: Theme.fontSizeTiny
-            color: Theme.textFaint
-        }
-        IconButton {
-            id: closeBtn
-            anchors.right: parent.right
-            anchors.rightMargin: Theme.spaceSm
-            anchors.verticalCenter: parent.verticalCenter
-            glyph: Glyphs.close
-            tooltip: "Close"
-            onClicked: root.close()
-        }
     }
 
     contentItem: Item {
@@ -134,11 +102,22 @@ Dialog {
             }
         }
 
+        Text {
+            id: countLabel
+            anchors.top: infoBanner.bottom
+            anchors.topMargin: infoBanner.visible ? Theme.spaceSm : 0
+            anchors.right: parent.right
+            text: root.ctx ? sourceList.count + " / " + root.ctx.sourcesMaxCount : ""
+            font.family: Theme.fontFamilyMono
+            font.pixelSize: Theme.fontSizeTiny
+            color: Theme.textFaint
+        }
+
         // ---------------------------------------------------- source list --
         ListView {
             id: sourceList
-            anchors.top: infoBanner.bottom
-            anchors.topMargin: infoBanner.visible ? Theme.spaceSm : 0
+            anchors.top: countLabel.bottom
+            anchors.topMargin: Theme.spaceXs
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -147,10 +126,7 @@ Dialog {
             model: root.ctx ? root.ctx.sources : []
             boundsBehavior: Flickable.StopAtBounds
 
-            ScrollBar.vertical: ScrollBar {
-                policy: ScrollBar.AsNeeded
-                width: 6
-            }
+            ScrollBar.vertical: ThinScrollBar { }
 
             delegate: ListRow {
                 id: sourceRow
@@ -306,6 +282,11 @@ Dialog {
                     var entry = sourceList.model[sourceList.currentIndex];
                     if (entry) { root.ctx.loadSource(entry.id); root.close(); }
                 }
+            }
+            IconButton {
+                glyph: Glyphs.close
+                tooltip: "Close"
+                onClicked: root.close()
             }
         }
     }
