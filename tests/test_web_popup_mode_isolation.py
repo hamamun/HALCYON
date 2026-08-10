@@ -69,15 +69,17 @@ def _assert_all_web_popups_hidden(bar):
 
 def _open_bookmark_ui(bar, browser):
     browser.addTab("https://example.com")
-    browser.addBookmark("Example", "https://example.com")
     QTest.qWait(50)
 
     add_popup = _object(bar, "addBookmarkPopup")
+    edit_popup = _object(bar, "editBookmarkPopup")
     dropdown = _object(bar, "bookmarksDropdown")
 
-    _button(bar, "Edit or remove bookmark").clicked.emit()
+    # The current page is not bookmarked yet, so the star opens Add Bookmark.
+    _button(bar, "Bookmark this page").clicked.emit()
     QTest.qWait(50)
     assert add_popup.property("visible") is True
+    assert edit_popup.property("visible") is False
 
     _button(bar, "Bookmarks").clicked.emit()
     QTest.qWait(50)
