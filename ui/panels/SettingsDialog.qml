@@ -4,7 +4,7 @@ import Halcyon.Ui
 import Halcyon.Panels
 
 // Settings — the one home, behind the title-bar gear (§P1.4).
-// Tabbed layout: General | Shortcuts | Update (§U).
+// Tabbed layout: General | Shortcuts | Update | About (§U).
 //
 // A .qml file has exactly ONE root element, so the tab pages live inside
 // the Dialog as inline components (Qt 5.15+ / Qt 6 `component` syntax).
@@ -287,25 +287,6 @@ Dialog {
                     }
                 }
 
-                Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
-
-                Column {
-                    width: parent.width
-                    spacing: 2
-                    Text {
-                        text: "Halcyon v1.0.0 — Every format. One pane of glass."
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: Theme.weightBold
-                        color: Theme.text
-                    }
-                    Text {
-                        text: "Personal, non-commercial media player. Powered by libVLC 3.0.21 & Edge WebView2."
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.textFaint
-                    }
-                }
             }
         }
     }
@@ -713,6 +694,56 @@ Dialog {
                 // Bottom spacing
                 Item { width: 1; height: Theme.spaceSm }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // About page
+    // -----------------------------------------------------------------------
+    component AboutTabContent: Item {
+        Column {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Theme.spaceLg
+            spacing: Theme.spaceMd
+
+            Text {
+                text: "About Halcyon"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeBody
+                font.weight: Theme.weightBold
+                color: Theme.text
+            }
+
+            Text {
+                width: parent.width
+                text: "Halcyon is a lightweight media application for playing and managing your content."
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.textMuted
+            }
+
+            Text {
+                width: parent.width
+                text: "Three modes: Local for files from your device, M3U for streams and channels, and Web for browsing inside the application."
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.textMuted
+            }
+        }
+
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottomMargin: Theme.spaceLg
+            text: "Created by HAM"
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            font.weight: Theme.weightBold
+            color: Theme.accent
         }
     }
 
@@ -1393,7 +1424,8 @@ Dialog {
                 model: [
                     { label: "General", icon: Glyphs.settings, tabIndex: 0 },
                     { label: "Shortcuts", icon: Glyphs.keyboard, tabIndex: 1 },
-                    { label: "Update", icon: Glyphs.refresh, tabIndex: 2 }
+                    { label: "Update", icon: Glyphs.refresh, tabIndex: 2 },
+                    { label: "About", icon: Glyphs.info, tabIndex: 3 }
                 ]
 
                 delegate: Item {
@@ -1493,6 +1525,13 @@ Dialog {
             anchors.fill: parent
             visible: root.currentTab === 2
         }
+
+        // About Tab
+        AboutTabContent {
+            id: aboutContent
+            anchors.fill: parent
+            visible: root.currentTab === 3
+        }
     }
 
     // Footer
@@ -1505,16 +1544,10 @@ Dialog {
             anchors.verticalCenter: parent.verticalCenter
             glyph: Glyphs.check
             tooltip: "Done"
-            showRing: false
-            iconColor: Theme.textOnAccent
-            background: Rectangle {
-                radius: Theme.radiusSmall
-                color: parent.pressed ? Qt.darker(Theme.accent, 1.2)
-                     : parent.hovered ? Qt.lighter(Theme.accent, 1.08) : Theme.accent
-                Behavior on color {
-                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
-                }
-            }
+            // Keep the checkmark icon-only; IconButton supplies a subtle
+            // hover/pressed ring instead of a permanent filled background.
+            showRing: true
+            iconColor: Theme.accent
             onClicked: root.close()
         }
     }
