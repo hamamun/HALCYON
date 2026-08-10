@@ -984,6 +984,7 @@ Dialog {
                             // Download link
                             Row {
                                 spacing: Theme.spaceXs
+                                width: parent.width
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: Glyphs.link
@@ -993,8 +994,10 @@ Dialog {
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "download.videolan.org ↗"
-                                    font.family: Theme.fontFamily
+                                    text: UpdateChecker.vlcDownloadUrl + "  ↗"
+                                    width: parent.width - 20
+                                    wrapMode: Text.WrapAnywhere
+                                    font.family: Theme.fontFamilyMono
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.accent
                                     MouseArea {
@@ -1178,6 +1181,7 @@ Dialog {
                             // Download link
                             Row {
                                 spacing: Theme.spaceXs
+                                width: parent.width
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: Glyphs.link
@@ -1187,8 +1191,10 @@ Dialog {
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "nuget.org ↗"
-                                    font.family: Theme.fontFamily
+                                    text: UpdateChecker.webview2DownloadUrl + "  ↗"
+                                    width: parent.width - 20
+                                    wrapMode: Text.WrapAnywhere
+                                    font.family: Theme.fontFamilyMono
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.accent
                                     MouseArea {

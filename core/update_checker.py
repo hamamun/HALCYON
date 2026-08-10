@@ -28,12 +28,15 @@ from core import paths
 log = logging.getLogger(__name__)
 
 # ── Known latest versions (fallback when offline) ──────────────────────
-VLC_KNOWN_LATEST = "3.0.21"
-WEBVIEW2_KNOWN_LATEST = "1.0.2903"
+VLC_KNOWN_LATEST = "3.0.23"
+WEBVIEW2_KNOWN_LATEST = "1.0.4129.50"
 
 # ── Official download sources ──────────────────────────────────────────
-VLC_DOWNLOAD_URL = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/"
-WEBVIEW2_DOWNLOAD_URL = "https://www.nuget.org/packages/Microsoft.Web.WebView2"
+# Stable URLs only: these never embed a version number, so they always
+# point at the newest release and cannot go stale like a hardcoded
+# versioned folder would (e.g. ".../vlc/3.0.21/win64/").
+VLC_DOWNLOAD_URL = "https://download.videolan.org/pub/videolan/vlc/last/win64/"  # "last/" alias = newest VLC release
+WEBVIEW2_DOWNLOAD_URL = "https://www.nuget.org/packages/Microsoft.Web.WebView2"  # package page always shows newest version
 
 # ── File placement guidance (shown to the user after extraction) ───────
 VLC_EXTRACTION_GUIDE = (
