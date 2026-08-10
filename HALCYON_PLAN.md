@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v4.3** — 9 August 2026 |
+| **Version** | Plan **v4.4** — 10 August 2026 |
+| **Changes in v4.4** | **Vendor Update tab (§U) — design locked 10 Aug 2026, implementation in progress.** Third tab in Settings → Update. Checks vendored VLC (3.0.21) and WebView2 DLLs against known latest versions. Two icon buttons (↻ Check / ✕ Cancel). When update available: shows version diff per component, clickable download link (↗ opens browser), extraction guide (where to find files inside the extracted archive), and place-at paths with 📁 "Open Folder" icon buttons (open Windows Explorer). "All up to date" state shows ✓ summary with current versions. Skips Halcyon app version — only checks VLC and WebView2 vendor dependencies. Owner decisions 10 Aug 2026. |
 | **Changes in v4.3** | **Mobile Remote v1.2 — verified COMPLETE (owner, 9 Aug 2026), §R.** All 9 build steps + audit pass landed 2026-08-08 (remote/ package, QR PNG, status SSE, command channel via QueuedConnection, phone UI, Local chip, M3U chip, Web chip, Power). 27 new tests, 366 passed / 0 failed, isolation green, no player path modified (§4.1). Owner verification 09-08-2026: QR <1s, real-time sync, drive browser all drives, playlist pinned bottom 7 rows + autoscroll, subtitle download, M3U add URL + grouped/favourites + PiP/Fullscreen, Web active page + bookmarks + universal media control, Power Sleep/Shutdown. CHECKLIST.md Phase R 10/10 verified, tag `v1.2.0-remote` complete. No push/commit per owner request. |
 | **Changes in v4.2** | **Mobile Remote (v1.2) — full spec locked (owner review, 8 Aug 2026), §R.** Phone controls the PC over Wi-Fi via a web page in the phone browser (no install). Tiny `aiohttp` server inside the app, **on by default, starts as the last step of startup loading**, stops on exit. Connect by scanning a **QR code in PC Settings → Mobile Remote** (or typing `http://<pc-ip>:8765`); QR/URL is the only key — **no PIN** (owner: keep it simple). Real-time sync, **PC is the source of truth**, phone is a mirror. One-shot build — no versions. Chip-wise scope: **Local** = transport, volume, drive browser (all drives), playlist pinned to the **bottom with max 7 rows + autoscroll**, tracks & subtitles incl. **subtitle download**, equalizer, now-playing (no lyrics — owner); **M3U** = transport **incl. PiP + Fullscreen**, sources (**add by URL only** — owner), grouped channels, favourites; **Web** = active-page only, bookmarks + **universal media control** via WebView2 `ExecuteScriptAsync` on the active tab; **⚡ Power** (collapsed, every chip) = Sleep / Shutdown on the PC. Build deliberately deferred until v1.0 ships (§8) — no remote code exists yet. |
 | **Changes in v4.1** | **Mini Mode (v1.1) — Local compact bar (owner decision 7 Aug 2026).** Shell state, not a 4th ModeSpec: `miniModeActive` bool in `Main.qml` hides TitleBar, PanelHost, InfoPanel, Stage (kept alive, not destroyed, zero black flash). Bar is **fixed 400-420px × 44px** — height equals standard `Theme.titleBarHeight: 44px` so it sits cleanly on a Word/File Explorer title bar, width increased to accommodate controls but still title-bar sized. Controls: **grip ⋮⋮ (only grip drags) · prev track · seek -10s · play/pause with circular progress ring · stop · next track · seek +10s · volume/mute (vertical pop-up slider above bar) · return**. Toggle button **left of minimize** `[mini][─][□][✕]`, only enabled in Local when media loaded, grayed in M3U/Web or no media. **Innovative seek without width increase:** top 3px hairline of the bar IS the seek bar (2px rest, 6px + knob on hover, click/drag to seek) + circular progress ring around play button. No extra width. Always-on-top, first-time top-center, draggable only via grip, no close from mini (return to normal to quit), auto-return to normal on playlist finished, no auto-hide. |
@@ -38,6 +39,7 @@ This document is now organised as **three sequential chapters**. Each ends with 
 | **Phase 3** | `Halcyon Complete` — Web added, **in-window** (v4.0 design: Edge WebView2 browser) | §P3.6 (plus P1+P2 regression) | ✅ Complete — tagged `v1.0.0` |
 | **Phase 4** | `Mini Mode v1.1` — Local compact 400×44 bar | Everything in §M.7 | 🟡 Design locked v4.1 — awaiting implementation |
 | **Phase R** | `Mobile Remote v1.2` — Android phone companion | Everything in §R.5 | ✅ **Complete — verified 2026-08-09, tagged `v1.2.0-remote`** |
+| **Phase U** | `Vendor Update tab` — Settings → Update | Everything in §U.5 | 🟡 **Design locked — implementation in progress** |
 
 **Do not begin a phase until the previous one is signed off.** Sign-off means every box in that phase's acceptance list is ticked by you, not by me.
 
@@ -1272,6 +1274,171 @@ Each step lands with: new tests green · full regression green · isolation gree
 | 2026-08-08 | 8 — Web chip | Active-page card + bookmarks (list/add/remove/open-in-active-tab) via existing `BookmarksStore`; **universal media control**: `get_media_probe_script()` in `webview2_runtime.py`, `WebMessageReceived` → `mediaStatusChanged`, `WebViewHost.media_control()` (play/pause/toggle/seek/seekBy/volume/mute/fullscreen), `BrowserContext.mediaControl()`/`media_status()` on the **active tab only**. DRM sites documented as the exception. | ✅ landed |
 | 2026-08-08 | 9 — Power + polish | ⚡ Power (collapsed) → Sleep / Shutdown via `remote/power.py` (injectable OS commands; `PowerGuard` untouched — app shutdown path already releases it). Full sweep: 27 new remote tests, **366 passed / 47 skipped, 0 failed**, isolation OK, `py_compile` OK, live end-to-end smoke test OK (UI + QR PNG + SSE + queued command). | ✅ landed |
 | 2026-08-08 | **Audit pass** | Full end-to-end re-audit: (1) `RemoteBridge.stop()` added — status poller halted in `on_quit` before engine teardown; (2) phone UI fixes — M3U groups now key on the actual grouping mode (category/country/language) and remember expand/collapse across pushes, playlist autoscroll only on track change (no fighting user scroll), sliders not overwritten mid-drag, file **＋ add-to-playlist** and **"Add this folder"** buttons added per §R.2 spec; (3) dead code removed, server stop nulls its runner/site refs; (4) demo fakes `subs.languages` setter. Re-verified: **366 passed / 47 skipped / 0 failed**, isolation OK, syntax OK, `node --check` OK, live endpoints re-tested. | ✅ done |
+
+---
+
+# POST v1.0 — Vendor Update Tab · §U
+
+> **Design locked 10 Aug 2026 (owner decisions).** Third tab in Settings → Update. Checks vendored VLC and WebView2 files against known latest versions. Does NOT check the Halcyon app version itself — only the two vendor dependencies the user downloaded manually.
+>
+> **Owner decisions locked 10 Aug 2026:**
+> - Check VLC + WebView2 together at one click (Option B) — simple, no app version
+> - Show extraction guide: after extracting the downloaded archive, tell user WHERE inside the extracted folder to find the files
+> - Show place-at paths with 📁 "Open Folder" icon button (opens Windows Explorer at that location)
+> - Download links as clickable URLs (shortened domain + ↗ external-link indicator)
+> - "All up to date" state: ✓ summary with current versions, skip Halcyon version
+> - Icon-based buttons only (↻ Check / ✕ Cancel)
+
+## U.1 What gets added / touched
+
+```
+core/update_checker.py              # ★ Python backend — version detection, check logic, folder opening
+ui/panels/SettingsDialog.qml        # ★ New inline component UpdateTabContent (3rd tab)
+main.py                             # ★ Register UpdateChecker as QML context property
+tools/check_isolation.py            # ★ Add PHASE_U_DISCLOSED for main.py (frozen-path exception)
+```
+
+No frozen Phase 1-3 files are touched except `SettingsDialog.qml` (which already has a tabbed layout designed to grow — adding a tab is a model entry + inline component) and `main.py` (one import, one instance, one context property — same pattern as every service; `main.py` is added to `PHASE_U_DISCLOSED` in `tools/check_isolation.py`).
+
+## U.2 Python backend — `core/update_checker.py`
+
+The `UpdateChecker(QObject)` class is exposed to QML as the `UpdateChecker` context property.
+
+**Version detection (reads from disk, no HTTP):**
+- VLC: reads `vendor/vlc/libvlc.dll` product version via PowerShell `VersionInfo.ProductVersion`
+- WebView2: reads `vendor/webview2/Microsoft.Web.WebView2.Core.dll` file version, or falls back to parsing the `.nupkg` filename
+
+**Known latest versions (hardcoded constants — updated when new releases ship):**
+- `VLC_KNOWN_LATEST = "3.0.21"`
+- `WEBVIEW2_KNOWN_LATEST = "1.0.2903"`
+
+**Qt properties (read by QML):**
+- `checking: bool` — true while a check is running
+- `vlcCurrentVersion: str` — detected local VLC version
+- `webview2CurrentVersion: str` — detected local WebView2 version
+- `updateAvailable: QVariant` — dict `{vlc: {update, current, latest}, webview2: {...}}`
+- `lastResult: QVariant` — full result dict including `anyUpdate` bool
+- `vlcDownloadUrl / webview2DownloadUrl: str` — official download URLs (constant)
+- `vlcFiles / webview2Files: QVariantList` — files to extract + where they sit after extraction
+- `vlcPlacePaths / webview2PlacePaths: QVariantList` — destination folders + what goes in each
+- `vlcExtractionGuide / webview2ExtractionGuide: str` — human-readable extraction instructions
+- `appRootPath: str` — absolute path of the application root (for display)
+
+**Qt slots (called from QML):**
+- `checkUpdates()` — runs version detection + comparison, emits `checkStarted` then `checkFinished(result)`
+- `openFolder(relativePath)` — opens `ROOT / relativePath` in Windows Explorer (`os.startfile`)
+- `openVlcDownload()` — opens VLC download URL in default browser
+- `openWebview2Download()` — opens WebView2 NuGet URL in default browser
+
+## U.3 QML UI — Update tab in `SettingsDialog.qml`
+
+**Tab bar:** Three tabs — `General | Shortcuts | Update`. Update uses `Glyphs.refresh` icon. Tab width 120px (same as existing tabs).
+
+**Inline component `UpdateTabContent`:**
+- State machine: `idle` → `checking` → `result`
+- `Connections` block on `UpdateChecker` — `onCheckStarted` → state=checking; `onCheckFinished(result)` → updateResult=result, state=result
+
+**Layout (top to bottom):**
+
+```
+┌─────────────────────────────────────────────┐
+│ [↻ Check] [✕ Cancel]                        │  icon buttons, 40×40
+├─────────────────────────────────────────────┤
+│ (scrollable content — see states below)     │
+└─────────────────────────────────────────────┘
+```
+
+**Button states:**
+- **Check Update** (`Glyphs.refresh`): enabled when not checking. Accent background (`Theme.accent`), `textOnAccent` icon, no ring.
+- **Cancel** (`Glyphs.cancel`): enabled only while checking. Dismisses to idle state.
+
+**State: Idle**
+- Description text: "Check if VLC and WebView2 have newer versions available."
+- App root path (monospace, faint)
+
+**State: Checking**
+- Spinning `Glyphs.refresh` icon (rotation animation, `NumberAnimation on rotation`, 360° infinite loop, 1s duration)
+- "Checking for updates…" text
+
+**State: Result — All up to date**
+- ✓ checkmark (`Glyphs.check`, `Theme.success`) + "All components are up to date" (bold)
+- Version summary table:
+  ```
+  VLC         3.0.21    ✓
+  WebView2    1.0.2903  ✓
+  ```
+
+**State: Result — Update available**
+- "Update Available" header (bold, `Theme.warning` colour)
+- Per-component sections (only shown when that component has an update):
+
+  ```
+  ── VLC Media Player ─────────────────────────
+  Current: 3.0.20  →  Latest: 3.0.21
+
+  🔗 download.videolan.org ↗   (clickable, opens browser)
+
+  After extraction, these files are at the root of the extracted folder:
+    • libvlc.dll          ← root of extracted folder
+    • libvlccore.dll      ← root of extracted folder
+    • plugins/ (folder)   ← root of extracted folder
+
+  Place at:
+    vendor\vlc             (libvlc.dll, libvlccore.dll)  [📁]
+    vendor\vlc\plugins     (contents of the plugins/ folder)  [📁]
+
+  ── WebView2 Runtime ─────────────────────────
+  Current: 1.0.2800  →  Latest: 1.0.2903
+
+  🔗 nuget.org ↗   (clickable, opens browser)
+
+  Rename .nupkg to .zip, extract, then navigate to build\native\x64\:
+    • Microsoft.Web.WebView2.Core.dll  ← build\native\x64\
+    • WebView2Loader.dll               ← build\native\x64\
+
+  Place at:
+    vendor\webview2        (both DLLs)  [📁]
+  ```
+
+**📁 Open Folder buttons:** `IconButton` with `Glyphs.addFolder`, 28×28, tooltip "Open folder in Explorer". Calls `UpdateChecker.openFolder(path)`.
+
+## U.4 Owner decisions (locked 10 Aug 2026)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 1 | Check VLC + WebView2 only — no app version | Simple, focused on the vendor files the user manages |
+| 2 | One click checks both | No need for separate checks per component |
+| 3 | Icon buttons only (↻ / ✕) | Consistent with Halcyon's IconButton vocabulary (§B.1) |
+| 4 | Show extraction guide | User needs to know WHERE inside the extracted archive to find the files |
+| 5 | 📁 Open Folder button per path | Opens Windows Explorer — far better UX than copy-pasting paths |
+| 6 | Download links as shortened text + ↗ | Clean look; ↗ indicates external browser; full URL in tooltip |
+| 7 | "All up to date" = ✓ + version summary | Clear confirmation; no app version clutter |
+| 8 | Versions hardcoded as constants | No HTTP dependency for basic check; update constants when new releases ship |
+
+## U.5 Acceptance — Phase U
+
+- [ ] Third tab "Update" renders in Settings with `Glyphs.refresh` icon
+- [ ] Tab bar shows three tabs: General | Shortcuts | Update — same style, same width
+- [ ] ↻ Check button has accent background, ✕ Cancel button disabled when idle
+- [ ] Clicking Check transitions to "Checking…" state with spinning refresh icon
+- [ ] Check reads local VLC DLL version from `vendor/vlc/libvlc.dll`
+- [ ] Check reads local WebView2 DLL version from `vendor/webview2/`
+- [ ] If all up to date: shows ✓ "All components are up to date" + version summary table
+- [ ] If update available: shows "Update Available" header + per-component sections
+- [ ] Each component section shows: current version → latest version
+- [ ] Each component section shows: clickable download link (opens browser)
+- [ ] Each component section shows: extraction guide (where files are after extracting)
+- [ ] Each component section shows: file list with location notes
+- [ ] Each component section shows: place-at paths with 📁 Open Folder buttons
+- [ ] 📁 Open Folder opens Windows Explorer at the correct absolute path
+- [ ] Cancel button enabled only during checking; returns to idle
+- [ ] Dialog dimensions adjusted for the new content (560×600)
+- [ ] All Theme tokens used — no hardcoded colours, radii, or durations
+- [ ] `core/update_checker.py` compiles cleanly
+- [ ] `main.py` registers UpdateChecker as QML context property
+- [ ] No Phase 1-3 frozen files modified except `SettingsDialog.qml` (tab model + inline component) and `main.py` (one import, one instance, one context property)
+
+**→ Tag `v1.3.0-update`**
 
 ---
 

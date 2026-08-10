@@ -4,17 +4,17 @@ import Halcyon.Ui
 import Halcyon.Panels
 
 // Settings — the one home, behind the title-bar gear (§P1.4).
-// Tabbed layout: General | Shortcuts.
+// Tabbed layout: General | Shortcuts | Update (§U).
 //
-// A .qml file has exactly ONE root element, so the two tab pages live inside
+// A .qml file has exactly ONE root element, so the tab pages live inside
 // the Dialog as inline components (Qt 5.15+ / Qt 6 `component` syntax).
 // Declaring them as separate top-level Items is a syntax error at load time.
 Dialog {
     id: root
 
     anchors.centerIn: Overlay.overlay
-    width: 520
-    height: 560
+    width: 560
+    height: 600
     modal: true
     padding: 0
     title: "Settings"
@@ -696,6 +696,553 @@ Dialog {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Update page (inline component — §U)
+    // -----------------------------------------------------------------------
+    component UpdateTabContent: Item {
+        id: updateRoot
+
+        property string updateState: "idle"  // idle | checking | result
+        property var updateResult: ({
+            anyUpdate: false,
+            vlc: { update: false, current: "…", latest: "…" },
+            webview2: { update: false, current: "…", latest: "…" }
+        })
+
+        Connections {
+            target: UpdateChecker
+            function onCheckStarted() {
+                updateRoot.updateState = "checking"
+            }
+            function onCheckFinished(result) {
+                updateRoot.updateResult = result
+                updateRoot.updateState = "result"
+            }
+        }
+
+        Column {
+            anchors.fill: parent
+            spacing: 0
+
+            // ── Button bar ─────────────────────────────────────────────
+            Row {
+                id: buttonBar
+                width: parent.width
+                spacing: Theme.spaceSm
+                leftPadding: Theme.spaceMd
+                rightPadding: Theme.spaceMd
+                topPadding: Theme.spaceSm
+                bottomPadding: Theme.spaceSm
+
+                IconButton {
+                    glyph: Glyphs.refresh
+                    tooltip: "Check for updates"
+                    iconSize: 18
+                    enabled: updateRoot.updateState !== "checking"
+                    background: Rectangle {
+                        radius: Theme.radiusSmall
+                        color: parent.pressed ? Qt.darker(Theme.accent, 1.2)
+                             : parent.hovered ? Qt.lighter(Theme.accent, 1.08)
+                             : Theme.accent
+                        Behavior on color {
+                            ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
+                        }
+                    }
+                    iconColor: Theme.textOnAccent
+                    showRing: false
+                    onClicked: UpdateChecker.checkUpdates()
+                }
+
+                IconButton {
+                    glyph: Glyphs.cancel
+                    tooltip: "Cancel"
+                    iconSize: 18
+                    enabled: updateRoot.updateState === "checking"
+                    onClicked: updateRoot.updateState = "idle"
+                }
+            }
+
+            Rectangle { id: updateDivider; width: parent.width; height: 1; color: Theme.glassBorder }
+
+            // ── Scrollable content ─────────────────────────────────────
+            ScrollView {
+                id: updateScroll
+                width: parent.width
+                height: parent.height - buttonBar.height - updateDivider.height
+                clip: true
+                contentWidth: width
+                ScrollBar.vertical: ThinScrollBar {
+                    id: updateScrollBar
+                    enabled: updateScroll.contentHeight > updateScroll.height
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: Theme.spaceLg
+                    padding: Theme.spaceMd
+
+                    // ── IDLE state ─────────────────────────────────────
+                    Column {
+                        visible: updateRoot.updateState === "idle"
+                        width: parent.width - Theme.spaceMd * 2
+                        spacing: Theme.spaceSm
+                        anchors.horizontalCenter: parent.horizontalCenter
+
+                        Text {
+                            width: parent.width
+                            text: "Check if VLC and WebView2 have newer versions available."
+                            wrapMode: Text.WordWrap
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeBody
+                            color: Theme.textMuted
+                        }
+                        Text {
+                            width: parent.width
+                            text: "Installed path: " + UpdateChecker.appRootPath
+                            wrapMode: Text.WordWrap
+                            font.family: Theme.fontFamilyMono
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.textFaint
+                        }
+                    }
+
+                    // ── CHECKING state ─────────────────────────────────
+                    Row {
+                        visible: updateRoot.updateState === "checking"
+                        spacing: Theme.spaceSm
+                        anchors.horizontalCenter: parent.horizontalCenter
+
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: Glyphs.refresh
+                            font.family: Theme.fontFamilyIcons
+                            font.pixelSize: 16
+                            color: Theme.accent
+
+                            NumberAnimation on rotation {
+                                running: updateRoot.updateState === "checking"
+                                from: 0; to: 360
+                                duration: 1000
+                                loops: Animation.Infinite
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Checking for updates…"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeBody
+                            color: Theme.textMuted
+                        }
+                    }
+
+                    // ── RESULT: All up to date ─────────────────────────
+                    Column {
+                        visible: updateRoot.updateState === "result" && !updateRoot.updateResult.anyUpdate
+                        width: parent.width - Theme.spaceMd * 2
+                        spacing: Theme.spaceMd
+                        anchors.horizontalCenter: parent.horizontalCenter
+
+                        Row {
+                            spacing: Theme.spaceSm
+                            anchors.horizontalCenter: parent.horizontalCenter
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: Glyphs.check
+                                font.family: Theme.fontFamilyIcons
+                                font.pixelSize: 22
+                                color: Theme.success
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "All components are up to date"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeLarge
+                                font.weight: Theme.weightBold
+                                color: Theme.text
+                            }
+                        }
+
+                        // Version summary table
+                        Column {
+                            width: parent.width
+                            spacing: Theme.spaceXs
+
+                            Row {
+                                width: parent.width
+                                Text {
+                                    width: 110
+                                    text: "VLC"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    font.weight: Theme.weightBold
+                                    color: Theme.text
+                                }
+                                Text {
+                                    width: 80
+                                    text: updateRoot.updateResult.vlc.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: "✓"
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.success
+                                }
+                            }
+                            Row {
+                                width: parent.width
+                                Text {
+                                    width: 110
+                                    text: "WebView2"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    font.weight: Theme.weightBold
+                                    color: Theme.text
+                                }
+                                Text {
+                                    width: 80
+                                    text: updateRoot.updateResult.webview2.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: "✓"
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.success
+                                }
+                            }
+                        }
+                    }
+
+                    // ── RESULT: Update available ───────────────────────
+                    Column {
+                        visible: updateRoot.updateState === "result" && updateRoot.updateResult.anyUpdate
+                        width: parent.width - Theme.spaceMd * 2
+                        spacing: Theme.spaceLg
+                        anchors.horizontalCenter: parent.horizontalCenter
+
+                        Text {
+                            width: parent.width
+                            text: "Update Available"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeLarge
+                            font.weight: Theme.weightBold
+                            color: Theme.warning
+                        }
+
+                        // ── VLC section ────────────────────────────────
+                        Column {
+                            visible: updateRoot.updateResult.vlc.update
+                            width: parent.width
+                            spacing: Theme.spaceSm
+
+                            Text {
+                                text: "VLC Media Player"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeBody
+                                font.weight: Theme.weightBold
+                                color: Theme.text
+                            }
+
+                            Row {
+                                spacing: Theme.spaceSm
+                                Text {
+                                    text: "Current: "
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.vlc.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.text
+                                }
+                                Text {
+                                    text: "  →  Latest: "
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.vlc.latest
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.accent
+                                }
+                            }
+
+                            // Download link
+                            Row {
+                                spacing: Theme.spaceXs
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: Glyphs.link
+                                    font.family: Theme.fontFamilyIcons
+                                    font.pixelSize: 12
+                                    color: Theme.accent
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "download.videolan.org ↗"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.accent
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: UpdateChecker.openVlcDownload()
+                                    }
+                                }
+                            }
+
+                            // Extraction guide
+                            Text {
+                                width: parent.width
+                                text: UpdateChecker.vlcExtractionGuide
+                                wrapMode: Text.WordWrap
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Theme.weightBold
+                                color: Theme.textMuted
+                            }
+
+                            Repeater {
+                                model: UpdateChecker.vlcFiles
+                                delegate: Row {
+                                    spacing: Theme.spaceSm
+                                    width: parent.width
+                                    leftPadding: Theme.spaceMd
+
+                                    Text {
+                                        text: "•"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.textMuted
+                                    }
+                                    Text {
+                                        text: modelData.name
+                                        font.family: Theme.fontFamilyMono
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.text
+                                    }
+                                    Text {
+                                        text: "← " + modelData.location
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        color: Theme.textFaint
+                                    }
+                                }
+                            }
+
+                            // Place-at paths
+                            Text {
+                                width: parent.width
+                                text: "Place at:"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Theme.weightBold
+                                color: Theme.textMuted
+                            }
+
+                            Repeater {
+                                model: UpdateChecker.vlcPlacePaths
+                                delegate: Row {
+                                    spacing: Theme.spaceSm
+                                    width: parent.width
+                                    leftPadding: Theme.spaceMd
+
+                                    Text {
+                                        text: modelData.path
+                                        font.family: Theme.fontFamilyMono
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.text
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: "(" + modelData.files + ")"
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        color: Theme.textFaint
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    IconButton {
+                                        glyph: Glyphs.addFolder
+                                        tooltip: "Open folder in Explorer"
+                                        iconSize: 14
+                                        implicitWidth: 28
+                                        implicitHeight: 28
+                                        onClicked: UpdateChecker.openFolder(modelData.path)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Divider between VLC and WebView2 sections
+                        Rectangle {
+                            visible: updateRoot.updateResult.vlc.update && updateRoot.updateResult.webview2.update
+                            width: parent.width
+                            height: 1
+                            color: Theme.glassBorder
+                        }
+
+                        // ── WebView2 section ───────────────────────────
+                        Column {
+                            visible: updateRoot.updateResult.webview2.update
+                            width: parent.width
+                            spacing: Theme.spaceSm
+
+                            Text {
+                                text: "WebView2 Runtime"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeBody
+                                font.weight: Theme.weightBold
+                                color: Theme.text
+                            }
+
+                            Row {
+                                spacing: Theme.spaceSm
+                                Text {
+                                    text: "Current: "
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.webview2.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.text
+                                }
+                                Text {
+                                    text: "  →  Latest: "
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.webview2.latest
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.accent
+                                }
+                            }
+
+                            // Download link
+                            Row {
+                                spacing: Theme.spaceXs
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: Glyphs.link
+                                    font.family: Theme.fontFamilyIcons
+                                    font.pixelSize: 12
+                                    color: Theme.accent
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "nuget.org ↗"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.accent
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: UpdateChecker.openWebview2Download()
+                                    }
+                                }
+                            }
+
+                            // Extraction guide
+                            Text {
+                                width: parent.width
+                                text: UpdateChecker.webview2ExtractionGuide
+                                wrapMode: Text.WordWrap
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Theme.weightBold
+                                color: Theme.textMuted
+                            }
+
+                            Repeater {
+                                model: UpdateChecker.webview2Files
+                                delegate: Row {
+                                    spacing: Theme.spaceSm
+                                    width: parent.width
+                                    leftPadding: Theme.spaceMd
+
+                                    Text {
+                                        text: "•"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.textMuted
+                                    }
+                                    Text {
+                                        text: modelData.name
+                                        font.family: Theme.fontFamilyMono
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.text
+                                    }
+                                    Text {
+                                        text: "← " + modelData.location
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        color: Theme.textFaint
+                                    }
+                                }
+                            }
+
+                            // Place-at paths
+                            Text {
+                                width: parent.width
+                                text: "Place at:"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Theme.weightBold
+                                color: Theme.textMuted
+                            }
+
+                            Repeater {
+                                model: UpdateChecker.webview2PlacePaths
+                                delegate: Row {
+                                    spacing: Theme.spaceSm
+                                    width: parent.width
+                                    leftPadding: Theme.spaceMd
+
+                                    Text {
+                                        text: modelData.path
+                                        font.family: Theme.fontFamilyMono
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.text
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: "(" + modelData.files + ")"
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        color: Theme.textFaint
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    IconButton {
+                                        glyph: Glyphs.addFolder
+                                        tooltip: "Open folder in Explorer"
+                                        iconSize: 14
+                                        implicitWidth: 28
+                                        implicitHeight: 28
+                                        onClicked: UpdateChecker.openFolder(modelData.path)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Bottom spacing
+                    Item { width: 1; height: Theme.spaceSm }
+                }
+            }
+        }
+    }
+
     // Tab bar
     Rectangle {
         id: headerBar
@@ -725,7 +1272,8 @@ Dialog {
             Repeater {
                 model: [
                     { label: "General", icon: Glyphs.settings, tabIndex: 0 },
-                    { label: "Shortcuts", icon: Glyphs.keyboard, tabIndex: 1 }
+                    { label: "Shortcuts", icon: Glyphs.keyboard, tabIndex: 1 },
+                    { label: "Update", icon: Glyphs.refresh, tabIndex: 2 }
                 ]
 
                 delegate: Item {
@@ -817,6 +1365,13 @@ Dialog {
             id: shortcutsContent
             anchors.fill: parent
             visible: root.currentTab === 1
+        }
+
+        // Update Tab (§U)
+        UpdateTabContent {
+            id: updateContent
+            anchors.fill: parent
+            visible: root.currentTab === 2
         }
     }
 
