@@ -175,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     from core.power import PowerGuard
     from core.settings import Settings
     from core.subtitles import SubtitleBackend
+    from core.update_checker import UpdateChecker
     from engine.equalizer import Equalizer
     from engine.video_adjust import VideoAdjust
     from engine.vlc_engine import VlcEngine
@@ -213,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     mode_list = ModeList(app)
     subs_backend = SubtitleBackend(settings, controller, parent=app)
+    update_checker = UpdateChecker(parent=app)
     _KEEP_ALIVE.extend(
         [
             settings,
@@ -226,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             controller,
             mode_list,
             subs_backend,
+            update_checker,
         ]
     )
 
@@ -246,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx.setContextProperty("Lyrics", lyrics)
     ctx.setContextProperty("Equalizer", equalizer)
     ctx.setContextProperty("VideoAdjust", video_adjust)
+    ctx.setContextProperty("UpdateChecker", update_checker)
 
     # --- per-mode contexts -------------------------------------------------
     # Each mode gets to publish one object. The shell never names a mode; it

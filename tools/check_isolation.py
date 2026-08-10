@@ -122,6 +122,15 @@ PHASE_R_DISCLOSED = [
     "core/settings.py",
 ]
 
+#: Disclosed Phase-U (v1.3) Vendor Update tab additions — post-v1.0 §U. Adds a
+#: third Settings tab (Update) that checks vendored VLC and WebView2 versions.
+#: Needs a context property registration in main.py (same pattern as every
+#: service: import, instance, _KEEP_ALIVE, setContextProperty). Documented in
+#: v4.4 changelog, covered by §U.5 acceptance.
+PHASE_U_DISCLOSED = [
+    "main.py",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -286,7 +295,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

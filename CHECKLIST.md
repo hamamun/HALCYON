@@ -25,7 +25,8 @@ Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.*
 | 3 — Web | 5 / 5 built | 62 / 62 | 0 / 56 | `v1.0.0` |
 | 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 18 | `v1.1.0-mini` |
 | R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
-| **Total** | — | **333 / 341** | **114 / 250** | |
+| U — Vendor Update tab | 0 / 1 | 0 / 11 | 0 / 11 | — *(design locked 2026-08-10)* |
+| **Total** | — | **333 / 352** | **114 / 261** | |
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -880,6 +881,54 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Phases 1–3 regression still passing, `tools/check_isolation.py` passes
 
 **→ Tag `v1.2.0-remote` — COMPLETE, owner verified 2026-08-09**
+
+---
+
+# PHASE U — Vendor Update Tab · §U — DESIGN LOCKED (2026-08-10), IMPLEMENTATION IN PROGRESS
+
+> **Owner decisions locked 10 Aug 2026.** Third tab in Settings → Update. Checks VLC + WebView2 vendor files only (not the app itself). One click checks both. Shows version diff, download links, extraction guide, place-at paths with 📁 Open Folder buttons. Icon-based buttons (↻ Check / ✕ Cancel).
+
+## Milestone U.1 — Update tab · 0.5–1 d
+
+- [x] `core/update_checker.py` — `UpdateChecker(QObject)` exposed as `UpdateChecker` QML context property · §U.2
+- [x] Version detection: reads `vendor/vlc/libvlc.dll` product version (PowerShell `VersionInfo`) · §U.2
+- [x] Version detection: reads `vendor/webview2/Microsoft.Web.WebView2.Core.dll` file version (fallback: `.nupkg` filename) · §U.2
+- [x] Known latest versions as constants: `VLC_KNOWN_LATEST = "3.0.21"`, `WEBVIEW2_KNOWN_LATEST = "1.0.2903"` · §U.2
+- [x] `checkUpdates()` slot — runs detection + comparison, emits `checkStarted` / `checkFinished(result)` · §U.2
+- [x] `openFolder(relativePath)` slot — opens folder in Windows Explorer (`os.startfile`) · §U.2
+- [x] `openVlcDownload()` / `openWebview2Download()` slots — opens download URL in default browser · §U.2
+- [x] `main.py` — imports `UpdateChecker`, creates instance, adds to `_KEEP_ALIVE`, registers as QML context property · §U.1
+- [x] `tools/check_isolation.py` — adds `PHASE_U_DISCLOSED` list (allows `main.py` as a frozen-path exception for this phase) · §U.1
+- [x] `SettingsDialog.qml` — adds `Update` tab (3rd, `Glyphs.refresh` icon) to tab model · §U.3
+- [x] `SettingsDialog.qml` — `UpdateTabContent` inline component with state machine (idle/checking/result) · §U.3
+- [x] `SettingsDialog.qml` — ↻ Check button (accent bg, enabled when not checking) + ✕ Cancel button (enabled only during checking) · §U.3
+- [x] `SettingsDialog.qml` — Idle state: description + app root path · §U.3
+- [x] `SettingsDialog.qml` — Checking state: spinning refresh icon + "Checking for updates…" text · §U.3
+- [x] `SettingsDialog.qml` — Result (up to date): ✓ "All components are up to date" + version summary table (VLC / WebView2 + ✓) · §U.3
+- [x] `SettingsDialog.qml` — Result (update available): "Update Available" header + per-component sections with:
+  - Current → Latest version display
+  - Clickable download link (shortened domain + ↗ indicator, opens browser)
+  - Extraction guide (where to find files after extracting)
+  - File list with location notes
+  - Place-at paths with 📁 Open Folder icon buttons (`Glyphs.addFolder`, 28×28)
+- [x] Dialog width increased to 560px, height to 600px · §U.3
+- [x] All Theme tokens used — no hardcoded colours, radii, or durations · §B.1
+
+### ◻ Verify — Vendor Update tab
+
+- ◻ Third tab "Update" renders in Settings with refresh icon, same style as General/Shortcuts
+- ◻ ↻ Check button: accent background, textOnAccent icon, enabled when not checking
+- ◻ ✕ Cancel button: disabled when idle, enabled only during checking
+- ◻ Clicking Check: transitions to "Checking…" with spinning refresh icon
+- ◻ After check completes: shows either "All up to date" ✓ or "Update Available" per component
+- ◻ "All up to date" state: version summary table with ✓ marks
+- ◻ "Update available" state: version diff, clickable download links, extraction guide, file list, place-at paths
+- ◻ Download link click: opens correct URL in default browser
+- ◻ 📁 Open Folder click: opens Windows Explorer at the correct absolute path
+- ◻ Cancel click: returns to idle state
+- ◻ `tools/check_isolation.py` still passes
+
+**→ Tag `v1.3.0-update`**
 
 ---
 
