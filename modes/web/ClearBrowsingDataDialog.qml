@@ -17,6 +17,7 @@ import Halcyon.Ui
 // is the documented all-time form).  Tick the rows you want gone, hit Clear.
 BrowserPopup {
     id: root
+    objectName: "clearBrowsingDataDialog"
     width: 380
     height: 440
     acceptsFocus: true
