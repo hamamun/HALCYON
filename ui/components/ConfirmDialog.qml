@@ -23,7 +23,7 @@ Dialog {
 
     background: Rectangle {
         radius: Theme.radiusPanel
-        color: Qt.rgba(0.067, 0.086, 0.129, 0.98)
+        color: Qt.rgba(Theme.baseElevated.r, Theme.baseElevated.g, Theme.baseElevated.b, 0.98)
         border.width: 1
         border.color: Theme.glassBorder
     }

@@ -12,13 +12,35 @@ import QtQuick
 QtObject {
     id: theme
 
+    // ------------------------------------------------------------- mode ----
+    // §Appearance — Color (default, the animated Aurora look) or Dark (full
+    // black, glossy-glass, monochrome). One flag drives every token below;
+    // nothing else in the app should ever branch on it directly (§B.1).
+    property bool darkMode: (typeof Settings !== "undefined" && Settings)
+                             ? Settings.get("ui.theme", "color") === "dark"
+                             : false
+
+    // Live updates: Settings.get() is a plain call, not a bindable property,
+    // so QML would otherwise only read it once at startup. Listen for the
+    // one key that matters and flip the flag — every color below is a normal
+    // binding on `darkMode` and repaints itself automatically.
+    property QtObject _themeWatcher: Connections {
+        target: (typeof Settings !== "undefined") ? Settings : null
+        function onChanged(key, value) {
+            if (key === "ui.theme")
+                theme.darkMode = (value === "dark")
+        }
+    }
+
     // ---------------------------------------------------------------- base --
-    readonly property color base:          "#0B0E14"
-    readonly property color baseElevated:  "#111621"
+    property color base:          darkMode ? "#000000" : "#0B0E14"
+    property color baseElevated:  darkMode ? "#0A0A0A" : "#111621"
     readonly property color scrimTop:      "#00000000"
     readonly property color scrimBottom:   "#B8000000"   // rgba(0,0,0,0.72)
 
     // --------------------------------------------------------------- glass --
+    // Same translucent-white recipe in both modes — it is what reads as a
+    // frosted, glossy surface over whatever sits behind it, colour or black.
     readonly property color glassFill:     Qt.rgba(1, 1, 1, 0.06)
     readonly property color glassFillHover: Qt.rgba(1, 1, 1, 0.10)
     readonly property color glassFillPressed: Qt.rgba(1, 1, 1, 0.14)
@@ -26,15 +48,20 @@ QtObject {
     readonly property color glassBorderStrong: Qt.rgba(1, 1, 1, 0.20)
 
     // ---------------------------------------------------------------- text --
-    readonly property color text:          "#F2F5F9"
+    property color text:          darkMode ? "#EDEDED" : "#F2F5F9"
     readonly property color textMuted:     Qt.rgba(1, 1, 1, 0.62)
     readonly property color textFaint:     Qt.rgba(1, 1, 1, 0.38)
-    readonly property color textOnAccent:  "#06120F"
+    // Sits on top of `accent` — accent goes light grey/white in Dark mode,
+    // so this has to flip dark for the same contrast Color mode gets.
+    property color textOnAccent:  darkMode ? "#101010" : "#06120F"
 
     // -------------------------------------------------------------- accent --
-    readonly property color accent:        "#5EEAD4"
-    readonly property color accentAlt:     "#A78BFA"
-    readonly property color accentDim:     Qt.rgba(0.369, 0.918, 0.831, 0.24)
+    // Dark mode is monochrome by design — no teal/purple, soft white-grey
+    // only. This is what the seek bar, volume slider, toggles and every
+    // "active/selected" state read their colour from.
+    property color accent:        darkMode ? "#E4E4E4" : "#5EEAD4"
+    property color accentAlt:     darkMode ? "#AFAFAF" : "#A78BFA"
+    property color accentDim:     darkMode ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(0.369, 0.918, 0.831, 0.24)
     readonly property Gradient accentGradient: Gradient {
         orientation: Gradient.Horizontal
         GradientStop { position: 0.0; color: theme.accent }
@@ -42,13 +69,18 @@ QtObject {
     }
 
     // ------------------------------------------------------------- status --
+    // Left as-is on purpose: these carry meaning (error/warn/success), not
+    // decoration, in both modes.
     readonly property color danger:        "#F87171"
     readonly property color warning:       "#FBBF24"
     readonly property color success:       "#4ADE80"
 
     // --------------------------------------------------------- transport ---
-    readonly property color trackRest:     Qt.rgba(1, 1, 1, 0.16)
-    readonly property color trackBuffered: Qt.rgba(1, 1, 1, 0.28)
+    // The seek bar and volume slider container/fill — soft white-grey,
+    // a touch brighter than Color mode so it still reads clearly on
+    // true black (§ progress/volume bars, fullscreen + mini mode).
+    property color trackRest:     darkMode ? Qt.rgba(1, 1, 1, 0.22) : Qt.rgba(1, 1, 1, 0.16)
+    property color trackBuffered: darkMode ? Qt.rgba(1, 1, 1, 0.36) : Qt.rgba(1, 1, 1, 0.28)
 
     // ----------------------------------------------------------------- blur --
     readonly property real blurPanel:  32

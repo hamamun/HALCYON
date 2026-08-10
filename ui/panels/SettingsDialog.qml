@@ -25,7 +25,7 @@ Dialog {
 
     background: Rectangle {
         radius: Theme.radiusPanel
-        color: Qt.rgba(0.067, 0.086, 0.129, 0.98)
+        color: Qt.rgba(Theme.baseElevated.r, Theme.baseElevated.g, Theme.baseElevated.b, 0.98)
         border.width: 1
         border.color: Theme.glassBorder
     }
@@ -50,6 +50,26 @@ Dialog {
                 spacing: Theme.spaceLg
                 width: parent.width
                 anchors.horizontalCenter: parent.horizontalCenter
+
+                Text {
+                    text: "Appearance"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeBody
+                    font.weight: Theme.weightBold
+                    color: Theme.text
+                }
+
+                SettingRow {
+                    width: parent.width
+                    label: "Dark theme"
+                    description: "Full black interface with soft grey/white text — a calmer, "
+                               + "monochrome alternative to the animated colour theme. Off "
+                               + "keeps the default colourful look."
+                    checked: Settings.get("ui.theme", "color") === "dark"
+                    onToggled: function(on) { Settings.set("ui.theme", on ? "dark" : "color") }
+                }
+
+                Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
 
                 SettingRow {
                     width: parent.width
