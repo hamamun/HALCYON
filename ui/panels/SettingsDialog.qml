@@ -1086,9 +1086,48 @@ Dialog {
                             }
                         }
 
+                        // ── VLC up to date summary (when WebView2 needs update but VLC does not) ─
+                        Column {
+                            visible: !updateRoot.updateResult.vlc.update
+                            width: parent.width
+                            spacing: Theme.spaceSm
+
+                            Text {
+                                text: "VLC Media Player"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeBody
+                                font.weight: Theme.weightBold
+                                color: Theme.text
+                            }
+
+                            Row {
+                                width: parent.width
+                                spacing: Theme.spaceSm
+                                Text {
+                                    width: 110
+                                    text: "VLC"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    font.weight: Theme.weightBold
+                                    color: Theme.text
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.vlc.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: "✓ Up to date"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.success
+                                }
+                            }
+                        }
+
                         // Divider between VLC and WebView2 sections
                         Rectangle {
-                            visible: updateRoot.updateResult.vlc.update && updateRoot.updateResult.webview2.update
                             width: parent.width
                             height: 1
                             color: Theme.glassBorder
@@ -1237,6 +1276,46 @@ Dialog {
                                         implicitHeight: 28
                                         onClicked: UpdateChecker.openFolder(modelData.path)
                                     }
+                                }
+                            }
+                        }
+
+                        // ── WebView2 up to date summary (when VLC needs update but WebView2 does not) ─
+                        Column {
+                            visible: !updateRoot.updateResult.webview2.update
+                            width: parent.width
+                            spacing: Theme.spaceSm
+
+                            Text {
+                                text: "WebView2 Runtime"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeBody
+                                font.weight: Theme.weightBold
+                                color: Theme.text
+                            }
+
+                            Row {
+                                width: parent.width
+                                spacing: Theme.spaceSm
+                                Text {
+                                    width: 110
+                                    text: "WebView2"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    font.weight: Theme.weightBold
+                                    color: Theme.text
+                                }
+                                Text {
+                                    text: updateRoot.updateResult.webview2.current
+                                    font.family: Theme.fontFamilyMono
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.textMuted
+                                }
+                                Text {
+                                    text: "✓ Up to date"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.success
                                 }
                             }
                         }
