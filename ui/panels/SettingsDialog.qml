@@ -709,6 +709,15 @@ Dialog {
             vlc: { update: false, current: "…", latest: "…", online: false },
             webview2: { update: false, current: "…", latest: "…", online: false }
         })
+        // Keep the detailed update instructions behind both the backend's
+        // comparison result and a display-value check. This prevents a
+        // mismatched source from showing download guidance when the two
+        // normalized versions are already identical.
+        property bool vlcNeedsUpdate: updateResult.vlc.update
+                                      && updateResult.vlc.current !== updateResult.vlc.latest
+        property bool webview2NeedsUpdate: updateResult.webview2.update
+                                           && updateResult.webview2.current !== updateResult.webview2.latest
+        property bool anyVisibleUpdate: vlcNeedsUpdate || webview2NeedsUpdate
 
         Connections {
             target: UpdateChecker
@@ -843,7 +852,7 @@ Dialog {
 
                     // ── RESULT: All up to date ─────────────────────────
                     Column {
-                        visible: updateRoot.updateState === "result" && !updateRoot.updateResult.anyUpdate
+                        visible: updateRoot.updateState === "result" && !updateRoot.anyVisibleUpdate
                         width: parent.width - Theme.spaceMd * 2
                         spacing: Theme.spaceMd
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -892,7 +901,7 @@ Dialog {
                                     color: Theme.textMuted
                                 }
                                 Text {
-                                    text: "✓"
+                                    text: "✓ Up to date"
                                     font.pixelSize: Theme.fontSizeBody
                                     color: Theme.success
                                 }
@@ -915,7 +924,7 @@ Dialog {
                                     color: Theme.textMuted
                                 }
                                 Text {
-                                    text: "✓"
+                                    text: "✓ Up to date"
                                     font.pixelSize: Theme.fontSizeBody
                                     color: Theme.success
                                 }
@@ -925,7 +934,7 @@ Dialog {
 
                     // ── RESULT: Update available ───────────────────────
                     Column {
-                        visible: updateRoot.updateState === "result" && updateRoot.updateResult.anyUpdate
+                        visible: updateRoot.updateState === "result" && updateRoot.anyVisibleUpdate
                         width: parent.width - Theme.spaceMd * 2
                         spacing: Theme.spaceLg
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -941,7 +950,7 @@ Dialog {
 
                         // ── VLC section ────────────────────────────────
                         Column {
-                            visible: updateRoot.updateResult.vlc.update
+                            visible: updateRoot.vlcNeedsUpdate
                             width: parent.width
                             spacing: Theme.spaceSm
 
@@ -1091,7 +1100,7 @@ Dialog {
 
                         // ── VLC up to date summary (when WebView2 needs update but VLC does not) ─
                         Column {
-                            visible: !updateRoot.updateResult.vlc.update
+                            visible: !updateRoot.vlcNeedsUpdate
                             width: parent.width
                             spacing: Theme.spaceSm
 
@@ -1138,7 +1147,7 @@ Dialog {
 
                         // ── WebView2 section ───────────────────────────
                         Column {
-                            visible: updateRoot.updateResult.webview2.update
+                            visible: updateRoot.webview2NeedsUpdate
                             width: parent.width
                             spacing: Theme.spaceSm
 
@@ -1288,7 +1297,7 @@ Dialog {
 
                         // ── WebView2 up to date summary (when VLC needs update but WebView2 does not) ─
                         Column {
-                            visible: !updateRoot.updateResult.webview2.update
+                            visible: !updateRoot.webview2NeedsUpdate
                             width: parent.width
                             spacing: Theme.spaceSm
 
