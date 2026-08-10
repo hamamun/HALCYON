@@ -8,6 +8,7 @@ import Halcyon.Ui
 // steals focus from the address bar or the page while typing.
 BrowserPopup {
     id: root
+    objectName: "urlSuggestions"
 
     // Bound from AddressBar
     property var browser: null

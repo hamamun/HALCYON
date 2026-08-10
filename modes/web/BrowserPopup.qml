@@ -31,11 +31,17 @@ Window {
     color: "transparent"
     visible: false
 
+    // Web keeps its stage alive while another mode is active. These popups are
+    // top-level native windows, so hiding the parked Web stage is not enough;
+    // they must explicitly close when Web leaves the foreground.
+    property bool stageActive: true
     property var hostWindow: null
     default property alias content: panel.data
 
+    onStageActiveChanged: if (!stageActive) hidePopup()
+
     function showBelow(anchorItem, ownerWindow) {
-        if (!anchorItem || !ownerWindow)
+        if (!anchorItem || !ownerWindow || !stageActive || !anchorItem.visible)
             return
         hostWindow = ownerWindow
         transientParent = ownerWindow

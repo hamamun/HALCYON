@@ -294,6 +294,7 @@ Rectangle {
         AddressBar {
             id: addressBar
             browser: webStage.browser
+            stageActive: webStage.stageActive
             visible: !webStage.contentFullscreen
             Layout.fillWidth: true
             Layout.preferredHeight: webStage.contentFullscreen ? 0 : Theme.toolbarRowHeight

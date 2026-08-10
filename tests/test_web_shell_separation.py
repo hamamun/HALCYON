@@ -50,6 +50,7 @@ def test_web_stage_attaches_real_page_area_and_has_no_hardcoded_missing_runtime(
     assert "var viewportItem = contentFullscreen ? webStage : pageArea" in source
     assert "browser.setViewport(" in source
     assert "browser.setStageActive(stageActive)" in source
+    assert "stageActive: webStage.stageActive" in source
     assert "setHostWindowFullscreen(true)" in source
     assert "visible: !webStage.contentFullscreen" in source
     assert "property bool isRuntimeMissing: true" not in source
@@ -60,6 +61,9 @@ def test_browser_popups_are_native_windows_and_manager_supports_drag_reorder():
     popup = (ROOT / "modes" / "web" / "BrowserPopup.qml").read_text(encoding="utf-8")
     manager = (ROOT / "modes" / "web" / "BookmarksManagerTab.qml").read_text(encoding="utf-8")
 
+    assert "property bool stageActive: true" in popup
+    assert "onStageActiveChanged: if (!stageActive) hidePopup()" in popup
+    assert "!stageActive || !anchorItem.visible" in popup
     assert "acceptsFocus" in popup
     # Focus-taking popups (bookmark dialogs) stay native Qt.Popup windows;
     # autocomplete-style popups (suggestions) are tooltip-style so they can

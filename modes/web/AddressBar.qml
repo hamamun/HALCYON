@@ -12,6 +12,7 @@ Rectangle {
     color: Theme.baseElevated
 
     property var browser: null
+    property bool stageActive: true
     property bool _isSyncing: false
     // Set when focus is being handed back from the suggestions popup so the
     // focus-in handler skips selectAll() (typing must continue, Edge-style).
@@ -46,6 +47,19 @@ Rectangle {
     function focusInput() {
         urlInput.forceActiveFocus()
         urlInput.selectAll()
+    }
+
+    onVisibleChanged: {
+        // The bookmark/suggestion popups are separate top-level native windows,
+        // so hiding this bar (e.g. page fullscreen) does not hide them. Close
+        // them whenever the bar disappears.
+        if (!visible) {
+            addBookmarkPopup.hidePopup()
+            editBookmarkPopup.hidePopup()
+            bookmarksDropdown.hidePopup()
+            clearBrowsingDataDialog.hidePopup()
+            urlSuggestions.hidePopup()
+        }
     }
 
     RowLayout {
@@ -252,6 +266,8 @@ Rectangle {
     // Bookmark add/edit popups unchanged
     BrowserPopup {
         id: addBookmarkPopup
+        objectName: "addBookmarkPopup"
+        stageActive: root.stageActive
         width: 340
         height: 164
         onVisibleChanged: {
@@ -304,6 +320,8 @@ Rectangle {
 
     BrowserPopup {
         id: editBookmarkPopup
+        objectName: "editBookmarkPopup"
+        stageActive: root.stageActive
         width: 340
         height: 164
         onVisibleChanged: {
@@ -367,12 +385,14 @@ Rectangle {
 
     BookmarksDropdown {
         id: bookmarksDropdown
+        stageActive: root.stageActive
         browser: root.browser
         clearDialog: clearBrowsingDataDialog
     }
 
     ClearBrowsingDataDialog {
         id: clearBrowsingDataDialog
+        stageActive: root.stageActive
         browser: root.browser
         onCleared: {
             // data cleared — nothing else to do; dialog hides itself
@@ -382,6 +402,7 @@ Rectangle {
     // Edge-like omnibox - local + free Google suggest
     UrlSuggestionsDropdown {
         id: urlSuggestions
+        stageActive: root.stageActive
         browser: root.browser
         onSuggestionAccepted: function(text) {
             root.commitNavigation(text)

@@ -6,6 +6,7 @@ import Halcyon.Ui
 // above the WebView2 child HWND where a scene-graph Popup cannot.
 BrowserPopup {
     id: root
+    objectName: "bookmarksDropdown"
     width: 300
     height: Math.min(420, Math.max(140, 88 + (root.browser ? root.browser.bookmarkItems.length : 0) * 52))
 
