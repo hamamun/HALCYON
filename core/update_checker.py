@@ -82,8 +82,12 @@ class UpdateChecker(QObject):
         self._cancelled = False
         self._worker_thread: threading.Thread | None = None
 
-        self._vlcCurrentVersion = self._detect_vlc_version()
-        self._webview2CurrentVersion = self._detect_webview2_version()
+        self._vlcCurrentVersion = self._normalize_version(
+            self._detect_vlc_version()
+        )
+        self._webview2CurrentVersion = self._normalize_version(
+            self._detect_webview2_version()
+        )
         self._lastResult: dict[str, Any] = {}
         # Sensible default so QML bindings never see null
         self._updateAvailable: dict[str, Any] = {
@@ -92,13 +96,13 @@ class UpdateChecker(QObject):
             "vlc": {
                 "update": False,
                 "current": self._vlcCurrentVersion,
-                "latest": VLC_KNOWN_LATEST,
+                "latest": self._normalize_version(VLC_KNOWN_LATEST),
                 "online": False,
             },
             "webview2": {
                 "update": False,
                 "current": self._webview2CurrentVersion,
-                "latest": WEBVIEW2_KNOWN_LATEST,
+                "latest": self._normalize_version(WEBVIEW2_KNOWN_LATEST),
                 "online": False,
             },
         }
@@ -110,7 +114,7 @@ class UpdateChecker(QObject):
         dll = paths.VENDOR_VLC / "libvlc.dll"
         if not dll.exists():
             return "Not found"
-        return self._read_file_version(dll) or "Unknown"
+        return self._normalize_version(self._read_file_version(dll) or "Unknown")
 
     def _detect_webview2_version(self) -> str:
         """Read the file version from vendor/webview2/ DLLs or .nupkg name."""
@@ -118,7 +122,7 @@ class UpdateChecker(QObject):
         if core_dll.exists():
             ver = self._read_file_version(core_dll)
             if ver:
-                return ver
+                return self._normalize_version(ver)
         # Fallback: parse the version from the NuGet package filename
         wv2_dir = paths.ROOT / "vendor" / "webview2"
         if wv2_dir.exists():
@@ -130,7 +134,7 @@ class UpdateChecker(QObject):
                         if part.isdigit() and i + 2 < len(parts):
                             candidate = ".".join(parts[i : i + 3])
                             if candidate[0].isdigit():
-                                return candidate
+                                return self._normalize_version(candidate)
         return "Not found"
 
     @staticmethod
@@ -340,8 +344,8 @@ class UpdateChecker(QObject):
     def _run_check_thread(self) -> None:
         """Worker thread function performing disk checks + online HTTP checks."""
         # Step 1: Local disk detection
-        vlc_current = self._detect_vlc_version()
-        wv2_current = self._detect_webview2_version()
+        vlc_current = self._normalize_version(self._detect_vlc_version())
+        wv2_current = self._normalize_version(self._detect_webview2_version())
 
         if self._cancelled:
             self._checking = False
@@ -349,11 +353,13 @@ class UpdateChecker(QObject):
 
         # Step 2: Online HTTP fetching
         vlc_latest, vlc_online = self._fetch_online_vlc_version()
+        vlc_latest = self._normalize_version(vlc_latest)
         if self._cancelled:
             self._checking = False
             return
 
         wv2_latest, wv2_online = self._fetch_online_webview2_version()
+        wv2_latest = self._normalize_version(wv2_latest)
         if self._cancelled:
             self._checking = False
             return
@@ -405,9 +411,33 @@ class UpdateChecker(QObject):
         return cur_parts < lat_parts
 
     @staticmethod
-    def _parse_version_tuple(ver_str: str) -> tuple[int, ...]:
-        """Parse version string like '3.0.21' or '1.0.2903.40' to tuple of ints."""
-        clean = ver_str.strip().split("-")[0]
+    def _normalize_version(ver_str: str) -> str:
+        """Normalize a version for display and comparison.
+
+        Windows file metadata can expose a version with comma separators (for
+        example, ``"3,0,23,0"``). The updater uses dotted versions from its
+        online sources, so make both forms consistent. A final zero component
+        is insignificant in a file-version value, so trailing zero-only
+        components are omitted while non-zero components remain intact.
+
+        Non-version status strings such as ``"Not found"`` pass through
+        unchanged.
+        """
+        clean = ver_str.strip()
+        match = re.fullmatch(r"(\d+(?:[.,]\d+)*)(.*)", clean)
+        if not match:
+            return clean
+
+        numeric, suffix = match.groups()
+        parts = numeric.replace(",", ".").split(".")
+        while len(parts) > 1 and int(parts[-1]) == 0:
+            parts.pop()
+        return ".".join(parts) + suffix
+
+    @classmethod
+    def _parse_version_tuple(cls, ver_str: str) -> tuple[int, ...]:
+        """Parse dotted or comma-separated version text into comparable ints."""
+        clean = cls._normalize_version(ver_str).split("-", 1)[0]
         parts = []
         for part in clean.split("."):
             try:

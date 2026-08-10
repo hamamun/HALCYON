@@ -34,8 +34,24 @@ def test_parse_version_tuple():
     assert UpdateChecker._parse_version_tuple("3.0.21") == (3, 0, 21)
     assert UpdateChecker._parse_version_tuple("1.0.2903.40") == (1, 0, 2903, 40)
     assert UpdateChecker._parse_version_tuple("1.0.2903.40-prerelease") == (1, 0, 2903, 40)
+    assert UpdateChecker._parse_version_tuple("3,0,23,0") == (3, 0, 23)
+    assert UpdateChecker._parse_version_tuple("3,0,23,0") == UpdateChecker._parse_version_tuple("3.0.23")
     assert UpdateChecker._parse_version_tuple("Not found") == (0,)
     assert UpdateChecker._parse_version_tuple("") == (0,)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("3,0,23,0", "3.0.23"),
+        ("3.0.23.0", "3.0.23"),
+        ("3.0.17.4", "3.0.17.4"),
+        ("1.0.4129.50", "1.0.4129.50"),
+        ("Not found", "Not found"),
+    ],
+)
+def test_normalize_version(raw, expected):
+    assert UpdateChecker._normalize_version(raw) == expected
 
 
 def test_is_update_available():
@@ -46,6 +62,9 @@ def test_is_update_available():
     # Same version
     assert UpdateChecker._is_update_available("3.0.21", "3.0.21") is False
     assert UpdateChecker._is_update_available("1.0.2903.40", "1.0.2903.40") is False
+    assert UpdateChecker._is_update_available("3,0,23,0", "3.0.23") is False
+    assert UpdateChecker._is_update_available("3.0.23", "3,0,23,0") is False
+    assert UpdateChecker._is_update_available("3.0.23.0", "3.0.23") is False
 
     # Current is newer
     assert UpdateChecker._is_update_available("3.0.22", "3.0.21") is False
@@ -54,6 +73,35 @@ def test_is_update_available():
     assert UpdateChecker._is_update_available("Not found", "3.0.21") is True
     assert UpdateChecker._is_update_available("Unknown", "3.0.21") is True
     assert UpdateChecker._is_update_available("", "3.0.21") is True
+
+
+def test_check_result_normalizes_display_versions(app):
+    """Current/latest fields sent to QML use one canonical display format."""
+    checker = UpdateChecker()
+
+    with patch.object(checker, "_detect_vlc_version", return_value="3,0,23,0"), \
+         patch.object(checker, "_detect_webview2_version", return_value="1.0.4129.50.0"), \
+         patch.object(checker, "_fetch_online_vlc_version", return_value=("3.0.23", True)), \
+         patch.object(checker, "_fetch_online_webview2_version", return_value=("1.0.4129.50", True)):
+        checker.checkUpdates()
+        if checker._worker_thread:
+            checker._worker_thread.join(timeout=2.0)
+        app.processEvents()
+
+    result = checker.lastResult
+    assert result["anyUpdate"] is False
+    assert result["vlc"] == {
+        "update": False,
+        "current": "3.0.23",
+        "latest": "3.0.23",
+        "online": True,
+    }
+    assert result["webview2"] == {
+        "update": False,
+        "current": "1.0.4129.50",
+        "latest": "1.0.4129.50",
+        "online": True,
+    }
 
 
 def test_fetch_online_vlc_version_xml(app):
