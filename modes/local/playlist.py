@@ -158,9 +158,18 @@ class PlaylistModel(QAbstractListModel):
         self._repeat = RepeatMode.Off
         self._shuffle = False
         self._shuffle_order: list[int] = []
-        self._pool = QThreadPool.globalInstance()
+        # A pool of our own, not QThreadPool.globalInstance(). The global pool
+        # is shared with the rest of Qt and cannot be drained without stalling
+        # unrelated work, so shutdown() had no way to guarantee that every
+        # in-flight probe had finished. A probe still running inside
+        # `self._probe_signals.done.emit(...)` while Python collected the
+        # signals QObject tore the process down with a segfault (§9) — the
+        # `cancelled` flag alone loses the race, because it can flip *after*
+        # the emit has already started. Owning the pool lets shutdown() wait.
+        self._pool = QThreadPool(self)
         self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
+        self._shut_down = False
 
     # ------------------------------------------------------ model plumbing ---
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt override
@@ -499,8 +508,33 @@ class PlaylistModel(QAbstractListModel):
 
     # ---------------------------------------------------------- shutdown ---
     def shutdown(self) -> None:
-        """Stop accepting probe results. Called before the app tears down."""
+        """Stop accepting probe results and wait for in-flight probes to exit.
+
+        Setting the flag is not enough on its own: a probe that has already
+        passed the `cancelled` check may be inside `done.emit()` when this
+        object is collected, which crashes the interpreter rather than raising
+        (§9). Clearing the queue and then *waiting* for the running probes is
+        what makes teardown deterministic. Idempotent — teardown paths may call
+        it more than once.
+        """
+        if self._shut_down:
+            return
+        self._shut_down = True
         self._probe_signals.cancelled = True
+        try:
+            # Drop probes that have not started; they cannot be waited on.
+            self._pool.clear()
+            # Bounded wait: a probe is a 2 s libVLC parse at worst, so this
+            # returns promptly. The timeout means a wedged probe can never
+            # hang application exit.
+            self._pool.waitForDone(5000)
+        except RuntimeError:
+            # Pool already destroyed by a previous shutdown() — nothing to do.
+            pass
+        try:
+            self._probe_signals.done.disconnect(self._on_probed)
+        except (RuntimeError, TypeError):
+            pass  # already disconnected, or the receiver is gone
 
     def to_list(self) -> list[dict]:
         return [

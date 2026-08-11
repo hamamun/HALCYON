@@ -203,3 +203,42 @@ def test_main_assigns_the_player_to_a_non_colliding_name():
         "that is the name of a package in this repository"
     )
     assert "player = VlcEngine(" in source
+
+
+# ------------------------------------------------------ teardown safety ------
+def test_shutdown_drains_probe_threads(qt_app, media_dir):
+    """`shutdown()` must leave no probe running (§9).
+
+    Every `add_paths` queues a libVLC duration probe per track on a worker
+    thread. `shutdown()` used to only set a `cancelled` flag and return
+    immediately, so a probe already past that check could be inside
+    `done.emit()` while Python collected the model — a segfault, not an
+    exception, which made the suite fail roughly one run in three with no
+    traceback pointing anywhere near this file. After shutdown the model's own
+    pool must report zero active threads.
+    """
+    model = PlaylistModel()
+    assert model.add_paths([str(p) for p in sorted(media_dir.iterdir())]) == 2
+    model.shutdown()
+    assert model._pool.activeThreadCount() == 0
+
+
+def test_shutdown_is_idempotent(qt_app, media_dir):
+    """Teardown paths may call it twice; the second call must be a no-op."""
+    model = PlaylistModel()
+    model.add_paths([str(p) for p in sorted(media_dir.iterdir())])
+    model.shutdown()
+    model.shutdown()  # must not raise
+
+
+def test_probes_do_not_use_the_global_thread_pool(qt_app, media_dir):
+    """The probe pool must be the model's own, or shutdown cannot drain it.
+
+    Waiting on `QThreadPool.globalInstance()` would block unrelated Qt work,
+    so the fix is only correct if the pool is privately owned.
+    """
+    from PySide6.QtCore import QThreadPool
+
+    model = PlaylistModel()
+    assert model._pool is not QThreadPool.globalInstance()
+    model.shutdown()

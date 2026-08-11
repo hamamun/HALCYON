@@ -273,3 +273,42 @@ def test_m3u_snapshot_and_commands_with_property_context(bridge):
     assert ("setGrouping", "country") in ctx._model.calls
     assert ("setFavouritesOnly", True) in ctx._model.calls
     assert ("toggleGroup", "News") in ctx._model.calls
+
+
+# --------------------------------------------------------- regressions ------
+def test_snapshot_is_json_serialisable(bridge):
+    """The whole snapshot must survive `json.dumps` (§R.4).
+
+    `AppController.activeMode` is a Qt *Property* (a plain string) while the
+    contexts and these fakes expose the same state as a *method*. Reading it
+    without normalising put a bound method into the snapshot; `/api/status`
+    then died with "Object of type method is not JSON serializable" and the
+    phone showed a 500 with no clue why. Serialising here catches any future
+    leak of a callable, whichever key it hides in.
+    """
+    import json
+
+    bridge.publish_now()
+    json.dumps(bridge.store.snapshot())  # must not raise
+
+
+def test_read_normalises_property_and_method_shapes():
+    """`read()` is the single place that copes with both shapes (§4.1)."""
+    from remote.bridge import read
+
+    class Obj:
+        value = "plain"
+
+        def method(self):
+            return "called"
+
+        def boom(self):
+            raise RuntimeError("nope")
+
+    o = Obj()
+    assert read(o, "value") == "plain"
+    assert read(o, "method") == "called"
+    assert read(o, "missing", "fallback") == "fallback"
+    # A raising accessor must degrade to the default, never propagate into the
+    # snapshot build and blank the phone.
+    assert read(o, "boom", "fallback") == "fallback"
