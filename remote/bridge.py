@@ -37,6 +37,28 @@ POLL_MS = 300  # reduced from 500 for web media responsiveness (seekbar 400ms pr
 PLAYER_MODES = ("local", "m3u")
 
 
+def read(obj, attr, default=None):
+    """Read ``attr`` off ``obj``, calling it when it is a zero-arg callable.
+
+    The same state is exposed two ways across the codebase: ``AppController``
+    publishes ``activeMode`` as a Qt ``Property`` (a plain value), while other
+    contexts and the test fakes expose it as a method. Reading it blind leaks a
+    *bound method* into the snapshot, which is not JSON-serialisable — the
+    phone then gets an HTTP 500 from ``/api/status``. Normalise both shapes in
+    exactly one place (§4.1) instead of repeating the ternary at every site.
+    """
+    try:
+        val = getattr(obj, attr, default)
+    except Exception:
+        return default
+    if callable(val):
+        try:
+            return val()
+        except Exception:
+            return default
+    return val
+
+
 class RemoteBridge(QObject):
     """The single door between the remote server and the player."""
 
@@ -154,7 +176,7 @@ class RemoteBridge(QObject):
         snap: dict = {"app": "halcyon", "serverUrl": self._server_url}
         controller, engine = self._controller, self._engine
 
-        mode = getattr(controller, "activeMode", "local") if controller else "local"
+        mode = read(controller, "activeMode", "local") if controller else "local"
         snap["mode"] = mode
 
         # ---- player -----------------------------------------------------
@@ -167,11 +189,7 @@ class RemoteBridge(QObject):
                 ("duration", "duration"), ("position", "position"),
                 ("volume", "volume"), ("rate", "rate"),
             ):
-                try:
-                    val = getattr(engine, attr)
-                    player[key] = val() if callable(val) else val
-                except Exception:
-                    pass
+                player[key] = read(engine, attr, player.get(key))
             # hasVideo and subsAvailable come from the controller/tracks
             if controller:
                 try:
@@ -199,11 +217,7 @@ class RemoteBridge(QObject):
                 ("currentAudio", "currentAudioId"), ("currentSubtitle", "currentSubtitleId"),
                 ("delayMs", "subtitleDelayMs")
             ):
-                try:
-                    val = getattr(controller, attr)
-                    tracks[key] = val() if callable(val) else val
-                except Exception:
-                    pass
+                tracks[key] = read(controller, attr, tracks.get(key))
         snap["tracks"] = tracks
 
         # ---- local playlist ----------------------------------------------
@@ -236,11 +250,7 @@ class RemoteBridge(QObject):
         except Exception:
             pass
         for key, attr in (("currentIndex", "currentIndex"), ("repeatMode", "repeatMode"), ("shuffle", "shuffle")):
-            try:
-                val = getattr(ctx, attr)
-                out[key] = val() if callable(val) else val
-            except Exception:
-                pass
+            out[key] = read(ctx, attr, out.get(key))
         return out
 
     def _m3u_snapshot(self, mode: str) -> dict:
@@ -259,11 +269,7 @@ class RemoteBridge(QObject):
             ("status", "statusMessage"), ("statusIsError", "statusIsError"),
             ("currentChannel", "currentChannelName")
         ):
-            try:
-                val = getattr(ctx, attr)
-                out[key] = val() if callable(val) else val
-            except Exception:
-                pass
+            out[key] = read(ctx, attr, out.get(key))
 
         model = self._m3u_channels()
         if model is not None:
@@ -271,37 +277,27 @@ class RemoteBridge(QObject):
                 ("grouping", "grouping"), ("favouritesOnly", "favouritesOnly"),
                 ("expandedGroup", "expandedGroup")
             ):
-                try:
-                    val = getattr(model, attr)
-                    out[key] = val() if callable(val) else val
-                except Exception:
-                    pass
+                out[key] = read(model, attr, out.get(key))
             # The channel list is only useful while M3U is the active mode and
             # only as big as the current view (filtered/grouped) — bound it.
             if mode == "m3u":
                 try:
-                    count = int(model.count() if callable(model.count) else model.count)
+                    count = int(read(model, "count", 0) or 0)
                     out["channelCount"] = count
                     # Build a signature that changes only when the visible list
                     # really changes — avoids rebuilding 15k dicts every 500 ms.
                     try:
-                        total = int(model.totalCount if callable(model.totalCount) else getattr(model, "totalCount", 0))
+                        total = int(read(model, "totalCount", 0) or 0)
                     except Exception:
                         total = 0
-                    try:
-                        grouping_val = model.grouping
-                    except Exception:
-                        grouping_val = ""
-                    try:
-                        fav_only = bool(model.favouritesOnly)
-                    except Exception:
-                        fav_only = False
+                    grouping_val = read(model, "grouping", "")
+                    fav_only = bool(read(model, "favouritesOnly", False))
                     try:
                         filt = getattr(model, "_filter", "")
                     except Exception:
                         filt = ""
                     try:
-                        cur_idx = int(model.currentIndex() if callable(model.currentIndex) else model.currentIndex)
+                        cur_idx = int(read(model, "currentIndex", -1))
                     except Exception:
                         cur_idx = -1
                     try:
@@ -348,11 +344,7 @@ class RemoteBridge(QObject):
             ("runtimeAvailable", "runtimeAvailable"), ("bookmarks", "bookmarkItems"),
             ("activeTabBookmarked", "activeTabBookmarked")
         ):
-            try:
-                val = getattr(ctx, attr)
-                out[key] = val() if callable(val) else val
-            except Exception:
-                pass
+            out[key] = read(ctx, attr, out.get(key))
         try:
             probe = getattr(ctx, "media_status", None)
             if probe is not None:
@@ -370,11 +362,7 @@ class RemoteBridge(QObject):
             ("presets", "presetNames"), ("currentPreset", "currentPreset"),
             ("bands", "bandLabels"), ("preamp", "preamp")
         ):
-            try:
-                val = getattr(eq, attr)
-                out[key] = val() if callable(val) else val
-            except Exception:
-                pass
+            out[key] = read(eq, attr, out.get(key))
         try:
             if hasattr(eq, "amp_at"):
                 out["amps"] = [float(eq.amp_at(b)) for b in range(len(out["bands"]))]
@@ -425,10 +413,7 @@ class RemoteBridge(QObject):
 
     # ------------------------------------------------------- player cmds ----
     def _uses_player(self) -> bool:
-        try:
-            mode = self._controller.activeMode if self._controller else ""
-        except Exception:
-            mode = ""
+        mode = read(self._controller, "activeMode", "") if self._controller else ""
         return mode in PLAYER_MODES
 
     def _cmd_playPause(self, _p: dict) -> None:
@@ -569,8 +554,7 @@ class RemoteBridge(QObject):
         if ctx is None:
             return None
         try:
-            ch = getattr(ctx, "channels", None)
-            return ch() if callable(ch) else ch
+            return read(ctx, "channels", None)
         except Exception:
             return None
 
@@ -678,11 +662,7 @@ class RemoteBridge(QObject):
         try:
             # Switch PC to Web if not already – avoids hidden background nav
             if self._controller is not None:
-                try:
-                    cur = self._controller.activeMode
-                    cur = cur() if callable(cur) else cur
-                except Exception:
-                    cur = ""
+                cur = read(self._controller, "activeMode", "")
                 if cur != "web":
                     self._controller.setActiveMode("web")
         except Exception:
