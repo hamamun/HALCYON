@@ -140,6 +140,12 @@ class AppController(QObject):
         #: the file that produced it (libVLC's SPU description on many builds
         #: is "Track N", not the file name).
         self._local_subtitle_map: dict[int, str] = {}
+        #: When a media has a saved resume position, the Now Playing toast must
+        #: be suppressed and only the resume toast shown. mediaChanged fires
+        #: synchronously inside engine.open(), before resumePrompted, so QML's
+        #: resumeShowing guard (opacity>0) is still false at that moment. This
+        #: flag suppresses mediaNameChanged at the source for that one open.
+        self._suppress_next_media_name: bool = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
@@ -510,10 +516,22 @@ class AppController(QObject):
         resume_ms = 0
         if self._settings.get("playback.resumeEnabled", True):
             resume_ms = self._library.resume_position(path)
-        self._engine.open(path, resume_ms)
+        # Suppress Now Playing when resume exists. mediaChanged fires
+        # synchronously inside engine.open(), before resumePrompted, so the
+        # QML guard `resumeShowing` (opacity>0) cannot have fired yet. Set the
+        # flag before open() so _on_media_changed can skip mediaNameChanged.
+        # _on_media_changed clears the flag when it actually suppresses; this
+        # final assignment is a safety net if open() fails to emit mediaChanged.
+        self._suppress_next_media_name = bool(resume_ms)
+        try:
+            self._engine.open(path, resume_ms)
+        except Exception:
+            log.debug("engine.open raised during openPath", exc_info=True)
+            self._suppress_next_media_name = False
         if resume_ms:
             log.info("resuming %s at %d ms", path, resume_ms)
             self.resumePrompted.emit(path, resume_ms)
+        self._suppress_next_media_name = False
 
     @Slot(str)
     def startOver(self, path: str) -> None:  # noqa: N802 - QML-facing
@@ -559,7 +577,16 @@ class AppController(QObject):
         # media starts with a clean list before its sidecar is auto-loaded.
         self._external_sub_files = []
         self._local_subtitle_map = {}
-        self.mediaNameChanged.emit()
+        # When this open carries a saved resume, suppress the Now Playing
+        # toast — the resume toast owns this open. See openPath() for the
+        # race (mediaChanged -> mediaNameChanged fires synchronously inside
+        # engine.open(), before resumePrompted, so QML's resumeShowing guard
+        # is still false).
+        if self._suppress_next_media_name:
+            self._suppress_next_media_name = False
+            log.debug("suppressing mediaNameChanged for resume %s", path)
+        else:
+            self.mediaNameChanged.emit()
         if self._settings.get("subs.autoLoadSidecar", True):
             self._auto_load_subtitle(path)
         self._refresh_tracks()
