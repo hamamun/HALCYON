@@ -222,6 +222,47 @@ class FrameFormat:
         )
 
 
+@dataclass(slots=True)
+class _BufferGeneration:
+    """Backing storage for one negotiated video format.
+
+    A format callback can run while Qt is copying a frame from the preceding
+    format.  The old allocation must therefore outlive the current ring state;
+    ``pins`` counts leases that still refer to this exact storage generation.
+    """
+
+    fmt: FrameFormat
+    buffers: list[ctypes.Array]
+    addresses: list[int]
+    pins: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ReadClaim:
+    """A pinned frame and the storage generation that owns it.
+
+    It deliberately iterates as the historic three-tuple, so simple consumers
+    can still unpack ``serial, address, fmt``.  A consumer that may span a
+    format change must pass the claim to :meth:`FrameRing.release_read`.
+    """
+
+    serial: int
+    address: int
+    format: FrameFormat
+    _generation: _BufferGeneration
+
+    def __iter__(self):
+        yield self.serial
+        yield self.address
+        yield self.format
+
+    def __getitem__(self, index: int):
+        return (self.serial, self.address, self.format)[index]
+
+    def __len__(self) -> int:
+        return 3
+
+
 class FrameRing:
     """Triple-buffered frame store, written by VLC, read by Qt.
 
@@ -236,8 +277,11 @@ class FrameRing:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._fmt: FrameFormat | None = None
-        self._buffers: list[ctypes.Array] = []
-        self._addresses: list[int] = []
+        # The current generation is the only one VLC may decode into. Retired
+        # generations stay strongly referenced until every render lease that
+        # points into them is returned.
+        self._generation: _BufferGeneration | None = None
+        self._retired: list[_BufferGeneration] = []
         self._write = 0
         self._ready = -1          # newest complete slot, -1 = nothing yet
         self._read = -1           # slot pinned by reader(s), -1 = none
@@ -249,17 +293,22 @@ class FrameRing:
 
     # --------------------------------------------------------- allocation ---
     def allocate(self, fmt: FrameFormat) -> None:
-        """(Re)allocate the ring for ``fmt``. Called from the format callback,
-        i.e. before any decoding into these buffers has started, and again if the
-        stream changes resolution mid-play (Milestone 1.1)."""
+        """Switch decoding to a freshly allocated format generation.
+
+        This must never invalidate a frame the render thread has already
+        acquired.  A vout format callback and Qt's render pass run on different
+        threads; replacing a ctypes buffer list while Qt copies from one of its
+        addresses is a native use-after-free and terminates the process without
+        a Python traceback.  Retire, rather than discard, a pinned generation.
+        """
+        buffers = [(ctypes.c_ubyte * fmt.frame_size)() for _ in range(SLOTS)]
+        generation = _BufferGeneration(
+            fmt, buffers, [ctypes.addressof(buf) for buf in buffers]
+        )
         with self._lock:
+            self._retire_current_locked()
+            self._generation = generation
             self._fmt = fmt
-            self._buffers = [
-                (ctypes.c_ubyte * fmt.frame_size)() for _ in range(SLOTS)
-            ]
-            self._addresses = [
-                ctypes.addressof(buf) for buf in self._buffers
-            ]
             self._write = 0
             self._ready = -1
             self._read = -1
@@ -267,6 +316,20 @@ class FrameRing:
             self._serial = 0
             self._read_serial = 0
         log.info("frame ring allocated: %s x%d slots", fmt.describe(), SLOTS)
+
+    def _retire_current_locked(self) -> None:
+        """Keep the current backing allocation if a read lease still owns it.
+
+        Caller holds ``_lock``.  An unpinned generation has no raw addresses in
+        use and can be released by dropping the last reference immediately.
+        """
+        generation = self._generation
+        if generation is not None and generation.pins:
+            self._retired.append(generation)
+        self._generation = None
+
+    def _collect_retired_locked(self) -> None:
+        self._retired = [generation for generation in self._retired if generation.pins]
 
     def mark_stopped(self) -> None:
         """Retire the published frame without releasing the buffers.
@@ -293,11 +356,14 @@ class FrameRing:
 
     def free(self) -> None:
         with self._lock:
-            self._buffers = []
-            self._addresses = []
+            # Detach the active generation from VLC, but preserve its storage
+            # until any in-flight Qt copy returns its ReadClaim.
+            self._retire_current_locked()
+            self._collect_retired_locked()
             self._fmt = None
             self._ready = -1
             self._read = -1
+            self._pins = 0
             self._serial = 0
             self._read_serial = 0
 
@@ -313,9 +379,10 @@ class FrameRing:
         path at up to 60 Hz.
         """
         with self._lock:
-            if not self._addresses:
+            generation = self._generation
+            if generation is None or not generation.addresses:
                 return 0
-            return self._addresses[self._write]
+            return generation.addresses[self._write]
 
     def publish(self) -> None:
         """Mark the written slot complete and pick the next write target.
@@ -324,7 +391,8 @@ class FrameRing:
         emission from the decoder thread, just index arithmetic.
         """
         with self._lock:
-            if not self._addresses:
+            generation = self._generation
+            if generation is None or not generation.addresses:
                 return
             if self._ready >= 0 and self._ready != self._read:
                 # The previous ready frame was never consumed — Qt is rendering
@@ -347,31 +415,48 @@ class FrameRing:
                     break
 
     # ------------------------------------------------- reader (Qt thread) ---
-    def acquire_read(self) -> tuple[int, int, FrameFormat] | None:
-        """Pin the newest complete frame and return ``(serial, address, format)``.
+    def acquire_read(self) -> ReadClaim | None:
+        """Pin the newest complete frame and return a generation-bound claim.
 
-        ``None`` means nothing has been displayed yet. The pin holds until a
-        matching :meth:`release_read`, which is what stops the writer decoding
-        over pixels that are mid-upload.
+        ``None`` means nothing has been displayed yet.  The claim keeps its
+        *own* backing generation alive until it is supplied to
+        :meth:`release_read`; this remains true if VLC negotiates a new format
+        before Qt finishes copying the pixels.
 
         Re-entrant across readers: a second surface (Phase 2 PiP, §P2.5) pinning
         while the first still holds gets the *same* slot, so one frame is never
         split between two consumers.
         """
         with self._lock:
-            if self._ready < 0 or not self._addresses or self._fmt is None:
+            generation = self._generation
+            if self._ready < 0 or generation is None or self._fmt is None:
                 return None
             if self._pins == 0:
                 self._read = self._ready
                 self._read_serial = self._serial
             self._pins += 1
-            return self._read_serial, self._addresses[self._read], self._fmt
+            generation.pins += 1
+            return ReadClaim(
+                self._read_serial, generation.addresses[self._read], self._fmt, generation
+            )
 
-    def release_read(self) -> None:
+    def release_read(self, claim: ReadClaim | None = None) -> None:
+        """Release a frame lease.
+
+        New callers must pass the claim returned by :meth:`acquire_read`.
+        The optional no-argument form remains for compatibility with simple
+        same-generation callers, but cannot safely span a format change.
+        """
         with self._lock:
-            self._pins = max(0, self._pins - 1)
-            if self._pins == 0:
-                self._read = -1
+            generation = claim._generation if claim is not None else self._generation
+            if generation is None or generation.pins <= 0:
+                return
+            generation.pins -= 1
+            if generation is self._generation:
+                self._pins = max(0, self._pins - 1)
+                if self._pins == 0:
+                    self._read = -1
+            self._collect_retired_locked()
 
     @property
     def serial(self) -> int:

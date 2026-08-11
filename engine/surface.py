@@ -502,7 +502,10 @@ class VideoSurface(QQuickItem):
             else:
                 node = self._update_packed(window, address, fmt, node)
         finally:
-            vout.ring.release_read()
+            # A format callback may replace the active ring while this render
+            # pass copies pixels. Release the exact generation acquired above,
+            # not whichever generation happens to be current now.
+            vout.ring.release_read(claim)
 
         self._set_has_video(True)
         self.frameRendered.emit()

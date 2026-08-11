@@ -230,7 +230,7 @@ class TestLockContract:
         call_format(player, width, height)
         planes = call_lock(player)
         fmt = vout.ring.format
-        base = vout.ring._addresses[0]
+        base = vout.ring.write_address()
 
         assert planes[0] == base
         assert planes[1] == base + fmt.y_size
@@ -312,7 +312,7 @@ class TestCallbackRobustness:
         call_format(player, 3840, 2160)
         planes = call_lock(player)
         fmt = vout.ring.format
-        base = vout.ring._addresses[0]
+        base = vout.ring.write_address()
         assert (planes[2] - base) + fmt.uv_size <= fmt.frame_size
 
 
