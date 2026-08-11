@@ -369,6 +369,7 @@ class AppController(QObject):
             self._engine.stop()
             self._metadata.load("")
             self._lyrics.load("")
+            self._reset_track_state()
 
     @Slot(int)
     def playIndex(self, row: int) -> None:  # noqa: N802 - QML-facing
@@ -518,6 +519,7 @@ class AppController(QObject):
         self._engine.stop()
         self._metadata.load("")
         self._lyrics.load("")
+        self._reset_track_state()
 
     @Slot(str)
     def openPath(self, path: str) -> None:  # noqa: N802 - QML-facing
@@ -612,6 +614,7 @@ class AppController(QObject):
                 self._engine.stop()
                 self._metadata.load("")
                 self._lyrics.load("")
+                self._reset_track_state()
 
     def _on_state_changed(self, state: int) -> None:
         """Enforce "subtitles start off" on the first Playing of each media.

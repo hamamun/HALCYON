@@ -67,6 +67,9 @@ class _FakeEngine:
         self.set_spu_calls.append(int(track_id))
         self._current_sub = int(track_id)
 
+    def stop(self):
+        self._current_sub = -1
+
     def add_subtitle_file(self, path, select=True):
         self.slaves.append((path, select))
         return True
@@ -93,7 +96,14 @@ def _controller(engine):
     controller._local_subtitle_map = {}
     controller._subtitles_available = False
     controller._force_subs_off_pending = False
+    controller._metadata = _NoopLoader()
+    controller._lyrics = _NoopLoader()
     return controller
+
+
+class _NoopLoader:
+    def load(self, _path):
+        pass
 
 
 class TestSubtitlesStartOff:
@@ -161,6 +171,39 @@ class TestResetTrackState:
         assert controller.currentSubtitleId == -1
         assert controller.subtitlesAvailable is False
         assert controller._force_subs_off_pending is False
+
+
+class TestStopAndEndClearTrackState:
+    def test_stop_resets_track_state(self, qt_app):
+        controller = _controller(
+            _FakeEngine(video=VIDEO, subs=[SUB_OFF, SUB_EN], current_sub=-1)
+        )
+        controller._refresh_tracks()
+        assert controller.subtitlesAvailable is True
+
+        controller.stop()
+
+        assert controller.embeddedSubtitleTracks == []
+        assert controller.subtitlesAvailable is False
+        assert controller.currentSubtitleId == -1
+
+    def test_end_of_playlist_resets_track_state(self, qt_app):
+        engine = _FakeEngine(video=VIDEO, subs=[SUB_OFF, SUB_EN], current_sub=-1)
+        controller = _controller(engine)
+
+        class _EmptyPlaylist:
+            def play_next(self):
+                return False  # nothing left to play
+
+        controller._contexts = {"local": _EmptyPlaylist()}
+        controller._active_mode = "local"
+        controller._refresh_tracks()
+        assert controller.subtitlesAvailable is True
+
+        controller._on_end_reached()
+
+        assert controller.embeddedSubtitleTracks == []
+        assert controller.subtitlesAvailable is False
 
 
 class TestAutoLoadListsSidecarsInactive:
