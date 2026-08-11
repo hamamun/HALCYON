@@ -823,9 +823,17 @@ class M3UContext(QObject):
         self._engine.open(url)
 
     def _stop_playback(self) -> None:
+        """Stop the shared player and clear shared now-playing state.
+
+        Local and M3U deliberately share the decoder, but metadata and lyrics
+        are also shared UI state. Calling the engine directly stopped the
+        picture while leaving the previous file/channel name for the idle card
+        to display after a mode switch or source change. Use the controller's
+        canonical stop path so playback, metadata and lyrics are cleared
+        together without touching either mode's own playlist data.
+        """
         try:
-            if self._engine.currentMedia:
-                self._engine.stop()
+            self._controller.stop()
         except Exception:  # noqa: BLE001 - stopping must never break switching
             log.debug("engine stop failed (mode switch)", exc_info=True)
 
