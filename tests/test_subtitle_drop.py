@@ -125,7 +125,7 @@ class _FakeEngine:
         self.slaves: list[str] = []
         self.opened: list[str] = []
 
-    def add_subtitle_file(self, path):
+    def add_subtitle_file(self, path, select=True):
         self.slaves.append(path)
         return True
 

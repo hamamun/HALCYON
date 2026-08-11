@@ -146,11 +146,17 @@ class AppController(QObject):
         #: resumeShowing guard (opacity>0) is still false at that moment. This
         #: flag suppresses mediaNameChanged at the source for that one open.
         self._suppress_next_media_name: bool = False
+        #: Enforces the "subtitles start off" rule. Set on every media change;
+        #: consumed on the first Playing tick, when libVLC has settled on its
+        #: auto-picked default subtitle. Once consumed it stays False until the
+        #: next media, so a resume-from-pause never wipes the user's selection.
+        self._force_subs_off_pending: bool = False
 
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
         engine.timeChanged.connect(self._lyrics.update_position)
         engine.tracksChanged.connect(self._refresh_tracks)
+        engine.stateChanged.connect(self._on_state_changed)
 
     # ---------------------------------------------------------- registration ---
     def register_context(self, mode_id: str, context: QObject) -> None:
@@ -307,6 +313,7 @@ class AppController(QObject):
                 self._engine.stop()
                 self._metadata.load("")
                 self._lyrics.load("")
+                self._reset_track_state()
             else:
                 target_idx = cur - removed_before
                 if target_idx < new_count:
@@ -331,6 +338,7 @@ class AppController(QObject):
         self._engine.stop()
         self._metadata.load("")
         self._lyrics.load("")
+        self._reset_track_state()
 
     def _current_path(self) -> str:
         """Filesystem path of whatever the engine currently has open."""
@@ -361,6 +369,7 @@ class AppController(QObject):
             self._engine.stop()
             self._metadata.load("")
             self._lyrics.load("")
+            self._reset_track_state()
 
     @Slot(int)
     def playIndex(self, row: int) -> None:  # noqa: N802 - QML-facing
@@ -510,6 +519,7 @@ class AppController(QObject):
         self._engine.stop()
         self._metadata.load("")
         self._lyrics.load("")
+        self._reset_track_state()
 
     @Slot(str)
     def openPath(self, path: str) -> None:  # noqa: N802 - QML-facing
@@ -577,6 +587,9 @@ class AppController(QObject):
         # media starts with a clean list before its sidecar is auto-loaded.
         self._external_sub_files = []
         self._local_subtitle_map = {}
+        # A new media must start with subtitles off and let the user turn one
+        # on. Armed here, enforced once the media reaches Playing.
+        self._force_subs_off_pending = True
         # When this open carries a saved resume, suppress the Now Playing
         # toast — the resume toast owns this open. See openPath() for the
         # race (mediaChanged -> mediaNameChanged fires synchronously inside
@@ -601,6 +614,48 @@ class AppController(QObject):
                 self._engine.stop()
                 self._metadata.load("")
                 self._lyrics.load("")
+                self._reset_track_state()
+
+    def _on_state_changed(self, state: int) -> None:
+        """Enforce "subtitles start off" on the first Playing of each media.
+
+        libVLC auto-picks a default subtitle when a media opens; if we read the
+        current spu too early we cache the wrong ("off") answer and the popover
+        highlights Disable while a subtitle is actually rendering. Instead of
+        reading that racy value, we force the state: on the first Playing tick
+        of a new media we explicitly turn subtitles off and refresh, so the
+        cached id, the popover highlight and the on-screen result all agree.
+
+        The pending flag is consumed on the first Playing only, so a later
+        pause/resume never resets the user's own subtitle selection.
+        """
+        from engine.vlc_engine import State
+
+        if state != State.Playing or not self._force_subs_off_pending:
+            return
+        self._force_subs_off_pending = False
+        try:
+            self._engine.set_subtitle_track(-1)
+        except Exception:
+            log.debug("could not force subtitles off", exc_info=True)
+        self._refresh_tracks()
+
+    def _reset_track_state(self) -> None:
+        """Forget the previous media's tracks so the popover and the CC dot
+        clear when the queue empties — the track-state mirror of the
+        lyrics/metadata reset that already happens on clear."""
+        self._audio_tracks = []
+        self._video_tracks = []
+        self._subtitle_tracks = []
+        self._embedded_subtitle_tracks = []
+        self._local_subtitle_tracks = []
+        self._current_audio_id = -1
+        self._current_subtitle_id = -1
+        self._subtitles_available = False
+        self._external_sub_files = []
+        self._local_subtitle_map = {}
+        self._force_subs_off_pending = False
+        self.tracksChanged.emit()
 
     def _attach_subtitles(self, paths: list[str]) -> None:
         """Load dropped subtitle files onto whatever is currently playing."""
@@ -615,17 +670,34 @@ class AppController(QObject):
         self._refresh_tracks()
 
     def _auto_load_subtitle(self, path: str) -> None:
+        """Load every matching sidecar so it appears under Local subtitles —
+        WITHOUT activating any of them (the media starts with subtitles off).
+
+        ``select=False`` attaches the slave so libVLC lists it as an available
+        track but keeps the current spu at "off", which is what lets the start-
+        off contract hold while the lists stay populated for the user to pick
+        from.
+        """
         media = Path(path)
+        loaded = 0
         for suffix in (".srt", ".ass", ".ssa", ".sub", ".vtt"):
             sidecar = media.with_suffix(suffix)
             if sidecar.exists():
-                self._load_external_subtitle(str(sidecar))
-                log.info("auto-loaded subtitle %s", sidecar.name)
-                return
+                if self._load_external_subtitle(str(sidecar), select=False):
+                    loaded += 1
+                    log.info("auto-loaded subtitle %s (inactive)", sidecar.name)
+        if loaded:
+            log.info("auto-loaded %d local subtitle(s) for %s", loaded, media.name)
 
-    def _load_external_subtitle(self, path: str) -> bool:
+    def _load_external_subtitle(self, path: str, select: bool = True) -> bool:
         """The one attach path for subtitle *files* — auto sidecar, user-picked,
         drag-and-drop and downloaded all arrive here (§4.1).
+
+        ``select`` mirrors the engine's add_slave selection flag: True (manual
+        pick, download) activates the subtitle; False (auto-load at media
+        start) only makes it available in the Local subtitles list without
+        showing it — the split that keeps "subtitles start off" true while the
+        lists stay populated.
 
         After the slave is attached the SPU list is diffed before/after so the
         new spu id can be bound to *this* file — that mapping is what lets the
@@ -644,7 +716,7 @@ class AppController(QObject):
             before_ids = set()
         before_ids.add(-1)
 
-        ok = self._engine.add_subtitle_file(path)
+        ok = self._engine.add_subtitle_file(path, select=select)
         if not ok:
             return False
 

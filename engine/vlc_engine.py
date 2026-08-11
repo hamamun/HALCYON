@@ -782,8 +782,14 @@ class VlcEngine(QObject):
         self._player.video_set_spu(int(track_id))
 
     @Slot(str, result=bool)
-    def add_subtitle_file(self, path: str) -> bool:
+    @Slot(str, bool, result=bool)
+    def add_subtitle_file(self, path: str, select: bool = True) -> bool:
         """External subtitle via ``add_slave`` (§P1.5).
+
+        ``select`` is libVLC's add_slave selection flag: True activates the
+        track (manual pick/download), False only registers it as an available
+        subtitle without showing it — used for the "subtitles start off"
+        auto-load at media start.
 
         Guarded on every step. ``add_slave`` is a no-op unless a media is
         loaded, and handing it a path that does not exist makes libVLC spawn a
@@ -805,7 +811,7 @@ class VlcEngine(QObject):
             return False
         try:
             rc = self._player.add_slave(
-                self._vlc.MediaSlaveType.subtitle, resolved.resolve().as_uri(), True
+                self._vlc.MediaSlaveType.subtitle, resolved.resolve().as_uri(), select
             )
         except Exception:
             log.exception("add_subtitle_file failed for %s", resolved)
