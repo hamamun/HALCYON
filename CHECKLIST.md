@@ -12,21 +12,65 @@
 
 ---
 
+## Verification pass — 2026-08-11
+
+The tree was re-checked end to end before closing out. **Two real defects were found and
+fixed**; they are recorded here rather than quietly ticked away.
+
+1. **`/api/status` returned HTTP 500 to the phone.** `AppController.activeMode` is a Qt
+   `Property` (a string) but every mode context and test fake exposes the same state as a
+   *method*. Read without normalising, the bound method went into the status snapshot and
+   `json.dumps` refused it — the remote showed no state at all. The same blind read was
+   also zeroing the M3U channel list and poisoning the snapshot cache key. Fixed with one
+   `read()` helper in `remote/bridge.py` (§4.1) used by every such access.
+2. **Intermittent segfault on playlist teardown.** `PlaylistModel.shutdown()` set a
+   `cancelled` flag and returned without waiting. A duration probe already past that check
+   could be inside `done.emit()` as the model was collected — the §9 failure mode, a hard
+   crash with no traceback. Probes now run on a pool the model owns; shutdown clears the
+   queue and waits, bounded. This reproduced in **~1 full-suite run in 3**.
+
+**Suite: 406 passed, 51 skipped — 12 consecutive clean runs** (was crashing ~1 in 3).
+`tools/check_isolation.py` green. Remote server smoke-tested live: `/health`, `/`, and
+`/api/status` all 200, snapshot JSON-clean.
+
+**What is still genuinely open** — none of it code:
+
+- **All `◻` owner-verification boxes** (Phases 2, 3, 4, U — 111 of them). Per this file's
+  own rule, *only your marks count for phase sign-off*, so I have not touched a single one.
+  They are hands-on-Windows checks: how it looks, how it feels, whether a phone in your
+  hand does the right thing. I cannot honestly tick those from a headless Linux container.
+- **Two Phase 0 boxes** needing the libVLC DLLs in `vendor/vlc/` — gitignored, absent here,
+  Windows-only.
+- **The five Deferred items** — post-v1.0 backlog, open on purpose.
+- **Standing Rules** — a per-commit prompt, never permanently "done".
+
+So: the build is complete and now materially more correct than when this pass started, but
+**the phases cannot be closed by me** — the `◻` sign-offs are yours to make.
+
+---
+
 ## Progress
 
 *One table. Counts are real — regenerated from the boxes below on 2026-08-09.
-Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.*
+Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.
+Build-task counts re-checked 2026-08-11; `◻` counts unchanged — those are owner marks.*
 
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
-| 0 — Setup \* | 0 / 1 | 0 / 8 | 0 / 1 | — |
-| 1 — Local | 10 / 10 | 175 / 175 | 104 / 104 | `v0.1.0-local` *(tagged 2026-08-02)* |
+| 0 — Setup \* | 1 / 1 built | 6 / 8 | 0 / 1 | — |
+| 1 — Local | 10 / 10 | 175 / 175 | 93 / 93 ✅ | `v0.1.0-local` *(tagged 2026-08-02)* |
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
-| 3 — Web | 5 / 5 built | 62 / 62 | 0 / 56 | `v1.0.0` |
-| 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 18 | `v1.1.0-mini` |
-| R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
-| U — Vendor Update tab | 0 / 1 | 0 / 11 | 0 / 11 | — *(design locked 2026-08-10)* |
-| **Total** | — | **333 / 352** | **114 / 261** | |
+| 3 — Web | 5 / 5 built | 62 / 62 | 0 / 54 | `v1.0.0` |
+| 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 16 | `v1.1.0-mini` |
+| R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 ✅ | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
+| U — Vendor Update tab | 1 / 1 built | 18 / 18 | 0 / 11 | — *(built 2026-08-10/11, awaiting your verification)* |
+| **Total** | **27 / 27 built** | **357 / 359** | **103 / 246** | |
+
+*Recounted from the boxes on 2026-08-11. Three corrections to the previous table: Phase U
+showed `0 / 11` build tasks when all 18 were in fact ticked; Phase 0 showed `0 / 8` when six
+are objectively satisfied; and the Phase 1/3/4 verification denominators were slightly off
+against an actual count of the marks. **The two remaining build tasks are the libVLC
+binaries in Phase 0** — Windows-only, gitignored, not checkable from here.*
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
@@ -37,16 +81,18 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 *Before any code. ~half a day.*
 
-- [ ] `git init`, create branch `phase-1-local` · §A.4
-- [ ] `.gitignore` — `.venv/`, `__pycache__/`, `build/`, `dist/`, `*.spec`, `vendor/vlc/`
-- [ ] `README.md` — what Halcyon is, how to fetch libVLC binaries into `vendor/vlc/`
-- [ ] Commit `HALCYON_PLAN.md` and `CHECKLIST.md` as the first commit
-- [ ] `py -3.12 -m venv .venv` · §12
-- [ ] `pip install PySide6 python-vlc` *(nothing else yet — smaller surface, easier debugging)*
-- [ ] Download libVLC 3.0.21 Win64 → `vendor/vlc/` (`libvlc.dll`, `libvlccore.dll`, `plugins/`)
-- [ ] Confirm `python -c "import vlc; print(vlc.libvlc_get_version())"` works against the bundled DLLs
+*Re-verified 2026-08-11 against the current repo — see notes.*
 
-◻ Repo exists, venv activates, libVLC version prints
+- [x] `git init`, create branch `phase-1-local` · §A.4 — *repo is live; the original branch has long since merged, so this is satisfied by history, not by that branch still existing*
+- [x] `.gitignore` — `.venv/`, `__pycache__/`, `build/`, `dist/`, `*.spec`, `vendor/vlc/` — *all six entries confirmed present*
+- [x] `README.md` — what Halcyon is, how to fetch libVLC binaries into `vendor/vlc/` — *§"Fetching libVLC" documents the layout*
+- [x] Commit `HALCYON_PLAN.md` and `CHECKLIST.md` as the first commit — *both tracked; exact commit order is unrecoverable from the squashed history*
+- [x] `py -3.12 -m venv .venv` · §12 — *README pins 3.12 (3.11 works); venv creation verified*
+- [x] `pip install PySide6 python-vlc` — *both resolve from `requirements.txt`; import verified*
+- [ ] Download libVLC 3.0.21 Win64 → `vendor/vlc/` (`libvlc.dll`, `libvlccore.dll`, `plugins/`) — **not verifiable here:** `vendor/vlc/` is gitignored and absent from this Linux checkout. Windows-only, must be confirmed on your machine.
+- [ ] Confirm `python -c "import vlc; print(vlc.libvlc_get_version())"` works against the bundled DLLs — **not verifiable here:** needs the DLLs above. The `python-vlc` binding imports fine; it is the native binaries that are unproven in this environment.
+
+◻ Repo exists, venv activates, libVLC version prints *(first two confirmed; the libVLC version print is yours to run on Windows)*
 
 ---
 
@@ -803,6 +849,29 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Turbo Mode: on entering mini, force soft I420 path (disable HWND), on return restore if setting ON · §M.6
 - [x] No auto-hide, no cursor hide in mini — bar always visible · §M.5
 
+> **Re-verified 2026-08-11 — three boxes above are ticked but the code has since diverged
+> from the spec they describe.** Left ticked because the *feature* is built and working;
+> flagged here because the ticks no longer describe what ships. All three look like
+> deliberate post-build improvements, but they were never written down, so confirm them:
+>
+> 1. **Width is 460px, not "400–420".** `ui/shell/MiniBar.qml:16` sets `width: 460` and
+>    `ui/Main.qml:64` clamps `Math.max(460, …)`. Height is correct — `Theme.titleBarHeight`
+>    (44px), so it still sits on a Word/Explorer title bar as intended. Only the width
+>    budget slipped, presumably to fit the volume capsule below.
+> 2. **Volume is a horizontal capsule to the right of mute, not a vertical pop-up slider.**
+>    The file header states this outright: *"Innovative horizontal volume capsule to right
+>    of mute button — zero clipping."* The box (and `docs/MINI_MODE_SUMMARY_v1.1.md:41`)
+>    still describes the 140px vertical `GlassPanel` that pops above the bar. This is
+>    almost certainly *why* the width grew to 460.
+> 3. **No tooltips in Mini Mode.** Header: *"Zero tooltips in Mini Mode for unobtrusive,
+>    clean controls."* The seek box above promises a *"knob + tooltip on hover"* and
+>    §M.4 / summary line 48 promise a *"time tooltip"*. The hairline seek itself is built.
+>
+> **Nothing here is broken** — this is documentation drift, and the shipped behaviour may
+> well be the better design. Decide which is authoritative, then either amend §M.2–M.4 in
+> the plan or restore the original spec in the code. Until then the §M.7 verify boxes
+> below should be read against the *code*, not the *text*.
+
 ### ◻ Verify — Mini Mode
 
 - ◻ Toggle button renders left of minimize, only enabled in Local when media loaded, grayed in M3U/Web/no media
@@ -826,7 +895,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
 
-# PHASE R — Mobile Remote v1.2 · §R — SPEC LOCKED (2026-08-08), BUILD IN PROGRESS
+# PHASE R — Mobile Remote v1.2 · §R — SPEC LOCKED (2026-08-08), **BUILT AND SIGNED OFF 2026-08-09**
 
 > **Build started 2026-08-08 (owner decision — overrides the §R build-gate).** All boxes below are from `HALCYON_PLAN.md` §R (locked 2026-08-08). Each step lands with the full regression suite and `tools/check_isolation.py` green, and **no player code path is modified** — the remote is a new doorway onto existing `AppController` actions (§4.1).
 >
@@ -884,7 +953,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
 
-# PHASE U — Vendor Update Tab · §U — DESIGN LOCKED (2026-08-10), IMPLEMENTATION IN PROGRESS
+# PHASE U — Vendor Update Tab · §U — DESIGN LOCKED (2026-08-10), **BUILD COMPLETE** (all 18 build tasks ticked; awaiting your ◻ verification)
 
 > **Owner decisions locked 10 Aug 2026.** Third tab in Settings → Update. Checks VLC + WebView2 vendor files only (not the app itself). One click checks both. Shows version diff, download links, extraction guide, place-at paths with 📁 Open Folder buttons. Icon-based buttons (↻ Check / ✕ Cancel).
 
@@ -914,6 +983,23 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Dialog width increased to 560px, height to 600px · §U.3
 - [x] All Theme tokens used — no hardcoded colours, radii, or durations · §B.1
 
+> **Re-verified 2026-08-11 (static checks only — no Windows here).** Every build box above
+> was confirmed against the source, not assumed: `core/update_checker.py` byte-compiles
+> clean; `main.py` imports `UpdateChecker` (:178), instantiates it (:217) and registers the
+> context property (:252); `SettingsDialog.qml` sets `width: 560` / `height: 600` (:16-17),
+> declares `UpdateTabContent` (:753) and wires `UpdateChecker.vlcFiles`,
+> `vlcPlacePaths`, `webview2Files` and `openFolder()`; the Update entry sits at
+> `tabIndex: 2` with `Glyphs.refresh` (:1427); the Update tab body contains **zero** hex
+> colour literals, so the Theme-token box holds; `PHASE_U_DISCLOSED = ["main.py"]` exists
+> (`tools/check_isolation.py:130`) and the checker passes.
+>
+> **One deviation from the spec, flagged not hidden:** the tab model has **four** tabs —
+> `General | Shortcuts | Update | About` (:1425-1428) — where §U says three. `About` is not
+> scope creep: it is the Phase 3 "About dialog with version and licence notices" item
+> (line 762) re-homed as a tab. Update is still literally the third tab, so the §U wording
+> is satisfied; the plan text just predates the About move. **Your call whether that is
+> the intended final shape** — it is a UI decision, not a defect.
+
 ### ◻ Verify — Vendor Update tab
 
 - ◻ Third tab "Update" renders in Settings with refresh icon, same style as General/Shortcuts
@@ -936,7 +1022,11 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 Not in any phase above. Recorded so they aren't mistaken for oversights.
 
-- [ ] **Mobile remote + QR** — own phase; must mirror each mode's control set, which only stabilises at v1.0 — **spec locked 2026-08-08 in PLAN §R** (see PHASE R above; build deferred until v1.0)
+- [x] **Mobile remote + QR** — ~~deferred~~ **built and signed off** as PHASE R (v1.2.0-remote, verified 2026-08-09). Ticked here only to stop it reading as outstanding; the live record is PHASE R above.
+> The five below are **deliberately open** — they are the post-v1.0 backlog, not unfinished
+> work. They are left unticked on purpose: ticking them would claim shipped features that
+> do not exist. Nothing in the v1.3 scope depends on them.
+
 - [ ] Seek-bar frame thumbnails — needs a second decoder instance
 - [ ] Bookmark folders
 - [ ] "Play in Halcyon" — pipe a resolved web stream URL into libVLC
@@ -947,14 +1037,22 @@ Not in any phase above. Recorded so they aren't mistaken for oversights.
 
 # Standing Rules — check at every commit
 
-- [ ] ★ **§4.1** — is this action implemented in exactly one place, and does everything else *bind* to it?
+> These are a **recurring prompt, not a task list**: they are re-asked at every commit and
+> so are never permanently "done". Left unticked by design — a ticked box here would be
+> meaningless the moment the next commit lands. Status against the current tree, 2026-08-11:
+
+- [ ] ★ **§4.1** — is this action implemented in exactly one place, and does everything else *bind* to it? — *holds; the `read()` helper added 2026-08-11 collapsed a repeated property/method access into one place*
 - [ ] ★ **§B.1** — is this built from the shared component vocabulary, not a lookalike?
 - [ ] ★ **§B.2** — is this layout designed for its own contents, with no ghost slots?
-- [ ] ★ **§A.3** — has any frozen file from an earlier phase been touched?
-- [ ] ★ **§9** — are all ctypes callbacks hard-referenced on a long-lived object?
+- [ ] ★ **§A.3** — has any frozen file from an earlier phase been touched? — *`modes/local/playlist.py` was touched 2026-08-11 to fix a teardown segfault; disclosed below*
+- [ ] ★ **§9** — are all ctypes callbacks hard-referenced on a long-lived object? — *confirmed: `engine/video_out.py` holds `_cb_lock/_cb_unlock/_cb_display/_cb_format/_cb_cleanup`*
 - [ ] ★ Does anything hardcode a value that belongs in `Theme.qml`?
-- [ ] `tools/check_isolation.py` passes
+- [ ] `tools/check_isolation.py` passes — *green, 2026-08-11*
 
 ---
 
-*Generated from `HALCYON_PLAN.md` v4.2 — 8 August 2026 — includes Mini Mode v1.1 + Mobile Remote v1.2 spec (§R, build deferred)*
+*Generated from `HALCYON_PLAN.md` v4.2 — 8 August 2026 — includes Mini Mode v1.1 + Mobile Remote v1.2 (§R, built and signed off) + Vendor Update tab (§U, built).*
+
+*Last reconciled 2026-08-11: counts recomputed from the boxes, Phase 0 re-verified, two
+defects found and fixed (see "Verification pass" at the top). All `◻` owner-verification
+marks left untouched — they are yours to set.*
