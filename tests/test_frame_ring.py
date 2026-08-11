@@ -148,6 +148,31 @@ class TestRingBasics:
         assert ring.acquire_read() is None
         assert ring.format.width == 1920
 
+    def test_reallocate_keeps_a_pinned_old_generation_alive(self):
+        """Qt may still copy old pixels while VLC negotiates the next track.
+
+        This is the playlist-transition regression: the old, smaller ring must
+        not be released merely because a larger aligned format is allocated.
+        """
+        ring = FrameRing()
+        old_fmt = make_format(1280, 544)
+        new_fmt = make_format(1280, 546)
+        ring.allocate(old_fmt)
+        ring.publish()
+        claim = ring.acquire_read()
+        assert claim is not None
+        _, old_address, _ = claim
+
+        ring.allocate(new_fmt)
+
+        assert len(ring._retired) == 1
+        # The address is still valid while the render lease is outstanding.
+        ctypes.memset(old_address, 0x5A, old_fmt.frame_size)
+        assert ring.format == new_fmt
+
+        ring.release_read(claim)
+        assert not ring._retired
+
     def test_slot_addresses_are_distinct(self):
         ring = FrameRing()
         fmt = make_format()
