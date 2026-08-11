@@ -248,3 +248,142 @@ def test_engine_open_retires_the_previous_video(monkeypatch, tmp_path):
     assert calls.index("retire") < calls.index("play"), (
         "retire before play, or the new track can start against a stale picture"
     )
+
+
+def test_engine_open_tears_down_the_previous_media_first(monkeypatch, tmp_path):
+    """``open()`` is the one entry point every caller funnels through. It must
+    guarantee the previous media is detached from libVLC *before* the new
+    media is set, regardless of whether the caller (Next, Previous, end-of-
+    track, mode switch) remembered to stop the player first.
+
+    Without this, pressing Next while a video is still playing crashes the
+    process inside ``libvlc.dll`` with no Python traceback — the asymmetric
+    "Video 1 → Next → crash, Video 2 → Previous → fine" symptom. The root
+    cause is ``self._media.release()`` being called on a media the player
+    is still actively decoding; the safe order is stop → set_media(None) →
+    release, which is what ``VlcEngine.stop()`` already uses.
+
+    This test pins the order: stop must run, set_media(None) must run, and
+    the previous media's release (if any) must run, all before the new
+    media is set.
+    """
+    from engine.vlc_engine import VlcEngine
+
+    log: list[tuple[str, str]] = []  # (phase, method)
+
+    class FakeMedia:
+        def __init__(self, label: str) -> None:
+            self._label = label
+            self.released = False
+
+        def parse_with_options(self, *_a):
+            pass
+
+        def release(self):
+            self.released = True
+            log.append((self._label, "release"))
+
+    current_media = {"obj": None}
+
+    class FakePlayer:
+        def stop(self):
+            log.append(("player", "stop"))
+
+        def set_media(self, m):
+            if m is None:
+                log.append(("player", "set_media(None)"))
+            else:
+                log.append(("player", f"set_media({m._label})"))
+                current_media["obj"] = m
+
+        def play(self):
+            log.append(("player", "play"))
+
+    class FakeInstance:
+        def media_new(self, _mrl):
+            # Each call to media_new mints a new media. The test calls
+            # open() twice, so we get two distinct labels.
+            n = len([e for e in log if e[1] == "new" and e[0].startswith("media_")]) + 1
+            label = f"media_{n}"
+            m = FakeMedia(label)
+            log.append((label, "new"))
+            return m
+
+    engine = VlcEngine.__new__(VlcEngine)  # no libVLC instance, no window
+    from PySide6.QtCore import QObject
+
+    QObject.__init__(engine)
+    engine._vlc = vlc
+    engine._instance = FakeInstance()
+    engine._player = FakePlayer()
+    engine._media = None
+    engine._time = 0
+    engine._position = 0.0
+    engine._duration = 0
+    engine._current_mrl = ""
+    engine._scrubbing = False
+    engine._pending_resume_ms = 0
+
+    class FakeVout:
+        def notify_video_stopped(self):
+            log.append(("vout", "notify_video_stopped"))
+
+    engine.video_output = FakeVout()
+
+    media_a = tmp_path / "a.mp3"
+    media_a.write_bytes(b"")
+    media_b = tmp_path / "b.mp3"
+    media_b.write_bytes(b"")
+
+    # First open: nothing was loaded, so no teardown is needed.
+    engine.open(str(media_a))
+    first_set_media_idx = next(
+        i for i, (who, what) in enumerate(log) if who == "player" and what.startswith("set_media(media_")
+    )
+    first_release_idx = next(
+        i for i, (who, what) in enumerate(log) if what == "release"
+    )
+    first_play_idx = next(i for i, (who, what) in enumerate(log) if what == "play")
+    # First open: a single set_media(media_1), then play, then release.
+    assert log[first_set_media_idx] == ("player", "set_media(media_1)")
+    assert first_release_idx > first_set_media_idx
+    assert first_play_idx > first_set_media_idx
+
+    # Second open while the first is still "playing": the teardown sequence
+    # (stop → set_media(None)) must run *before* the new media is set.
+    # Without this, the previous media is still attached to the player when
+    # the new one arrives, which is the libVLC misuse the previous fix did
+    # not address.
+    log.clear()
+    engine.open(str(media_b))
+
+    # Find the indices of each phase of the second open.
+    stop_idx = next(i for i, e in enumerate(log) if e == ("player", "stop"))
+    detach_idx = next(i for i, e in enumerate(log) if e == ("player", "set_media(None)"))
+    new_set_idx = next(
+        i for i, (who, what) in enumerate(log) if who == "player" and what.startswith("set_media(media_")
+    )
+
+    assert stop_idx >= 0, "open() must call player.stop() before the new media is set"
+    assert detach_idx >= 0, "open() must call set_media(None) before the new media is set"
+    assert new_set_idx >= 0, "open() must set the new media"
+
+    # The libVLC-safe order is: stop, set_media(None), then set_media(new).
+    # The old media's release (if any) must come *after* the player has been
+    # told to drop its reference, not the first step — releasing while the
+    # player is still pointing at the media is what segfaults inside
+    # libvlc.dll.  ``self._media`` is None after the first open (the player
+    # now owns the new media), so no media-1 release runs here; what the
+    # test pins is that the player-side teardown happened *before* the new
+    # media is set, not interleaved with it.
+    assert stop_idx < detach_idx, "stop() must run before set_media(None)"
+    assert detach_idx < new_set_idx, (
+        "set_media(None) must run before the new media is set; otherwise the "
+        "previous media is still attached when the new one is set"
+    )
+
+    # And the new media must be released right after set_media returns,
+    # not retained on self._media indefinitely (which would leak across
+    # many Next clicks).
+    releases = [e for e in log if e[1] == "release"]
+    assert releases, "the new media must be released after set_media returns"

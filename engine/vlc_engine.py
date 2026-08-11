@@ -403,48 +403,119 @@ class VlcEngine(QObject):
     @Slot(str)
     def open(self, path_or_url: str, start_ms: int = 0) -> None:
         """Load media and start playing. Accepts a path, a file:// URL or a
-        network URL (Phase 2's HLS streams come through here unchanged)."""
+        network URL (Phase 2's HLS streams come through here unchanged).
+
+        **Self-safe transition.** This is the one place a new media is handed
+        to libVLC, so it is the one place that has to guarantee the previous
+        media is fully detached before the new one is set. Every caller —
+        ``AppController.openPath`` for local Next/Previous and end-of-track,
+        ``M3UContext._open_url`` for stream-switching, the remote bridge,
+        ``startOver`` for resume overrides — funnels through here, and not
+        one of them reliably calls ``stop()`` first when the user changes
+        track while a previous file is still playing. Without the teardown
+        below, ``self._media.release()`` on the still-playing media races
+        the decoder thread and terminates the process inside ``libvlc.dll``
+        with no Python traceback (the asymmetric Video 1 → Next → crash,
+        Video 2 → Previous → fine symptom). ``stop()`` is the libVLC-safe
+        order: stop the player, ``set_media(None)`` so libVLC releases its
+        internal reference, then drop our Python-side refcount.
+        """
         if not path_or_url:
             return
-        mrl = path_or_url
-        if not _looks_like_url(mrl):
-            mrl = Path(mrl).expanduser().resolve().as_uri()
 
-        # A newly selected item has no trustworthy timeline until its demuxer
-        # reports one.  In particular, do not show the previous file's final
-        # position during MKV discovery (which made a new video look seeked to
-        # its end even while it was visibly playing from the beginning).
+        # ------------------------------------------------------------------
+        # 1. Tear the previous media down in the libVLC-safe order.  Done
+        # unconditionally: a fresh player has nothing to release, the call
+        # short-circuits on ``self._media is None`` and ``self._current_mrl``
+        # is empty, so the no-op case costs essentially nothing.
+        # ------------------------------------------------------------------
+        if self._player is not None:
+            try:
+                self._player.stop()
+            except Exception:
+                log.debug("player.stop failed during open() teardown", exc_info=True)
+            try:
+                self._player.set_media(None)
+            except Exception:
+                log.debug("set_media(None) failed during open() teardown", exc_info=True)
+        if self._media is not None:
+            try:
+                self._media.release()
+            except Exception:
+                log.debug("media.release failed during open() teardown", exc_info=True)
+            self._media = None
+        self._current_mrl = ""
         self._scrubbing = False
+        self._pending_resume_ms = 0
         self._reset_timeline()
 
-        # Retire whatever the previous media left on the video surface *before*
-        # the new one starts. libVLC only fires its video cleanup callback when
-        # it genuinely tears a vout down, and going from a video file straight
-        # to an audio file inside the same player does not reliably produce one
-        # before the audio starts. Without this the stage kept showing (and
-        # kept `hasVideo` true for) the final frame of the finished video, so
-        # the audio-only Now Playing card — album art, title, artist, album —
-        # never appeared. A fresh player has no previous frame, which is why
-        # the same audio file looked fine when played first.
+        # Retire whatever the previous media left on the video surface
+        # *before* the new one starts. ``stop()`` already calls
+        # ``notify_video_stopped()`` and we just reset the timeline above,
+        # so the ring is empty. Calling it again here is harmless and keeps
+        # the invariant visible at the call site: a new media always starts
+        # against a clean video surface. (libVLC only fires its own video
+        # cleanup callback when it genuinely tears a vout down, and going
+        # from a video file straight to an audio file inside the same
+        # player does not reliably produce one before the audio starts. The
+        # explicit retire removes the race and is what kept
+        # ``VideoSurface.hasVideo`` from latching true after a video ended.)
         try:
             self.video_output.notify_video_stopped()
         except Exception:
             log.debug("could not reset the video surface for new media", exc_info=True)
 
-        if self._media is not None:
-            try:
-                self._media.release()
-            except Exception:
-                pass
-            self._media = None
+        # ------------------------------------------------------------------
+        # 2. Set up the new media.  The python-vlc contract for
+        # ``set_media`` is: "Afterwards the p_md can be safely destroyed."
+        # The player holds its own reference, so the local handle is only
+        # needed until the call returns; the old code kept a strong
+        # reference on ``self._media`` for the lifetime of the play, which
+        # is a slow leak across many Next clicks.  We now release
+        # immediately and rely on the player to keep the media alive.
+        # ------------------------------------------------------------------
+        mrl = path_or_url
+        if not _looks_like_url(mrl):
+            mrl = Path(mrl).expanduser().resolve().as_uri()
 
         media = self._instance.media_new(mrl)
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
-        media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
-        self._media = media
-        self._player.set_media(media)
+        try:
+            media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
+        except Exception:
+            log.debug("media.parse_with_options failed for %s", path_or_url, exc_info=True)
+        if self._player is None:
+            # shutdown() ran between our teardown and now; nothing to do.
+            try:
+                media.release()
+            except Exception:
+                pass
+            try:
+                self.errorOccurred.emit(f"Could not open {path_or_url}")
+            except Exception:
+                pass
+            return
+        try:
+            self._player.set_media(media)
+        except Exception:
+            log.exception("set_media failed for %s", path_or_url)
+            try:
+                media.release()
+            except Exception:
+                pass
+            self.errorOccurred.emit(f"Could not open {path_or_url}")
+            return
+        # Player now owns the media.  Drop our local refcount so we do not
+        # leak it.  The previous-file teardown already cleared
+        # ``self._media``, so we deliberately do NOT store the new media
+        # there: ``self._media`` is now reserved for the "I need to call
+        # release() myself" path (shutdown) and is not a duplicate ref.
+        try:
+            media.release()
+        except Exception:
+            log.debug("media.release after set_media failed for %s", path_or_url, exc_info=True)
         self._current_mrl = mrl
         self.mediaChanged.emit(mrl)
         self._player.play()
@@ -460,7 +531,11 @@ class VlcEngine(QObject):
 
     @Slot()
     def play(self) -> None:
-        if self._player is None or self._media is None or not self._current_mrl:
+        # ``self._media`` is no longer the "is a media loaded" indicator:
+        # ``open()`` releases its local handle as soon as the player takes
+        # ownership (the python-vlc contract), so ``self._media`` is always
+        # None mid-play. Use ``self._current_mrl`` instead.
+        if self._player is None or not self._current_mrl:
             return
         self._player.play()
         self._publish_state_now()
@@ -490,7 +565,7 @@ class VlcEngine(QObject):
         ``self._state``: the cache is refreshed by a 200 ms poll, so a click
         arriving between ticks used to be judged against a stale value.
         """
-        if self._player is None or self._media is None or not self._current_mrl:
+        if self._player is None or not self._current_mrl:
             return
         try:
             live = _VLC_STATE_MAP.get(_enum_int(self._player.get_state()), self._state)
