@@ -8,7 +8,7 @@ import Halcyon.Ui
 // on top of.
 //
 // Behaviour that matters:
-//   * 800 ms hold + 250 ms fade
+//   * 1500 ms hold + 250 ms fade
 //   * repeats RESET the timer instead of stacking
 //   * never covers the subtitle safe area (bottom 20%)
 //   * suppressed while a menu or panel has focus
@@ -60,7 +60,7 @@ Item {
     // "Resuming from 24:31" with a Start Over button (§P1.5, plan §6.2).
     //
     // Held far longer than the other pills because it is the only one that
-    // asks the user for a decision — 800 ms is enough to read a volume level,
+    // asks the user for a decision — 1500 ms is enough to read a volume level,
     // not enough to notice a button, move to it and click it.
     signal startOverClicked(string path)
 
@@ -91,6 +91,48 @@ Item {
     function hideResume() {
         resumeTimer.stop();
         resumePill.opacity = 0;
+    }
+
+    // ---------------------------------------------------- hide everything --
+    // Retire every toast, glyph and timer in one call. A mode switch stops the
+    // current player but usually does not open new media, so no mediaChanged
+    // arrives to retire the visible toasts — without this an old mode's
+    // Resume / Now Playing / volume pill keeps floating over the new mode
+    // until its own timer runs out.
+    //
+    // This is the single mode-change cleanup. Local, M3U and Web must not add
+    // their own: the OSD is one shared layer, so one call from the shell
+    // (Main.qml on App.activeModeChanged) covers every mode.
+    //
+    // Pills are unset visibly (visible: false) as well as faded (opacity: 0)
+    // so a pill — and its Start Over button — leaves the scene graph at once
+    // instead of lingering through the fade where it could still be clicked.
+    function clear() {
+        // Resume toast — and forget the path so a late Start Over click
+        // cannot rewind media that belongs to another mode.
+        resumeTimer.stop();
+        resumePill.opacity = 0;
+        resumePill.visible = false;
+        resumeHideDelay.stop();
+        root.resumePath = "";
+
+        // Status / Now Playing toast.
+        statusTimer.stop();
+        statusPill.opacity = 0;
+        statusPill.visible = false;
+        hideDelay.stop();
+
+        // Volume / level toast.
+        levelTimer.stop();
+        levelPill.opacity = 0;
+        levelPill.visible = false;
+        levelHide.stop();
+
+        // Centre action glyph.
+        bigTimer.stop();
+        bigGlyph.opacity = 0;
+        bigGlyph.visible = false;
+        bigHide.stop();
     }
 
     function _can() {

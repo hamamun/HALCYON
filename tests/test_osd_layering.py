@@ -120,3 +120,103 @@ def test_osd_clears_the_open_left_dock(window, gui_app):
         f"the OSD pill starts at scene x={pill_origin.x():.0f}, inside the "
         "300px playlist dock — it will be invisible in windowed mode"
     )
+
+
+# ---------------------------------------------------------------------------
+# Mode-switch cleanup — the OSD is shared by Local, M3U and Web. A mode switch
+# stops the current player but usually does not open new media, so no
+# mediaChanged arrives to retire a visible toast; without App.activeModeChanged
+# wiring, an old mode's Resume / Now Playing / volume pill keeps floating over
+# the new mode until its own timer runs out.
+# ---------------------------------------------------------------------------
+
+
+def _pill_containing(osd, marker_text):
+    """The direct child of the OSD that contains an item whose `text` property
+    equals marker_text — i.e. the pill (or centre glyph) itself. Walks up from
+    the text until the parent is the OSD root, which is where every pill lives.
+    """
+    from PySide6.QtQuick import QQuickItem
+
+    target = None
+    for child in osd.findChildren(QQuickItem):
+        if child.property("text") == marker_text:
+            target = child
+            break
+    assert target is not None, f"marker text {marker_text!r} not found in the OSD"
+
+    node = target
+    while node is not None and node.parent() is not osd:
+        node = node.parent()
+    assert node is not None and node is not osd, (
+        f"could not find the pill owning {marker_text!r}"
+    )
+    return node
+
+
+def test_mode_switch_clears_every_osd_pill(window, gui_app):
+    """The reported bug: a Local Resume toast must not survive into M3U.
+
+    Drives the real window; shows every kind of toast the OSD owns, emits
+    App.activeModeChanged (the signal App.setActiveMode fires), and asserts
+    each pill left the scene graph at once and its timers cannot resurrect it.
+    """
+    from PySide6.QtTest import QTest
+
+    osd = _find(window, "osdLayer")
+    stub = window._refs[1]           # the App/Player stand-in from the fixture
+
+    osd.showResume("/tmp/film.mkv", 867_000)
+    osd.show("Now Playing: film.mkv", "st-marker")
+    osd.showLevel("Volume 80%", "lv-marker", 0.8)
+    osd.showGlyph("bg-marker")
+
+    resume_pill = _pill_containing(osd, "Start Over")
+    status_pill = _pill_containing(osd, "Now Playing: film.mkv")
+    level_pill = _pill_containing(osd, "Volume 80%")
+    big_glyph = _pill_containing(osd, "bg-marker")
+
+    for pill in (resume_pill, status_pill, level_pill, big_glyph):
+        assert pill.property("visible") is True, "toast failed to show"
+    assert osd.property("resumePath") == "/tmp/film.mkv"
+
+    # App.setActiveMode() emits activeModeChanged; the shell clears the OSD.
+    stub.activeModeChanged.emit()
+
+    for pill in (resume_pill, status_pill, level_pill, big_glyph):
+        assert pill.property("visible") is False, (
+            "an OSD pill survived the mode switch"
+        )
+    assert osd.property("resumePath") == "", (
+        "the stored resume path survived the mode switch — Start Over could "
+        "rewind another mode's media"
+    )
+
+    # The fade-completion timers were stopped too: nothing may pop a pill back
+    # into the scene, and the fade runs out to opacity 0.
+    QTest.qWait(400)
+    for pill in (resume_pill, status_pill, level_pill, big_glyph):
+        assert pill.property("visible") is False
+        assert pill.property("opacity") == 0.0
+
+
+def test_new_toasts_work_after_a_mode_switch(window, gui_app):
+    """Test case 7: after switching modes, the new mode may show its own
+    correct Now Playing or Resume toast — the cleanup must not disable the OSD.
+    """
+    from PySide6.QtTest import QTest
+
+    osd = _find(window, "osdLayer")
+    stub = window._refs[1]
+
+    osd.show("Now Playing: old.mkv", "st-marker")
+    stub.activeModeChanged.emit()
+    assert _pill_containing(osd, "Now Playing: old.mkv").property("visible") is False
+
+    osd.show("Now Playing: channel.m3u8", "st-marker")
+    osd.showResume("/tmp/new.mkv", 12_000)
+    QTest.qWait(10)
+    assert _pill_containing(osd, "Now Playing: channel.m3u8").property("visible") is True
+    assert _pill_containing(osd, "Start Over").property("visible") is True
+    assert osd.property("resumePath") == "/tmp/new.mkv"
+

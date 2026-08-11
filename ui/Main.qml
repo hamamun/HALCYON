@@ -306,7 +306,7 @@ Shell {
         // seekTo and seekFraction show the same position pill as keyboard
         // seek (seekRelative above). Mouse scrubbing fires them repeatedly,
         // and the OSD's restart-not-stack timer turns that into a live
-        // readout (§6.2) that holds for 800 ms after the drag ends.
+        // readout (§6.2) that holds for 1500 ms after the drag ends.
         function seekTo(ms) {
             Player.seek(ms);
             _osdSeekTarget(ms);
@@ -986,6 +986,22 @@ Shell {
             osdLayer.show("Now Playing: " + window.shortToastName(name),
                           App.hasVideo ? Glyphs.video : Glyphs.music);
         }
+    }
+
+    // ======================================================================
+    // MODE-SWITCH CLEANUP — the shared OSD must not outlive its mode.
+    //
+    // A mode switch stops the current player but usually does not open new
+    // media, so no mediaChanged arrives to retire a visible toast. Without
+    // this, a Resume / Start Over, Now Playing, volume or glyph toast shown in
+    // Local mode keeps floating over M3U (and vice versa) until its own timer
+    // runs out — and Start Over would act on media that belongs to another
+    // mode. osdLayer.clear() retires every pill, timer and the stored resume
+    // path in one call. This is the only mode-change cleanup; the modes
+    // themselves must not add Local-only or M3U-only variants.
+    Connections {
+        target: App
+        function onActiveModeChanged() { osdLayer.clear() }
     }
 
     Connections {
