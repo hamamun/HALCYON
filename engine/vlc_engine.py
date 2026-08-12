@@ -1000,6 +1000,45 @@ class VlcEngine(QObject):
         """Video tracks of the current media, if any."""
         return _describe_tracks(getattr(self._player, "video_get_track_description", lambda: None)())
 
+    def video_size(self) -> tuple[int, int]:
+        """Decoded width × height of video track 0, or ``(0, 0)``.
+
+        ``video_get_size`` only knows the answer once the decoder is up,
+        which is later than the container parse. Auto uses this as the
+        fallback when metadata has not produced a resolution yet (§V.2).
+        """
+        player = self._player
+        if player is None:
+            return (0, 0)
+        getter = getattr(player, "video_get_size", None)
+        if not callable(getter):
+            return (0, 0)
+        try:
+            size = getter(0)
+        except Exception:
+            return (0, 0)
+        if not size:
+            return (0, 0)
+        try:
+            width, height = int(size[0] or 0), int(size[1] or 0)
+        except (TypeError, ValueError, IndexError):
+            return (0, 0)
+        return (max(0, width), max(0, height))
+
+    def video_fps(self) -> float:
+        """Live frame rate from libVLC, or ``0.0`` if not yet known."""
+        player = self._player
+        if player is None:
+            return 0.0
+        getter = getattr(player, "get_fps", None)
+        if not callable(getter):
+            return 0.0
+        try:
+            rate = float(getter() or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return rate if rate > 0.0 else 0.0
+
     def subtitle_tracks(self) -> list[tuple[int, str]]:
         return _describe_tracks(self._player.video_get_spu_description())
 

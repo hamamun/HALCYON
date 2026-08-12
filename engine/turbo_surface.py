@@ -51,11 +51,30 @@ def is_supported() -> bool:
     return sys.platform == "win32"
 
 
+# Win32 constants used only by the native-child helpers below.
+_GWL_EXSTYLE = -20
+_GWLP_WNDPROC = -4
+_WS_EX_LAYERED = 0x00080000
+_WS_EX_TRANSPARENT = 0x00000020
+_WM_ERASEBKGND = 0x0014
+_BLACK_BRUSH = 4
+
+
+def _win32_long_funcs():
+    """Return ``(get_long, set_long)`` for the pointer-width of this process."""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        return user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
+    return user32.GetWindowLongW, user32.SetWindowLongW
+
+
 def _harden_hwnd(window) -> None:
     """Strip layered / click-through styles from *this* HWND only.
 
     A child that inherited ``WS_EX_LAYERED`` from Halcyon's transparent
-    shell is see-through even after ``QWindow.setColor(black)``. Class-long
+    shell is see-through even after we fill it black. Class-long
     background-brush changes are deliberately avoided: Qt QWindows share a
     window class, and painting every Qt window black would be worse than
     the hole we are closing.
@@ -63,25 +82,132 @@ def _harden_hwnd(window) -> None:
     if sys.platform != "win32":
         return
     try:
+        hwnd = int(window.winId())
+        if not hwnd:
+            return
+        get_long, set_long = _win32_long_funcs()
+        style = int(get_long(hwnd, _GWL_EXSTYLE) or 0)
+        set_long(hwnd, _GWL_EXSTYLE, style & ~_WS_EX_LAYERED & ~_WS_EX_TRANSPARENT)
+    except Exception:
+        log.debug("Turbo: could not harden the native child HWND", exc_info=True)
+
+
+def _fill_hwnd_black(hwnd: int) -> None:
+    """Paint this HWND's client area black once. Best-effort."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
         import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        hdc = user32.GetDC(hwnd)
+        if not hdc:
+            return
+        try:
+            rect = wintypes.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(rect))
+            user32.FillRect(hdc, ctypes.byref(rect), gdi32.GetStockObject(_BLACK_BRUSH))
+        finally:
+            user32.ReleaseDC(hwnd, hdc)
+    except Exception:
+        log.debug("Turbo: could not fill the native child black", exc_info=True)
+
+
+def _keep_hwnd_black(window) -> None:
+    """Keep the letterbox black after Windows erases the background.
+
+    ``QWindow`` has no ``setColor`` (that API lives on ``QQuickWindow``).
+    Calling it crashed every Turbo start and forced Soft. We subclass *this*
+    HWND's WndProc only, fill on ``WM_ERASEBKGND``, and leave Qt's shared
+    window class alone.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
 
         hwnd = int(window.winId())
         if not hwnd:
             return
+
         user32 = ctypes.windll.user32
-        gwl_exstyle = -20
-        ws_ex_layered = 0x00080000
-        ws_ex_transparent = 0x00000020
+        gdi32 = ctypes.windll.gdi32
+        get_long, set_long = _win32_long_funcs()
+
+        # WindowContainer reparenting can replace the WndProc. If ours is
+        # still installed, just refill; otherwise hook again on top of
+        # whatever Qt put back.
+        ours = getattr(window, "_turbo_wndproc", None)
+        if ours is not None:
+            try:
+                ours_addr = int(ctypes.cast(ours, ctypes.c_void_p).value or 0)
+                current = int(get_long(hwnd, _GWLP_WNDPROC) or 0)
+            except Exception:
+                ours_addr = current = 0
+            if ours_addr and current == ours_addr:
+                _fill_hwnd_black(hwnd)
+                return
+            window._turbo_wndproc = None
+
         if ctypes.sizeof(ctypes.c_void_p) == 8:
-            get_long = user32.GetWindowLongPtrW
-            set_long = user32.SetWindowLongPtrW
+            lresult = ctypes.c_longlong
         else:
-            get_long = user32.GetWindowLongW
-            set_long = user32.SetWindowLongW
-        style = int(get_long(hwnd, gwl_exstyle) or 0)
-        set_long(hwnd, gwl_exstyle, style & ~ws_ex_layered & ~ws_ex_transparent)
+            lresult = ctypes.c_long
+        wndproc_type = ctypes.WINFUNCTYPE(
+            lresult, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        )
+        prev = get_long(hwnd, _GWLP_WNDPROC)
+        user32.CallWindowProcW.restype = lresult
+        user32.CallWindowProcW.argtypes = [
+            ctypes.c_void_p,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.DefWindowProcW.restype = lresult
+
+        @wndproc_type
+        def wndproc(hwnd_msg, msg, wparam, lparam):
+            if msg == _WM_ERASEBKGND and wparam:
+                rect = wintypes.RECT()
+                user32.GetClientRect(hwnd_msg, ctypes.byref(rect))
+                user32.FillRect(wparam, ctypes.byref(rect), gdi32.GetStockObject(_BLACK_BRUSH))
+                return 1
+            if prev:
+                return user32.CallWindowProcW(ctypes.c_void_p(int(prev)), hwnd_msg, msg, wparam, lparam)
+            return user32.DefWindowProcW(hwnd_msg, msg, wparam, lparam)
+
+        # Hard ref: a collected trampoline would crash the next WM_ERASEBKGND.
+        window._turbo_wndproc = wndproc
+        window._turbo_prev_wndproc = prev
+        set_long(hwnd, _GWLP_WNDPROC, ctypes.cast(wndproc, ctypes.c_void_p).value)
+        _fill_hwnd_black(hwnd)
     except Exception:
-        log.debug("Turbo: could not harden the native child HWND", exc_info=True)
+        log.debug("Turbo: could not keep the native child black", exc_info=True)
+        try:
+            _fill_hwnd_black(int(window.winId()))
+        except Exception:
+            pass
+
+
+def _restore_wndproc(window) -> None:
+    """Put the original WndProc back before the HWND is destroyed."""
+    prev = getattr(window, "_turbo_prev_wndproc", None)
+    if prev is None or sys.platform != "win32":
+        return
+    try:
+        hwnd = int(window.winId())
+        if hwnd:
+            _get_long, set_long = _win32_long_funcs()
+            set_long(hwnd, _GWLP_WNDPROC, prev)
+    except Exception:
+        log.debug("Turbo: could not restore the native WndProc", exc_info=True)
+    window._turbo_prev_wndproc = None
+    window._turbo_wndproc = None
 
 
 class TurboSurface(QObject):
@@ -174,6 +300,7 @@ class TurboSurface(QObject):
     def _reharden(self) -> None:
         if self._window is not None:
             _harden_hwnd(self._window)
+            _keep_hwnd_black(self._window)
 
     def _create_child_window(self):
         """A hidden, frameless ``QWindow`` with a real platform handle.
@@ -182,10 +309,27 @@ class TurboSurface(QObject):
         libVLC has something to render into while nothing appears on screen.
         ``WindowContainer`` reparents and shows it from QML.
         """
-        from PySide6.QtGui import QWindow  # local: keeps QtGui out of import time
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QWindow
 
-        window = QWindow()
+        # ``QWindow.setColor`` does not exist (it is a ``QQuickWindow`` API).
+        # The previous call raised AttributeError on every Turbo start and
+        # the engine fell back to Soft. Colour lives on this subclass; the
+        # native fill / WndProc is what actually paints the HWND.
+        class TurboChildWindow(QWindow):
+            def __init__(self) -> None:
+                super().__init__()
+                self._turbo_color = QColor(0, 0, 0)
+
+            def setColor(self, color) -> None:  # noqa: N802 - QQuickWindow's name
+                self._turbo_color = (
+                    QColor(color) if color is not None else QColor(0, 0, 0)
+                )
+
+            def color(self):
+                return QColor(self._turbo_color)
+
+        window = TurboChildWindow()
         window.setFlags(Qt.FramelessWindowHint)
         # Opaque black, not the default clear/transparent colour. Halcyon's
         # shell is itself a transparent (layered) window for rounded corners.
@@ -194,14 +338,19 @@ class TurboSurface(QObject):
         # — the letterbox between the title bar and the picture. VLC only
         # presents the video rectangle; this colour fills the rest of the
         # HWND so the gap is black, not File Explorer.
-        from PySide6.QtGui import QColor
-
         window.setColor(QColor(0, 0, 0))
         window.setOpacity(1.0)
+        try:
+            fmt = window.format()
+            fmt.setAlphaBufferSize(0)
+            window.setFormat(fmt)
+        except Exception:
+            log.debug("Turbo: could not force an opaque surface format", exc_info=True)
         # Never call show(). See the module docstring: an unparented visible
         # QWindow is exactly the "outside video window" §V.3 forbids.
         window.create()
         _harden_hwnd(window)
+        _keep_hwnd_black(window)
         return window
 
     @staticmethod
@@ -215,10 +364,9 @@ class TurboSurface(QObject):
         future libVLC path that creates its own window plugs in here without
         touching the rest of the engine.
         """
-        from PySide6.QtGui import QWindow
-
         if not handle:
             return None
+        from PySide6.QtGui import QWindow
         try:
             return QWindow.fromWinId(int(handle))
         except Exception:
@@ -259,6 +407,7 @@ class TurboSurface(QObject):
         self._window = None
         self._handle = 0
         if window is not None:
+            _restore_wndproc(window)
             try:
                 window.setParent(None)
             except Exception:

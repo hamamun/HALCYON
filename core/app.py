@@ -466,9 +466,12 @@ class AppController(QObject):
 
         Parsed out of the same rows the Info panel shows, so there is one
         metadata reader rather than a second libVLC probe: "3840×2160" and
-        "59.9 fps". Anything unreadable returns zeros, which
-        :func:`core.video_mode.resolve` treats as "not demanding" — the safe
-        direction (§V.2).
+        "59.9 fps". When the container parse has not produced a size yet
+        (the normal first second of a file), fall back to the live player
+        (``video_get_size`` / ``get_fps``) so Auto can still promote a 4K
+        file once the decoder is up. Anything unreadable returns zeros,
+        which :func:`core.video_mode.resolve` treats as "not demanding" —
+        the safe direction (§V.2).
         """
         width = height = fps = 0.0
         rows = []
@@ -477,20 +480,71 @@ class AppController(QObject):
         except Exception:
             log.debug("could not read video details for the video-mode decision",
                       exc_info=True)
-            return (0.0, 0.0, 0.0)
+            rows = []
         for row in rows:
             try:
                 label = str(row.get("label", "")).strip().lower()
                 value = str(row.get("value", "")).strip()
             except AttributeError:
                 continue
-            if label == "resolution" and "\u00d7" in value:
-                left, _, right = value.partition("\u00d7")
-                width = _as_float(left)
-                height = _as_float(right)
+            if label == "resolution":
+                parsed_w, parsed_h = _parse_resolution(value)
+                if parsed_w and parsed_h:
+                    width, height = parsed_w, parsed_h
             elif label == "frame rate":
                 fps = _as_float(value.split()[0] if value else "")
+        if not (width and height):
+            width, height = self._engine_video_size()
+        if not fps:
+            fps = self._engine_video_fps()
         return (width, height, fps)
+
+    def _engine_video_size(self) -> tuple[float, float]:
+        probe = getattr(self._engine, "video_size", None)
+        if not callable(probe):
+            return (0.0, 0.0)
+        try:
+            size = probe()
+        except Exception:
+            return (0.0, 0.0)
+        if not size:
+            return (0.0, 0.0)
+        try:
+            return (_as_float(size[0]), _as_float(size[1]))
+        except (TypeError, ValueError, IndexError):
+            return (0.0, 0.0)
+
+    def _engine_video_fps(self) -> float:
+        probe = getattr(self._engine, "video_fps", None)
+        if not callable(probe):
+            return 0.0
+        try:
+            return _as_float(probe())
+        except Exception:
+            return 0.0
+
+    def _maybe_resolve_auto_from_geometry(self) -> None:
+        """Auto's second/third chance, once width×height is actually known.
+
+        Called from the metadata parse *and* from the first Playing tick:
+        libVLC often has no container geometry on open, and
+        ``video_get_size`` only answers after the decoder starts. Without
+        this, Auto stayed on Soft for every demanding file whose Info rows
+        landed late — which is most of them.
+        """
+        if not hasattr(self, "_video_mode"):
+            return
+        if self._video_mode != video_policy.AUTO:
+            return
+        mrl = getattr(self._engine, "currentMedia", "") or ""
+        width, height, _fps = self._media_geometry()
+        if not (width and height):
+            return
+        if mrl and mrl == self._video_mode_media:
+            return
+        self._video_mode_media = mrl
+        self._schedule_video_mode()
+        self.videoModeChanged.emit()
 
     def _schedule_video_mode(self) -> None:
         """Apply the route on the next event-loop turn.
@@ -572,17 +626,7 @@ class AppController(QObject):
         # Audio-only is not an Auto-specific question — check it first, before
         # the Auto guard below returns.
         self._note_video_presence()
-        if self._video_mode != video_policy.AUTO:
-            return
-        mrl = getattr(self._engine, "currentMedia", "") or ""
-        width, height, _fps = self._media_geometry()
-        if not (width and height):
-            return                      # still unknown: stay on Soft
-        if mrl and mrl == self._video_mode_media:
-            return                      # already decided for this media
-        self._video_mode_media = mrl
-        self._schedule_video_mode()
-        self.videoModeChanged.emit()
+        self._maybe_resolve_auto_from_geometry()
 
     # -------------------------------------------------------------- playlist ---
     @Slot(list)
@@ -1005,6 +1049,11 @@ class AppController(QObject):
         """
         from engine.vlc_engine import State
 
+        # Auto's third chance: once the decoder is up, video_get_size knows
+        # the real geometry even when the container parse did not.
+        if state == State.Playing:
+            self._maybe_resolve_auto_from_geometry()
+
         if state != State.Playing or not self._force_subs_off_pending:
             return
         self._force_subs_off_pending = False
@@ -1406,6 +1455,16 @@ def _as_float(text: object) -> float:
         return float(str(text).strip())
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parse_resolution(value: object) -> tuple[float, float]:
+    """Accept ``3840×2160``, ``3840x2160`` and ``3840 x 2160``."""
+    text = str(value or "").strip().replace("\u00d7", "x").replace("X", "x")
+    if "x" not in text:
+        return (0.0, 0.0)
+    left, _, right = text.partition("x")
+    height_token = right.strip().split()[0] if right.strip() else ""
+    return (_as_float(left), _as_float(height_token))
 
 
 def _normalise(raw) -> str:

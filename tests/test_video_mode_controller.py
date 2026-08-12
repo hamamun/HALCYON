@@ -193,6 +193,52 @@ def test_local_auto_upgrades_to_turbo_for_demanding_media(qt_application):
     assert controller.effectiveVideoMode == "turbo"
 
 
+def test_local_auto_upgrades_from_live_player_size(qt_application):
+    """§V.2: Auto must not depend on the Info-panel parse alone.
+
+    libVLC often has no container geometry on open. Once the decoder is
+    up, ``video_get_size`` knows the real picture — that is enough to
+    promote a 4K file to Turbo even if metadata never filled the rows.
+    """
+    from engine.vlc_engine import State
+
+    controller, engine, _metadata, _ = _controller(qt_application)
+    engine.currentMedia = "file:///uhd.mkv"
+    size = {"wh": (0, 0), "fps": 0.0}
+    engine.video_size = lambda: size["wh"]
+    engine.video_fps = lambda: size["fps"]
+
+    controller._on_media_changed("file:///uhd.mkv")
+    _settle(qt_application)
+    assert engine.videoRoute == vm.SOFT
+
+    size["wh"] = (3840, 2160)
+    size["fps"] = 60.0
+    engine.stateChanged.emit(int(State.Playing))
+    _settle(qt_application)
+
+    assert engine.videoRoute == vm.TURBO
+    assert controller.effectiveVideoMode == "turbo"
+
+
+def test_local_auto_reads_ascii_x_resolution(qt_application):
+    """Info rows sometimes use 'x' rather than the multiplication sign."""
+    controller, engine, metadata, _ = _controller(qt_application)
+    engine.currentMedia = "file:///uhd.mkv"
+
+    controller._on_media_changed("file:///uhd.mkv")
+    metadata.videoDetails = [
+        {"label": "Resolution", "value": "3840x2160"},
+        {"label": "Frame rate", "value": "60 fps"},
+    ]
+    metadata.hasVideo = True
+    metadata.hasAudio = True
+    metadata.changed.emit()
+    _settle(qt_application)
+
+    assert engine.videoRoute == vm.TURBO
+
+
 def test_forced_turbo_needs_no_metadata(qt_application):
     controller, engine, metadata, _ = _controller(qt_application, stored="turbo")
     engine.currentMedia = "file:///anything.mp4"

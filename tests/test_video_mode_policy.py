@@ -102,6 +102,17 @@ def test_unknown_geometry_is_never_demanding(width, height, fps):
 # ---------------------------------------------------------------------------
 # resolve() — the whole §V.2 table
 # ---------------------------------------------------------------------------
+def test_resolution_strings_parse_both_glyphs():
+    """Info rows use ×; some libVLC builds / locales emit a plain x."""
+    from core.app import _parse_resolution
+
+    assert _parse_resolution("3840\u00d72160") == (3840.0, 2160.0)
+    assert _parse_resolution("3840x2160") == (3840.0, 2160.0)
+    assert _parse_resolution("3840 x 2160") == (3840.0, 2160.0)
+    assert _parse_resolution("") == (0.0, 0.0)
+    assert _parse_resolution("unknown") == (0.0, 0.0)
+
+
 def test_local_auto_picks_turbo_for_demanding_media():
     assert vm.resolve("auto", turbo_allowed=True, width=3840, height=2160, fps=60) == "turbo"
 
