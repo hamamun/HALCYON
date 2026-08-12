@@ -18,10 +18,14 @@ Item {
     readonly property real fixedWidth: width
     readonly property real fixedHeight: height
 
-    // Live bindings from Player — safe when Player null at startup
+    // Live bindings from Player — safe when Player null at startup.
+    // `buffered` additionally checks the property exists: a missing engine
+    // property reads as undefined and Qt logs "Unable to assign [undefined]
+    // to double" with a dead binding (§M.4), so degrade to 0.0 instead.
     property var player: typeof Player !== "undefined" ? Player : null
     readonly property real position: player ? player.position : 0.0 // 0..1
-    readonly property real buffered: player ? player.buffered : 0.0
+    readonly property real buffered:
+        player && player.buffered !== undefined ? player.buffered : 0.0
     readonly property int duration: player ? player.duration : 0
     readonly property bool isPlaying: player ? player.isPlaying : false
     readonly property int volume: player ? player.volume : 0

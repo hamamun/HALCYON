@@ -216,6 +216,10 @@ class VlcEngine(QObject):
     endReached = Signal()
     errorOccurred = Signal(str)
     buffering = Signal(float)           # 0 - 100
+    #: Fraction (0..1) of the current media buffered, for the seek bar's
+    #: buffer fill. Kept as a Q_PROPERTY too: MiniBar binds ``player.buffered``
+    #: and an undefined property is a dead QML binding (§M.4).
+    bufferedChanged = Signal(float)
     tracksChanged = Signal()
     #: The effective video route actually in force — "soft" or "turbo" (§V.2).
     #: Emitted after every successful switch *and* after a Turbo failure has
@@ -231,6 +235,7 @@ class VlcEngine(QObject):
     _video_route = video_policy.SOFT
     _turbo_surface = None
     _media_options: tuple = ()
+    _buffered = 0.0
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -265,6 +270,7 @@ class VlcEngine(QObject):
         self._duration = 0
         self._position = 0.0
         self._time = 0
+        self._buffered = 0.0
         self._volume = 80
         self._muted = False
         self._rate = 1.0
@@ -351,9 +357,17 @@ class VlcEngine(QObject):
 
     def _on_buffering(self, event) -> None:
         try:
-            self.buffering.emit(float(event.u.new_cache))
+            new_cache = float(event.u.new_cache)
         except Exception:
-            pass
+            return
+        # libVLC reports the cache as a percentage (0..100). Both consumers
+        # want a fraction: M3U's hairline (via `buffering`) and the seek
+        # bars' buffer fill (via `buffered`), which multiply it by a width.
+        buffered = max(0.0, min(1.0, new_cache / 100.0))
+        if abs(buffered - self._buffered) > 1e-4:
+            self._buffered = buffered
+            self.bufferedChanged.emit(buffered)
+        self.buffering.emit(new_cache)
 
     def _on_length(self, _event) -> None:
         pass  # picked up by the poll
@@ -629,6 +643,9 @@ class VlcEngine(QObject):
         if self._duration != 0:
             self._duration = 0
             self.durationChanged.emit(0)
+        if self._buffered != 0.0:
+            self._buffered = 0.0
+            self.bufferedChanged.emit(0.0)
 
     @Slot()
     def stop(self) -> None:
@@ -1228,6 +1245,11 @@ class VlcEngine(QObject):
     @Property(float, notify=positionChanged)
     def position(self) -> float:
         return self._position
+
+    @Property(float, notify=bufferedChanged)
+    def buffered(self) -> float:
+        """Fraction (0..1) of the media buffered. 0.0 when not playing."""
+        return self._buffered
 
     @Property(int, notify=volumeChanged)
     def volume(self) -> int:
