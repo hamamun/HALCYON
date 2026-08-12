@@ -225,6 +225,18 @@ def test_turbo_only_exists_while_the_engine_says_it_is_running():
     )
 
 
+def test_transparent_quick_windows_request_an_alpha_buffer_before_startup():
+    """The Turbo overlay's D3D swapchain and QQuickWindow must agree on alpha."""
+    bootstrap = _read(ROOT / "main.py")
+    alpha_policy = bootstrap.index("QQuickWindow.setDefaultAlphaBuffer(True)")
+    app_creation = bootstrap.index("app = QGuiApplication(argv)")
+    assert alpha_policy < app_creation, (
+        "QQuickWindow's alpha policy must be set before any window can be "
+        "created, otherwise TurboChromeWindow gets an incompatible swapchain"
+    )
+    assert "surface_format.setAlphaBufferSize(8)" in bootstrap
+
+
 def test_the_chrome_moves_into_a_transparent_overlay_window():
     """QML siblings cannot paint over a native child window (§V.3)."""
     chrome = _read(TURBO_CHROME_QML)
