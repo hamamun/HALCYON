@@ -19,7 +19,8 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from core import modes as mode_registry
 from core import paths
-from core.media_types import is_media_path, is_subtitle_path
+from core import video_mode as video_policy
+from core.media_types import AUDIO_EXTENSIONS, is_media_path, is_subtitle_path
 from core.mode_api import ModeSpec
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,10 @@ class ModeList(QObject):
             # shared shell continues to render the old chrome.
             "panelEnabled": spec.panel_enabled,
             "keepStageAlive": spec.keep_stage_alive,
+            # Local video modes (§V.1): the Settings dropdown is enabled only
+            # where Turbo is actually selectable. M3U shows it disabled on
+            # "Soft"; Web disables Video mode entirely (usesPlayer is false).
+            "turboAllowed": spec.turbo_allowed,
         }
 
 
@@ -86,6 +91,10 @@ class AppController(QObject):
     tracksChanged = Signal()
     resumePrompted = Signal(str, int)
     mediaNameChanged = Signal()
+    #: The selected video mode (auto/soft/turbo) or the effective route
+    #: (soft/turbo) changed — §V.2. The Settings dropdown and the Turbo stage
+    #: both bind to this rather than polling the engine.
+    videoModeChanged = Signal()
 
     def __init__(
         self,
@@ -152,11 +161,49 @@ class AppController(QObject):
         #: next media, so a resume-from-pause never wipes the user's selection.
         self._force_subs_off_pending: bool = False
 
+        #: The user's choice from the Settings dropdown (§V.1). "auto" until a
+        #: profile says otherwise; a legacy profile has already been migrated
+        #: by core.settings, so nothing here has to know about turboMode.
+        self._video_mode = video_policy.normalise(
+            settings.get("playback.videoMode", video_policy.AUTO)
+        )
+        #: Guards the Auto re-resolution against thrashing: Auto is evaluated
+        #: once per media, when metadata for that media is available.
+        self._video_mode_media = ""
+        #: Last known answer to "does the current media have a video track",
+        #: as the same tri-state :func:`core.video_mode.resolve` takes: True,
+        #: False, or None for "not established yet". Cached so a change — the
+        #: moment a track list or a parse turns "unknown" into "audio-only" —
+        #: can re-resolve the route exactly once instead of on every one of
+        #: the many tracksChanged/metadata signals a single open produces.
+        self._video_mode_has_video: bool | None = None
+        #: True while Mini Mode is active. Mini deliberately runs on Soft
+        #: (§M / §V.4): a 460×44 bar has nowhere to put a native child window,
+        #: and an orphaned hidden HWND is exactly what the failure rule
+        #: forbids. The selected mode is re-resolved on the way back out.
+        self._mini_mode = False
+        #: Re-entrancy guards for the route switch — see _schedule_video_mode.
+        self._video_mode_pending = False
+        self._video_mode_applying = False
+
         engine.mediaChanged.connect(self._on_media_changed)
         engine.endReached.connect(self._on_end_reached)
         engine.timeChanged.connect(self._lyrics.update_position)
         engine.tracksChanged.connect(self._refresh_tracks)
         engine.stateChanged.connect(self._on_state_changed)
+        # Auto needs the media's geometry, which libVLC parses asynchronously
+        # (core/metadata.py retries for ~2 s). Re-resolving when metadata lands
+        # is what lets a 4K60 file reach Turbo instead of being judged on the
+        # empty first read — and the "unknown -> Soft" rule means the interim
+        # answer is always the safe one.
+        changed = getattr(metadata, "changed", None)
+        if changed is not None and hasattr(changed, "connect"):
+            changed.connect(self._on_metadata_changed)
+        # The engine reports its *actual* route, including a Turbo attempt that
+        # failed and fell back (§V.4). Mirrored so QML shows the truth.
+        route_changed = getattr(engine, "videoRouteChanged", None)
+        if route_changed is not None and hasattr(route_changed, "connect"):
+            route_changed.connect(lambda _route: self.videoModeChanged.emit())
 
     # ---------------------------------------------------------- registration ---
     def register_context(self, mode_id: str, context: QObject) -> None:
@@ -220,7 +267,322 @@ class AppController(QObject):
         self._settings.set("ui.mode", mode_id)
         self.activeModeChanged.emit()
         self.modeWindowTitleChanged.emit()
+        # The new mode may not be allowed to use Turbo (M3U, Web). Re-resolving
+        # here is what enforces "M3U is always Soft regardless of the stored
+        # Local preference" (§V.2) without either mode knowing it exists.
+        self._video_mode_media = ""
+        self._schedule_video_mode()
         log.info("mode -> %s", mode_id)
+
+    # -------------------------------------------------------- video mode ---
+    #
+    # One setting, one resolver, one place that talks to the engine (§V.2).
+    # Everything else — the Settings dropdown, the stage, Mini Mode — reads
+    # these properties or calls setVideoMode(); none of them decides anything.
+
+    @Property(str, notify=videoModeChanged)
+    def videoMode(self) -> str:  # noqa: N802 - QML-facing
+        """The user's selection: "auto", "soft" or "turbo"."""
+        return self._video_mode
+
+    @Property(str, notify=videoModeChanged)
+    def effectiveVideoMode(self) -> str:  # noqa: N802 - QML-facing
+        """What the engine is actually doing: "soft" or "turbo".
+
+        Reads the engine when it can, because a Turbo attempt that failed has
+        already fallen back and the dropdown must not claim otherwise.
+        """
+        route = getattr(self._engine, "videoRoute", None)
+        if isinstance(route, str) and route in video_policy.EFFECTIVE_MODES:
+            return route
+        return self._resolve_video_mode()
+
+    @Property(bool, notify=activeModeChanged)
+    def videoModeEnabled(self) -> bool:  # noqa: N802 - QML-facing
+        """Is the Video mode dropdown interactive in the active mode?
+
+        Local: yes. M3U: no — visible, disabled, showing Soft. Web: no, and the
+        whole row is disabled because Web has no player at all (§V.1).
+        """
+        spec = mode_registry.find(self._active_mode)
+        return bool(spec is not None and spec.uses_player and spec.turbo_allowed)
+
+    @Property(bool, notify=activeModeChanged)
+    def videoModeAvailable(self) -> bool:  # noqa: N802 - QML-facing
+        """Does Video mode mean anything at all here? False in Web (§V.1)."""
+        spec = mode_registry.find(self._active_mode)
+        return bool(spec is not None and spec.uses_player)
+
+    @Property(str, notify=videoModeChanged)
+    def videoModeBadge(self) -> str:  # noqa: N802 - QML-facing
+        """Title-bar badge text: "AT", "AS", "T" or "S" (§V.7).
+
+        Always the route actually in use, so a Turbo selection that fell back
+        still reads "S".
+        """
+        return video_policy.badge(
+            self._video_mode,
+            self.effectiveVideoMode,
+            turbo_allowed=self.videoModeEnabled,
+        )
+
+    @Property(str, notify=videoModeChanged)
+    def videoModeTooltip(self) -> str:  # noqa: N802 - QML-facing
+        """The badge's hover text — the route plus the reason for it (§V.7)."""
+        engine = self._engine
+        available = True
+        probe = getattr(engine, "turbo_available", None)
+        if callable(probe):
+            try:
+                available = bool(probe())
+            except Exception:  # pragma: no cover - defensive, never blocks UI
+                log.debug("turbo_available() failed", exc_info=True)
+        return video_policy.describe(
+            self._video_mode,
+            self.effectiveVideoMode,
+            turbo_allowed=self.videoModeEnabled,
+            # The cached answer, not a fresh probe: the tooltip must explain
+            # the route that is actually running, and that route was resolved
+            # from this value.
+            has_video=getattr(self, "_video_mode_has_video", None),
+            mini_mode=bool(getattr(self, "_mini_mode", False)),
+            turbo_available=available,
+        )
+
+    @Slot(str)
+    def setVideoMode(self, mode: str) -> None:  # noqa: N802 - QML-facing
+        """The dropdown's one entry point. Persists, then applies."""
+        value = video_policy.normalise(mode)
+        if value != self._video_mode:
+            self._video_mode = value
+            self._settings.set("playback.videoMode", value)
+            log.info("video mode -> %s", value)
+        self._video_mode_media = ""
+        self._schedule_video_mode()
+        self.videoModeChanged.emit()
+
+    @Slot(result="QVariant")
+    def turboWindow(self):  # noqa: N802 - QML-facing
+        """The native child ``QWindow`` for QML's ``WindowContainer``, or None.
+
+        A slot returning ``QVariant`` rather than a typed Property: shiboken
+        cannot build a ``QWindow*`` property (``Invalid property type``), and
+        the value is not a binding source anyway — the stage fetches it once
+        when ``effectiveVideoMode`` becomes "turbo" and clears it on the way
+        back to Soft.
+        """
+        return getattr(self._engine, "turbo_window", None)
+
+    @Slot(str)
+    def reportTurboFailure(self, reason: str = "") -> None:  # noqa: N802 - QML-facing
+        """QML's channel for a *late* Turbo failure — §V.4.
+
+        The container could not adopt the child window, or the embedded surface
+        stopped drawing. The engine tears the native route down and continues
+        the same media on Soft; nothing here decides anything.
+        """
+        handler = getattr(self._engine, "turbo_failed", None)
+        if callable(handler):
+            try:
+                handler(str(reason or "reported by the shell"))
+            except Exception:
+                log.debug("Turbo failure handling failed", exc_info=True)
+        self.videoModeChanged.emit()
+
+    @Slot(bool)
+    def setMiniMode(self, active: bool) -> None:  # noqa: N802 - QML-facing
+        """Mini Mode forces Soft while it is on, and re-resolves on the way out.
+
+        The compact bar has no stage to embed a native child window in, so a
+        Turbo child would be either orphaned or invisible — both are the thing
+        §V.4 forbids. On return the *selected* mode (including Auto resolving
+        to Turbo) is applied again, with the usual Soft fallback.
+        """
+        active = bool(active)
+        if active == self._mini_mode:
+            return
+        self._mini_mode = active
+        self._video_mode_media = ""
+        self._schedule_video_mode()
+        self.videoModeChanged.emit()
+
+    def _resolve_video_mode(self) -> str:
+        """Selection + active mode + video track + geometry -> "soft"/"turbo"."""
+        if self._mini_mode:
+            return video_policy.SOFT
+        spec = mode_registry.find(self._active_mode)
+        allowed = bool(spec is not None and spec.uses_player and spec.turbo_allowed)
+        width, height, fps = self._media_geometry()
+        return video_policy.resolve(
+            self._video_mode,
+            turbo_allowed=allowed,
+            has_video=self._current_has_video(),
+            width=width,
+            height=height,
+            fps=fps,
+        )
+
+    def _current_has_video(self) -> bool | None:
+        """Does the playing media have a video track? True / False / unknown.
+
+        Three sources, cheapest first, and they answer at different times:
+
+        1. ``self._video_tracks`` — the controller's own track list, the same
+           one behind the public :attr:`hasVideo` property. Authoritative once
+           libVLC has selected tracks, which is a moment *after* the open.
+        2. ``Metadata.hasVideo`` — the container parse. Often lands first on a
+           local file and is what makes an audio file resolve to Soft on the
+           very first pass.
+        3. The file extension. Not a track list, but a ``.flac`` has no video
+           track and never will, and knowing that before either async source
+           reports means an audio file is never briefly routed to Turbo.
+
+        Only a *positive* "no video" from (2) or (3) is reported as False; when
+        nothing knows anything the answer is ``None`` ("not yet"), which
+        :func:`core.video_mode.resolve` deliberately does not treat as Soft.
+        """
+        if self._video_tracks:
+            return True
+        metadata = getattr(self, "_metadata", None)
+        meta_has_video = getattr(metadata, "hasVideo", None)
+        meta_has_audio = getattr(metadata, "hasAudio", None)
+        if meta_has_video is True:
+            return True
+        # Metadata reports False both for "parsed: audio only" and for "nothing
+        # read yet", so it only counts as a real answer once the parse has
+        # found *something* — an audio track, or any video rows.
+        if meta_has_video is False and meta_has_audio is True:
+            return False
+        try:
+            path = self._current_path()
+        except Exception:
+            return None
+        if path and Path(path).suffix.lower() in AUDIO_EXTENSIONS:
+            return False
+        return None
+
+    def _media_geometry(self) -> tuple[float, float, float]:
+        """Width, height and frame rate of the current media, or zeros.
+
+        Parsed out of the same rows the Info panel shows, so there is one
+        metadata reader rather than a second libVLC probe: "3840×2160" and
+        "59.9 fps". Anything unreadable returns zeros, which
+        :func:`core.video_mode.resolve` treats as "not demanding" — the safe
+        direction (§V.2).
+        """
+        width = height = fps = 0.0
+        rows = []
+        try:
+            rows = list(getattr(self._metadata, "videoDetails", []) or [])
+        except Exception:
+            log.debug("could not read video details for the video-mode decision",
+                      exc_info=True)
+            return (0.0, 0.0, 0.0)
+        for row in rows:
+            try:
+                label = str(row.get("label", "")).strip().lower()
+                value = str(row.get("value", "")).strip()
+            except AttributeError:
+                continue
+            if label == "resolution" and "\u00d7" in value:
+                left, _, right = value.partition("\u00d7")
+                width = _as_float(left)
+                height = _as_float(right)
+            elif label == "frame rate":
+                fps = _as_float(value.split()[0] if value else "")
+        return (width, height, fps)
+
+    def _schedule_video_mode(self) -> None:
+        """Apply the route on the next event-loop turn.
+
+        **Load-bearing.** Switching route re-opens the current media inside the
+        engine, and the two places that want a re-resolution — ``mediaChanged``
+        and the metadata ``changed`` signal — are themselves emitted from
+        inside ``engine.open()`` / ``metadata.load()``. Applying synchronously
+        there would re-enter ``open()`` while the outer call is still running,
+        and the outer call would then finish against the inner call's player
+        state. Deferring by one turn makes the switch a clean, separate
+        operation, which is also what keeps the resume seek attached to the
+        right open.
+        """
+        if self._video_mode_pending:
+            return
+        self._video_mode_pending = True
+        QTimer.singleShot(0, self._apply_video_mode_deferred)
+
+    def _apply_video_mode_deferred(self) -> None:
+        self._video_mode_pending = False
+        self._apply_video_mode()
+        # The badge reports the achieved route, and an engine without a
+        # videoRouteChanged signal would otherwise leave it showing the
+        # previous media's answer.
+        self.videoModeChanged.emit()
+
+    def _apply_video_mode(self) -> None:
+        """Tell the engine which route to use. Failures are the engine's job.
+
+        ``set_video_route`` returns the route it actually achieved: a Turbo
+        attempt that failed has already cleaned up and continued the same media
+        on Soft (§V.4), so there is nothing to retry here.
+        """
+        if self._video_mode_applying:
+            return
+        target = self._resolve_video_mode()
+        setter = getattr(self._engine, "set_video_route", None)
+        if not callable(setter):
+            return
+        self._video_mode_applying = True
+        try:
+            achieved = setter(target)
+        except Exception:
+            log.debug("could not apply the video route", exc_info=True)
+            return
+        finally:
+            self._video_mode_applying = False
+        if achieved != target:
+            log.info("video route %s unavailable — running on %s", target, achieved)
+
+    def _note_video_presence(self) -> None:
+        """Re-resolve if the answer to "has this media video?" just changed.
+
+        Called from both places that can change it — the track list and the
+        metadata parse — because an audio-only file must land on Soft under
+        *every* selection, not only Auto (§V.2). Comparing against the cached
+        tri-state is what keeps this to one route change per media: a single
+        open emits ``tracksChanged`` and ``changed`` several times each.
+
+        ``_video_mode`` is the flag for "this controller has video-mode state".
+        One of the callers is ``_refresh_tracks``, which several existing test
+        suites drive on a deliberately partial controller built with
+        ``__new__`` — seeding track lists only, since that is all track
+        refreshing needs. Such a controller has no route to re-resolve, so
+        this is a no-op for it rather than an AttributeError.
+        """
+        if not hasattr(self, "_video_mode"):
+            return
+        current = self._current_has_video()
+        if current == self._video_mode_has_video:
+            return
+        self._video_mode_has_video = current
+        self._schedule_video_mode()
+        self.videoModeChanged.emit()
+
+    def _on_metadata_changed(self) -> None:
+        """Auto's second chance, once libVLC has actually parsed the stream."""
+        # Audio-only is not an Auto-specific question — check it first, before
+        # the Auto guard below returns.
+        self._note_video_presence()
+        if self._video_mode != video_policy.AUTO:
+            return
+        mrl = getattr(self._engine, "currentMedia", "") or ""
+        width, height, _fps = self._media_geometry()
+        if not (width and height):
+            return                      # still unknown: stay on Soft
+        if mrl and mrl == self._video_mode_media:
+            return                      # already decided for this media
+        self._video_mode_media = mrl
+        self._schedule_video_mode()
+        self.videoModeChanged.emit()
 
     # -------------------------------------------------------------- playlist ---
     @Slot(list)
@@ -603,6 +965,18 @@ class AppController(QObject):
         if self._settings.get("subs.autoLoadSidecar", True):
             self._auto_load_subtitle(path)
         self._refresh_tracks()
+        # Each media resolves its own route (§V.2). Auto sees no geometry yet
+        # on the first pass — which resolves to Soft, the safe answer — and
+        # _on_metadata_changed upgrades it once libVLC has parsed the stream.
+        # A forced Soft/Turbo choice needs no metadata and applies right here.
+        #
+        # _refresh_tracks() above has already run for this media, so the
+        # video-presence cache is current; re-seed it from scratch rather than
+        # trusting the previous media's answer, since a video -> audio skip
+        # must not carry a stale True into the new file's first resolution.
+        self._video_mode_media = ""
+        self._video_mode_has_video = self._current_has_video()
+        self._schedule_video_mode()
 
     def _on_end_reached(self) -> None:
         """Advance the queue. Repeat/shuffle logic lives in the playlist model,
@@ -655,6 +1029,8 @@ class AppController(QObject):
         self._external_sub_files = []
         self._local_subtitle_map = {}
         self._force_subs_off_pending = False
+        #: Nothing is playing, so nothing is known about it.
+        self._video_mode_has_video = None
         self.tracksChanged.emit()
 
     def _attach_subtitles(self, paths: list[str]) -> None:
@@ -863,6 +1239,11 @@ class AppController(QObject):
 
         self.tracksChanged.emit()
 
+        # The track list is the authoritative answer to "is this audio-only",
+        # and it usually arrives here first. A media that turns out to have no
+        # video track goes to Soft whatever the dropdown says (§V.2).
+        self._note_video_presence()
+
     @Property("QVariantList", notify=tracksChanged)
     def audioTracks(self) -> list:  # noqa: N802 - QML-facing
         return self._audio_tracks
@@ -1017,6 +1398,14 @@ def _split_subtitle_tracks(
         )
         (local if is_local else embedded).append(track)
     return embedded, local
+
+
+def _as_float(text: object) -> float:
+    """Best-effort number out of a metadata row ("3840", "59.9"). 0.0 if not."""
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _normalise(raw) -> str:

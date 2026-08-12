@@ -79,11 +79,12 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
 
-## Design addendum — Local video modes (recorded 2026-08-12)
+## Local video modes — built 2026-08-12 (design recorded the same day)
 
-> This is a requirements lock for the next implementation pass, not a completed
-> milestone. **No code implementation, commit, or push is part of this documentation
-> update.** The build totals above intentionally exclude these future items.
+> The requirements lock below is unchanged; what follows it is the build record.
+> **Status: implemented.** Full suite green (627 tests) and
+> `tools/check_isolation.py --phase 2` clean. One part is explicitly *not*
+> verified — see "Windows-only verification gap" at the end of this section.
 
 ### Settings contract
 
@@ -114,16 +115,83 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - If Turbo setup, embedding, resize, or playback fails, fall back to Soft and continue
   the same media without stopping playback.
 
-### Future verification (not performed in this documentation-only update)
+### Build record — 2026-08-12
 
-- Local dropdown states and `Auto` resolution are correct for ordinary and demanding
-  media.
-- M3U visibly shows disabled `Soft` and stays on the Soft callback/I420 path.
-- Web Video mode is disabled and Web behavior is otherwise unchanged.
-- Legacy `playback.turboMode` and `video.backend` controls are absent from normal
-  Settings.
-- Turbo has no outside window or second player; failure continues playback on Soft.
-- Soft QML blur and the contrasting dropdown colours remain intact.
+- [x] `core/video_mode.py` — the whole policy in one Qt-free module: the three
+      choices, the "demanding media" rule (4K at any rate; 1440p at 48+ fps),
+      `resolve()`, and the legacy migration. Unknown geometry always resolves to
+      Soft. · `tests/test_video_mode_policy.py`
+- [x] `core/settings.py` — `playback.videoMode` defaults to `"auto"`;
+      `playback.turboMode` is migrated on load and removed from the profile (and
+      from the file on the next flush). `video.backend` survives as an internal
+      Soft-chroma switch, absent from the UI. · `tests/test_video_mode_settings.py`
+- [x] `core/mode_api.py` / `modes/local/__init__.py` — generic `turbo_allowed`
+      capability, opted into by Local alone. M3U and Web inherit the safe default,
+      so neither the chassis nor those modes needed to learn anything.
+- [x] `core/app.py` — one resolver: selection + mode capability + video-track
+      presence + media geometry (read from the existing metadata rows, no
+      second libVLC probe) → route. Re-resolved on media change, when metadata
+      lands, when the track list changes, on mode switch and on Mini Mode.
+      Applied one event-loop turn later so it never re-enters
+      `engine.open()`. · `tests/test_video_mode_controller.py`
+- [x] **Audio-only media never uses Turbo** — every selection, including an
+      explicit `Turbo`, resolves to Soft when the media has no video track.
+      `_current_has_video()` reads the existing `hasVideo` sources in order:
+      the controller's `_video_tracks`, then `Metadata.hasVideo`/`hasAudio`,
+      then the file extension (so a `.flac` is Soft before anything is parsed).
+      An *unknown* track list stays unknown rather than being read as
+      audio-only, so a real video file still reaches Turbo when its tracks
+      arrive late. · `tests/test_video_mode_controller.py`
+- [x] `engine/turbo_surface.py` — one hidden native child `QWindow`, `set_hwnd`,
+      and a teardown that is safe at every half-finished point.
+- [x] `engine/vlc_engine.py` — `set_video_route()` on the **existing** player:
+      Soft callbacks off → native child → `:avcodec-hw=d3d11va` on that media
+      only → silent re-open of the same MRL at the captured position. Every
+      failure restores the Soft callbacks and re-opens on Soft.
+      `stop()`/`shutdown()` release the child. · `tests/test_turbo_surface.py`
+- [x] `ui/shell/TurboSurfaceHost.qml` + `ui/shell/TurboChromeWindow.qml` —
+      `WindowContainer` embedding plus the transparent overlay window the
+      chrome moves into, because QML siblings cannot paint over a native child.
+- [x] `ui/Main.qml` — chrome grouped into one movable layer; Mini Mode's old
+      `playback.turboMode` save/restore replaced by `App.setMiniMode()`.
+- [x] `ui/panels/SettingsDialog.qml` — the Video mode dropdown; the Turbo
+      checkbox and the Video backend selector are gone. · `tests/test_video_mode_ui.py`
+- [x] `ui/components/VideoModeBadge.qml` + `ui/shell/TitleBar.qml` — the
+      `AT`/`AS`/`T`/`S` route read-out beside the gear, with the reason on
+      hover. A read-out, not a button. · `tests/test_video_mode_badge.py` ·
+      HALCYON_PLAN.md §V.7
+
+### Verified here
+
+- Local dropdown really exists, is enabled and offers exactly Auto/Soft/Turbo;
+  `Auto` resolves 3840×2160@60 to Turbo and 1080p24 to Soft, and unknown
+  geometry to Soft.
+- M3U's dropdown is visible, disabled and reads `Soft` even with `"turbo"`
+  stored; it never requests the native route.
+- Web reports Video mode unavailable; no file under `modes/web/` was touched.
+- Neither legacy control appears in Settings, and no QML reads
+  `playback.turboMode` any more.
+- One player throughout; a Soft → Turbo → Soft round trip in the real window
+  embeds and releases the native child and returns the chrome intact.
+- Every failure path lands on Soft with the same media at the same position.
+- An audio-only file stays on Soft with `"turbo"` stored and never requests the
+  native route; skipping audio → video → audio moves the route each way, and a
+  single media triggers at most one route change however many track/metadata
+  signals it emits.
+- The title-bar badge reports the **achieved** route, so a `Turbo` selection
+  running on Soft reads `S`; it shows in Local and M3U while media is loaded,
+  stays out of Web, collapses when there is nothing to report, and carries the
+  reason in its tooltip. · `tests/test_video_mode_badge.py`
+
+### Windows-only verification gap — not verified
+
+`set_hwnd()` is Win32 and `--avcodec-hw=d3d11va` is a Windows decoder path;
+neither can execute on the Linux machine this was built on. libVLC actually
+painting into the child HWND, D3D11 decode engaging, and the composited result
+appearing inside the Halcyon window are **written and reviewed, not observed**.
+Off Windows `is_supported()` is `False`, so those platforms deterministically
+stay on Soft. One manual pass on Windows with a populated `vendor/vlc/` is still
+required. See HALCYON_PLAN.md §V.6.
 
 # PHASE 0 — Repository Setup
 

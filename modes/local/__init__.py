@@ -23,4 +23,7 @@ SPEC = ModeSpec(
     right_dock_enabled=True, # Info / Lyrics / Equalizer are Local's rich chrome
     media_keys_enabled=True,
     uses_player=True,
+    # Local is the only mode that may resolve to the native Turbo route (§V.2).
+    # M3U and Web leave this at its False default.
+    turbo_allowed=True,
 )

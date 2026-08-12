@@ -939,7 +939,7 @@ SPEC = ModeSpec(
 
 # POST v1.0 — Local Video Modes (Settings + Local-only Turbo)
 
-> **Design locked:** 12 August 2026 · **Implementation status:** not started; this documentation update intentionally changes no code, creates no commit, and pushes nothing.
+> **Design locked:** 12 August 2026 · **Implementation status:** built 12 August 2026 (see §V.6 for what is verified and what is not).
 > **Scope:** one Settings control and one effective-output policy for Local/M3U/Web. This section supersedes all earlier Turbo checkbox, docked-bar, and `video.backend` wording.
 
 ## V.1 Settings surface — one visible dropdown
@@ -959,6 +959,8 @@ The new internal setting is `playback.videoMode`, defaulting to `"auto"`. The ol
 - Forced `Soft` keeps the current callback/I420 path, QML blur, and RV32 fallback behaviour.
 - Forced `Turbo` uses the native VLC/GPU path, not the callback surface. There is still **one VLC engine/player**: no second background player, no second decoder, and no outside video window.
 - M3U is always Soft regardless of the stored Local preference. Web does not resolve a video mode at all.
+- **Audio-only media is always Soft, under every selection including a forced `Turbo`.** Turbo's purpose is to put decoded pixels in a native child window; a media with no video track has none, so Turbo would embed an empty HWND, move the chrome onto the overlay window and drop the QML blur — all cost, no benefit — while the album-art card belongs on the ordinary scene graph. The decision reads the app's existing "has video" answer, in this order: the controller's own `_video_tracks` list (the same source as the public `hasVideo` property), then `Metadata.hasVideo`/`hasAudio` from the container parse, then the file extension. An extension in `AUDIO_EXTENSIONS` is enough to say Soft before either async source reports, so an audio file is never briefly routed to Turbo.
+- An *unknown* track list is deliberately **not** read as audio-only. Unknown is the normal state for the first instant of every open; forcing Soft there would make an explicit `Turbo` choice open on Soft and re-open on Turbo a moment later — a visible blip on every file. Unknown geometry still means Soft under `Auto`, because that is a genuine absence of evidence for Turbo; unknown *track presence* is merely "not yet".
 
 ## V.3 Turbo window and overlay boundary
 
@@ -970,17 +972,68 @@ M3U never creates this native route. Web remains the existing WebView2 mode and 
 
 If Turbo setup, HWND wrapping/embedding, resize/reparenting, or native playback fails, the engine must fall back to Soft and continue the same media without stopping playback. Any partially-created native child is cleaned up before the Soft surface is restored. Switching modes still obeys the one-tuner rule; it never leaves a background Turbo player running.
 
-## V.5 Acceptance — Local video modes (future implementation)
+## V.5 Acceptance — Local video modes
 
-- [ ] Local Settings shows an enabled `Video mode` dropdown with `Auto`, `Soft`, and `Turbo`; default is `Auto`.
-- [ ] `Auto` selects Turbo for demanding Local media and Soft for ordinary Local media; forced Soft/Turbo choices behave accordingly.
-- [ ] M3U keeps the dropdown visible as disabled `Soft` and always renders through the Soft callback/I420 path, including RV32 fallback where required.
-- [ ] Web leaves Video mode disabled and otherwise behaves exactly as before.
-- [ ] The old `playback.turboMode` checkbox and `video.backend` dropdown are absent from normal Settings.
-- [ ] Dropdown background/text/selected/disabled colours are readable and clearly contrasting.
-- [ ] Turbo stays inside the single Halcyon window/player via the native child + `WindowContainer` route; no outside video window or second player appears.
-- [ ] A Turbo setup/embedding/resize/playback failure falls back to Soft without stopping playback.
-- [ ] Soft QML blur remains intact; no native-HWND path is introduced for M3U or Web.
+- [x] Local Settings shows an enabled `Video mode` dropdown with `Auto`, `Soft`, and `Turbo`; default is `Auto`. — *`ui/panels/SettingsDialog.qml`; asserted live against the real ComboBox in `tests/test_video_mode_ui.py`.*
+- [x] `Auto` selects Turbo for demanding Local media and Soft for ordinary Local media; forced Soft/Turbo choices behave accordingly. — *`core/video_mode.py` + `AppController`; `tests/test_video_mode_policy.py`, `tests/test_video_mode_controller.py`.*
+- [x] M3U keeps the dropdown visible as disabled `Soft` and always renders through the Soft callback/I420 path, including RV32 fallback where required. — *`ModeSpec.turbo_allowed=False`; the shared `VideoStage.qml` is untouched.*
+- [x] Web leaves Video mode disabled and otherwise behaves exactly as before. — *`uses_player=False` gates `videoModeAvailable`; no file under `modes/web/` was changed.*
+- [x] The old `playback.turboMode` checkbox and `video.backend` dropdown are absent from normal Settings. — *Both removed; a repo-wide check for the legacy key in QML is part of the test suite.*
+- [x] Dropdown background/text/selected/disabled colours are readable and clearly contrasting. — *Opaque `Theme.baseElevated` surface, `Theme.text`/`Theme.textMuted` pair, explicit selected-row accent.*
+- [x] Turbo stays inside the single Halcyon window/player via the native child + `WindowContainer` route; no outside video window or second player appears. — *One `media_player_new()`; the child `QWindow` is never shown before the container adopts it.*
+- [x] A Turbo setup/embedding/resize/playback failure falls back to Soft without stopping playback. — *`VlcEngine._enter_turbo` / `turbo_failed`; the same MRL is re-opened at the captured position, silently.*
+- [x] Soft QML blur remains intact; no native-HWND path is introduced for M3U or Web. — *`VideoStage.qml` unchanged; `chromeBlurSource` keeps the Stage as the backdrop whenever Turbo is not running.*
+- [x] Audio-only media resolves to Soft under every selection, including a forced `Turbo`, and a real video file still reaches Turbo when its track list arrives late. — *`AppController._current_has_video()` feeds `resolve(has_video=...)`; `tests/test_video_mode_controller.py` covers explicit-Turbo audio, extension-only pre-parse, video→audio and audio→video skips, and route thrashing.*
+
+## V.6 Verification status — what was and was not executed
+
+**Executed** (Linux, PySide6 6.11.1, offscreen Qt): the full 627-test suite, `tools/check_isolation.py --phase 2`, a live load of `ui/Main.qml`, and a live Soft → Turbo → Soft round trip driving the real window — the `WindowContainer` adopts a real `QWindow`, the chrome layer moves into the transparent overlay window and returns to `body` with its geometry intact, and a provider that yields no window is reported and falls back.
+
+**Not executed, and not claimed:** `libvlc_media_player_set_hwnd()` is a Win32 entry point and `--avcodec-hw=d3d11va` is a Windows decoder path. Neither can run on this machine. The Windows-specific behaviour — libVLC actually rendering into the child HWND, D3D11 hardware decode engaging, and the composited result appearing inside the Halcyon window — has been **written and reviewed against the documented APIs, never observed**. `engine.turbo_surface.is_supported()` returns `False` off Windows, so those platforms deterministically stay on Soft; the lifecycle tests use `HALCYON_TURBO_FORCE=1` with a fake player to exercise create → attach → tear-down, which proves the *ordering and cleanup*, not the native embedding. This needs one manual pass on Windows with a populated `vendor/vlc/`.
+
+
+## V.7 Title-bar route badge
+
+The dropdown records a *request*; the badge reports the *result*. Those differ
+whenever Turbo cannot run — audio-only media, an unsupported system, a failed
+attempt that fell back mid-playback (§V.4) — and without a read-out the user
+has no way to tell a working Turbo from a silent Soft.
+
+**The rule: the badge always names the route the playing media is actually on.**
+A `Turbo` selection running on Soft reads `S`. Anything else would misreport the
+single fact the badge exists to convey.
+
+| Token | Meaning |
+|---|---|
+| `AT` | Auto chose Turbo |
+| `AS` | Auto chose Soft |
+| `T`  | Turbo, chosen explicitly |
+| `S`  | Soft — chosen explicitly, or forced |
+
+The `A` prefix discloses that *Auto* decided, the one case where the route is
+not evident from Settings. It is dropped where Auto cannot apply: M3U shows a
+disabled `Soft` (§V.2), so its badge is a plain `S`.
+
+There is deliberately **no fifth "fell back" token and no warning tint**. Soft
+is the correct, ordinary outcome for most media; colouring it as a fault would
+train the user to ignore it. Turbo takes `Theme.accent`, Soft `Theme.textMuted`
+— both already dark-mode aware, so no theme branch is needed.
+
+**Where it appears:** Local and M3U, while media is loaded and not fullscreen —
+left of the gear, in its own slot so the window buttons never shift. Not in Web
+(no video route of its own) and not in Mini Mode (its own chrome).
+
+**Hover gives the reason,** as a full sentence: "Auto → Soft — software (CPU)
+video output; this media is not demanding", "Soft …; Turbo is not available on
+this system", "Soft …; this media is audio only". Precedence runs
+Mini → mode-forced → audio-only → unavailable/failed → Auto → explicit, so the
+sentence names the condition that actually forced the route.
+
+**It is a read-out, not a control.** No click target: Settings owns the setting,
+and a second hidden entry point beside the window buttons would be both a
+duplicate and a mis-click hazard. Both properties come from the controller
+(`videoModeBadge`, `videoModeTooltip`) so QML never re-derives the route — one
+decision site, `core/video_mode.py`, exactly as §V.1 requires.
 
 ---
 

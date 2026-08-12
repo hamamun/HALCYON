@@ -73,15 +73,6 @@ Dialog {
 
                 SettingRow {
                     width: parent.width
-                    label: "Turbo Mode"
-                    description: "Hardware decoding for 4K. The transport bar docks below "
-                               + "the video instead of floating over it."
-                    checked: Settings.get("playback.turboMode", false)
-                    onToggled: function(on) { Settings.set("playback.turboMode", on) }
-                }
-
-                SettingRow {
-                    width: parent.width
                     label: "Resume playback"
                     description: "Offer to continue where you left off."
                     checked: Settings.get("playback.resumeEnabled", true)
@@ -106,25 +97,74 @@ Dialog {
 
                 Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
 
+                // ------------------------------------------------ §V.1
+                // Video mode — the one visible video control.
+                //
+                // A real select, not radio buttons and not icon buttons. It is
+                // always *visible*: in M3U it stays on screen showing "Soft"
+                // and is disabled, which is information the user needs, not a
+                // control that vanished. In Web the whole row is disabled
+                // because Web has no VLC path at all.
+                //
+                // The colours are deliberately opaque rather than the usual
+                // glass tint: a dropdown whose text sits on whatever happens
+                // to be behind the dialog is exactly the low-contrast result
+                // §V.1 forbids. Enabled, selected, highlighted and disabled
+                // each have their own explicit pair.
                 Row {
+                    id: videoModeRow
                     width: parent.width
                     spacing: Theme.spaceSm
+
+                    // Local: enabled. M3U: visible but disabled. Web: disabled.
+                    readonly property bool available:
+                        (typeof App !== "undefined" && App && App.videoModeAvailable !== undefined)
+                        ? App.videoModeAvailable : true
+                    readonly property bool interactive:
+                        (typeof App !== "undefined" && App && App.videoModeEnabled !== undefined)
+                        ? App.videoModeEnabled : true
 
                     Text {
                         width: 120
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Video backend"
+                        text: "Video mode"
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeBody
-                        color: Theme.text
+                        // Dimmed, not invisible: a disabled label still has to
+                        // be readable against the dialog (§V.1).
+                        color: videoModeRow.interactive ? Theme.text : Theme.textMuted
                     }
 
                     ComboBox {
-                        id: backendCombo
+                        id: videoModeCombo
+                        objectName: "videoModeCombo"
                         width: parent.width - 120 - Theme.spaceSm
-                        model: ["auto", "i420", "rv32"]
-                        currentIndex: Math.max(0, model.indexOf(Settings.get("video.backend", "auto")))
-                        onActivated: Settings.set("video.backend", model[currentIndex])
+                        enabled: videoModeRow.interactive
+
+                        // Values are the stored strings; `labels` is what the
+                        // user reads. Keeping them side by side means the
+                        // setting can never drift from the visible text.
+                        readonly property var values: ["auto", "soft", "turbo"]
+                        readonly property var labels: ["Auto", "Soft", "Turbo"]
+
+                        // A mode that cannot use Turbo shows the truth — Soft —
+                        // rather than the stored Local preference (§V.1).
+                        model: videoModeRow.interactive ? labels : ["Soft"]
+                        currentIndex: {
+                            if (!videoModeRow.interactive)
+                                return 0;
+                            var stored = String(Settings.get("playback.videoMode", "auto"));
+                            var i = values.indexOf(stored);
+                            return i < 0 ? 0 : i;
+                        }
+                        onActivated: {
+                            if (!videoModeRow.interactive)
+                                return;
+                            var value = values[currentIndex];
+                            Settings.set("playback.videoMode", value);
+                            if (typeof App !== "undefined" && App && App.setVideoMode)
+                                App.setVideoMode(value);
+                        }
 
                         palette.text: Theme.text
                         palette.windowText: Theme.text
@@ -137,25 +177,32 @@ Dialog {
 
                         background: Rectangle {
                             radius: Theme.radiusSmall
-                            color: Theme.glassFill
+                            // Opaque, so the text always has the same backing
+                            // whatever is behind the dialog. Disabled is a
+                            // visibly different, still-solid surface.
+                            color: videoModeCombo.enabled ? Theme.baseElevated
+                                                          : Qt.darker(Theme.baseElevated, 1.4)
                             border.width: 1
-                            border.color: Theme.glassBorder
+                            border.color: videoModeCombo.enabled ? Theme.glassBorderStrong
+                                                                 : Theme.glassBorder
                         }
                         contentItem: Text {
                             leftPadding: Theme.spaceMd
                             rightPadding: Theme.spaceMd
-                            text: parent.displayText
+                            text: videoModeCombo.displayText
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.text
+                            // Muted rather than faint when disabled: still a
+                            // clearly readable contrast against the surface.
+                            color: videoModeCombo.enabled ? Theme.text : Theme.textMuted
                             elide: Text.ElideRight
                             verticalAlignment: Text.AlignVCenter
                         }
 
                         popup: Popup {
-                            id: backendPopup
-                            y: backendCombo.height
-                            width: backendCombo.width
+                            id: videoModePopup
+                            y: videoModeCombo.height
+                            width: videoModeCombo.width
                             implicitHeight: contentItem.implicitHeight
                             padding: Theme.spaceXs
                             topInset: 0; bottomInset: 0; leftInset: 0; rightInset: 0
@@ -168,17 +215,21 @@ Dialog {
                             palette.highlightedText: Theme.accent
 
                             contentItem: ListView {
-                                id: backendPopupList
+                                id: videoModePopupList
                                 clip: true
                                 implicitHeight: contentHeight
-                                model: backendPopup.visible ? backendCombo.delegateModel : null
-                                currentIndex: backendCombo.highlightedIndex
+                                model: videoModePopup.visible ? videoModeCombo.delegateModel : null
+                                currentIndex: videoModeCombo.highlightedIndex
                                 delegate: ItemDelegate {
-                                    id: bd
-                                    width: backendPopupList.width
+                                    id: vmd
+                                    width: videoModePopupList.width
                                     text: modelData
-                                    font: backendCombo.font
-                                    highlighted: backendCombo.highlightedIndex === index
+                                    font: videoModeCombo.font
+                                    highlighted: videoModeCombo.highlightedIndex === index
+                                    // The selected row must read as selected
+                                    // even when it is not under the pointer.
+                                    readonly property bool chosen:
+                                        videoModeCombo.currentIndex === index
                                     palette.text: Theme.text
                                     palette.windowText: Theme.text
                                     palette.highlight: Theme.accentDim
@@ -186,14 +237,17 @@ Dialog {
                                     contentItem: Text {
                                         leftPadding: Theme.spaceMd
                                         rightPadding: Theme.spaceMd
-                                        text: bd.text
-                                        font: bd.font
-                                        color: bd.highlighted ? Theme.accent : Theme.text
+                                        text: vmd.text
+                                        font: vmd.font
+                                        color: (vmd.highlighted || vmd.chosen) ? Theme.accent
+                                                                               : Theme.text
                                         elide: Text.ElideRight
                                         verticalAlignment: Text.AlignVCenter
                                     }
                                     background: Rectangle {
-                                        color: bd.highlighted ? Theme.glassFillHover : "transparent"
+                                        color: vmd.highlighted ? Theme.glassFillHover
+                                             : vmd.chosen ? Theme.accentDim
+                                             : "transparent"
                                         radius: Theme.radiusSmall
                                     }
                                 }
@@ -209,16 +263,25 @@ Dialog {
                         }
 
                         delegate: ItemDelegate {
-                            width: backendCombo.width
+                            width: videoModeCombo.width
                             text: modelData
-                            font: backendCombo.font
+                            font: videoModeCombo.font
                         }
                     }
                 }
 
                 Text {
                     width: parent.width
-                    text: "Backend changes take effect on the next launch."
+                    text: {
+                        if (!videoModeRow.available)
+                            return "Video mode does not apply in this mode.";
+                        if (!videoModeRow.interactive)
+                            return "This mode always uses the Soft video path.";
+                        return "Auto uses hardware output for demanding video, such as "
+                             + "3840\u00D72160 at 60 fps, and the software path for "
+                             + "everything else. If hardware output cannot start, "
+                             + "playback continues on Soft.";
+                    }
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeTiny

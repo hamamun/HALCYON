@@ -33,6 +33,7 @@ from PySide6.QtCore import (
 )
 
 from core import paths
+from core import video_mode as video_policy
 from engine.video_out import Chroma, VideoOutput
 
 log = logging.getLogger(__name__)
@@ -216,6 +217,20 @@ class VlcEngine(QObject):
     errorOccurred = Signal(str)
     buffering = Signal(float)           # 0 - 100
     tracksChanged = Signal()
+    #: The effective video route actually in force — "soft" or "turbo" (§V.2).
+    #: Emitted after every successful switch *and* after a Turbo failure has
+    #: fallen back, so the UI never has to guess which route it is looking at.
+    videoRouteChanged = Signal(str)
+
+    # Class-level defaults for the video-route state. ``__init__`` gives every
+    # real engine its own values; these exist because the teardown tests build
+    # an engine with ``VlcEngine.__new__`` to exercise ``open()``/``stop()``
+    # without libVLC, and a route that only exists after ``__init__`` would
+    # turn those into AttributeErrors. Immutable defaults on purpose — nothing
+    # can mutate shared class state by accident.
+    _video_route = video_policy.SOFT
+    _turbo_surface = None
+    _media_options: tuple = ()
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -234,6 +249,17 @@ class VlcEngine(QObject):
         chroma = Chroma.RV32 if backend == "rv32" else Chroma.I420
         self.video_output = VideoOutput(chroma)
         self.video_output.attach(self._player)
+
+        # --- Local video modes (§V) ---------------------------------------
+        # Soft is the route the player boots on and the route it returns to on
+        # any Turbo problem. `turbo_surface` is created lazily by
+        # set_video_route() so a session that never asks for Turbo never
+        # imports QtGui here.
+        self._video_route = video_policy.SOFT
+        self._turbo_surface = None
+        #: Per-playback libVLC options (":avcodec-hw=d3d11va" for Turbo).
+        #: Applied to each media in open(); empty on the Soft path.
+        self._media_options: list[str] = []
 
         self._state = State.Idle
         self._duration = 0
@@ -401,9 +427,15 @@ class VlcEngine(QObject):
 
     # ------------------------------------------------------------ playback ---
     @Slot(str)
-    def open(self, path_or_url: str, start_ms: int = 0) -> None:
+    def open(self, path_or_url: str, start_ms: int = 0, announce: bool = True) -> None:
         """Load media and start playing. Accepts a path, a file:// URL or a
         network URL (Phase 2's HLS streams come through here unchanged).
+
+        ``announce`` is an internal flag, always true for every real caller.
+        :meth:`set_video_route` re-opens the *same* media on the other video
+        route and passes ``False`` so the switch does not masquerade as a new
+        media: no Now Playing toast, no metadata reload, no recent-files entry
+        for something that never stopped playing (§V.4).
 
         **Self-safe transition.** This is the one place a new media is handed
         to libVLC, so it is the one place that has to guarantee the previous
@@ -482,6 +514,15 @@ class VlcEngine(QObject):
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
+        # Per-playback options (§V.2): Turbo carries ":avcodec-hw=d3d11va" so
+        # hardware decode applies to this media only, leaving the instance-wide
+        # "none" that protects the Soft vmem path untouched. Never fatal — a
+        # build that rejects the option still plays, just without HW decode.
+        for option in self._media_options:
+            try:
+                media.add_option(option)
+            except Exception:
+                log.debug("media option %s rejected", option, exc_info=True)
         try:
             media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
         except Exception:
@@ -517,7 +558,8 @@ class VlcEngine(QObject):
         except Exception:
             log.debug("media.release after set_media failed for %s", path_or_url, exc_info=True)
         self._current_mrl = mrl
-        self.mediaChanged.emit(mrl)
+        if announce:
+            self.mediaChanged.emit(mrl)
         self._player.play()
 
         # Resume is applied on the first Playing tick, not on a fixed delay.
@@ -612,12 +654,218 @@ class VlcEngine(QObject):
         self._scrubbing = False
         self._pending_resume_ms = 0   # nothing to resume into any more
         self._current_mrl = ""
+        # One-tuner rule (§V.4): a full stop — including the one
+        # AppController performs when switching to a mode that does not use
+        # the player — must not leave a native Turbo child alive. The next
+        # media re-resolves its own route from scratch.
+        if self._video_route == video_policy.TURBO:
+            self._release_turbo_surface()
+            self._restore_soft_output()
+            self.videoRouteChanged.emit(self._video_route)
         try:
             self.video_output.notify_video_stopped()
         except Exception:
             log.debug("could not reset the video surface on stop", exc_info=True)
         self._reset_timeline()
         self._publish_state_now()
+
+    # ------------------------------------------------------- video route ---
+    #
+    # Soft and Turbo are two ways of getting the *same* player's pictures onto
+    # the screen, not two players (§V.2). Soft keeps libVLC writing into the
+    # vmem callbacks (engine/video_out.py) that the QML scene graph samples;
+    # Turbo takes those callbacks off and gives libVLC a native child window
+    # instead, so a hardware decoder can keep the frame on the GPU.
+    #
+    # libVLC decides which output a media uses when the media starts, so a
+    # live switch means re-opening the current MRL at the current position.
+    # That is what makes "continue the same media without stopping playback"
+    # (§V.4) achievable at all — and why the failure path below re-opens on
+    # Soft rather than leaving the user with a dead picture.
+
+    @Property(str, notify=videoRouteChanged)
+    def videoRoute(self) -> str:  # noqa: N802 - QML-facing
+        """"soft" or "turbo" — what the player is actually doing right now."""
+        return self._video_route
+
+    @property
+    def turbo_window(self):
+        """The native child ``QWindow`` for QML's ``WindowContainer``, or None.
+
+        Read by the shell through :class:`core.app.AppController`; QML never
+        touches the engine's private surface object.
+        """
+        surface = self._turbo_surface
+        return surface.window if surface is not None else None
+
+    def turbo_available(self) -> bool:
+        """Can Turbo even be attempted on this build/platform (§V.3)?"""
+        from engine.turbo_surface import is_supported  # local: QtGui-free import
+
+        return bool(is_supported())
+
+    @Slot(str, result=str)
+    def set_video_route(self, route: str) -> str:
+        """Put the player on ``route`` ("soft" or "turbo"). Returns what it got.
+
+        The return value is the honest answer, not the request: a Turbo attempt
+        that fails anywhere — unsupported platform, no native handle, set_hwnd
+        refused, the re-open raised — cleans up whatever it created and returns
+        ``"soft"`` with the same media still playing from the same position.
+        """
+        wanted = video_policy.SOFT if route != video_policy.TURBO else video_policy.TURBO
+        if self._player is None:
+            return self._video_route
+        if wanted == self._video_route:
+            return self._video_route
+
+        if wanted == video_policy.TURBO:
+            if not self._enter_turbo():
+                # _enter_turbo already restored Soft and re-opened the media.
+                return self._video_route
+        else:
+            self._leave_turbo()
+
+        self.videoRouteChanged.emit(self._video_route)
+        return self._video_route
+
+    def _enter_turbo(self) -> bool:
+        """Soft -> Turbo. Any failure ends with the player back on Soft."""
+        from engine.turbo_surface import TurboSurface
+
+        if not self.turbo_available():
+            # Nothing to attempt: no platform support means no native child,
+            # and the answer would be Soft anyway. Bail out *before* stopping
+            # the player, so an impossible request costs the user nothing —
+            # not even the re-open a real failure would have to pay for.
+            log.info("Turbo is not available on this platform — staying on Soft")
+            return False
+
+        resume_ms, was_playing = self._capture_playback()
+        surface = TurboSurface(parent=self)
+        try:
+            # Order matters. Detach the vmem callbacks *before* handing libVLC
+            # a window: leaving both installed is the documented recipe for a
+            # green/blank picture (see BASE_VLC_ARGS), and video_out.detach()
+            # is only safe once the player is stopped, which it is here.
+            self._player.stop()
+            self.video_output.detach()
+            self.video_output.notify_video_stopped()
+            if not surface.start(self._player):
+                raise RuntimeError("native Turbo surface unavailable")
+            # Hardware decode is what Turbo is for; the instance-wide
+            # --avcodec-hw=none exists for the vmem path, so override it on
+            # this player only.
+            self._set_player_option("avcodec-hw", "d3d11va")
+            self._turbo_surface = surface
+            self._video_route = video_policy.TURBO
+            self._reopen_current(resume_ms, was_playing)
+        except Exception:
+            log.warning("Turbo could not be started — falling back to Soft", exc_info=True)
+            try:
+                surface.stop(self._player)
+            except Exception:
+                log.debug("Turbo cleanup after a failed start also failed", exc_info=True)
+            self._turbo_surface = None
+            self._video_route = video_policy.SOFT
+            self._restore_soft_output()
+            self._reopen_current(resume_ms, was_playing)
+            self.videoRouteChanged.emit(self._video_route)
+            return False
+        return True
+
+    def _leave_turbo(self) -> None:
+        """Turbo -> Soft. Always succeeds: Soft is the resting state."""
+        resume_ms, was_playing = self._capture_playback()
+        try:
+            self._player.stop()
+        except Exception:
+            log.debug("stop before leaving Turbo failed", exc_info=True)
+        surface = self._turbo_surface
+        self._turbo_surface = None
+        if surface is not None:
+            try:
+                surface.stop(self._player)
+            except Exception:
+                log.debug("tearing down the Turbo surface failed", exc_info=True)
+        self._video_route = video_policy.SOFT
+        self._restore_soft_output()
+        self._reopen_current(resume_ms, was_playing)
+
+    def turbo_failed(self, reason: str = "") -> None:
+        """Called when Turbo broke *after* setup — embedding, resize, playback.
+
+        §V.4: the user must not lose playback because Turbo could not be made
+        to work. This is the one entry point for every late failure (the QML
+        ``WindowContainer`` reporting it could not adopt the child, a native
+        playback error), and it does exactly what a failed start does.
+        """
+        if self._video_route != video_policy.TURBO:
+            return
+        log.warning("Turbo failed after setup (%s) — falling back to Soft", reason or "?")
+        self._leave_turbo()
+        self.videoRouteChanged.emit(self._video_route)
+
+    def _restore_soft_output(self) -> None:
+        """Re-install the vmem callbacks and undo the Turbo player options."""
+        try:
+            self._set_player_option("avcodec-hw", "none")
+        except Exception:
+            log.debug("could not restore avcodec-hw=none", exc_info=True)
+        try:
+            self.video_output.attach(self._player)
+        except Exception:
+            log.exception("could not re-attach the Soft video callbacks")
+
+    def _set_player_option(self, name: str, value: str) -> None:
+        """Scope a libVLC option to *this* playback, not the whole instance.
+
+        The instance-wide ``--avcodec-hw=none`` (see :data:`BASE_VLC_ARGS`) has
+        to keep protecting the Soft vmem path and the short-lived probe
+        instances, so Turbo cannot simply change it globally. libVLC's supported
+        per-playback override is a media option (``:avcodec-hw=d3d11va``), which
+        applies to the media object the player is given — and a new media object
+        is created on every :meth:`open`, including the silent re-open that
+        performs the switch. Recording it here is therefore enough; ``open()``
+        applies it.
+        """
+        option = f":{name}={value}"
+        prefix = f":{name}="
+        self._media_options = [
+            existing for existing in self._media_options if not existing.startswith(prefix)
+        ]
+        # "none" is the instance default; re-stating it as a media option is
+        # harmless but noisy, so Soft simply carries no override at all.
+        if not (name == "avcodec-hw" and value == "none"):
+            self._media_options.append(option)
+
+    def _capture_playback(self) -> tuple[int, bool]:
+        """Where we are and whether we were playing, for a seamless re-open."""
+        position_ms = 0
+        try:
+            value = _qt_milliseconds(self._player.get_time())
+            position_ms = int(value or 0)
+        except Exception:
+            position_ms = int(self._time or 0)
+        if position_ms <= 0:
+            position_ms = int(self._pending_resume_ms or 0)
+        return position_ms, self._state == State.Playing
+
+    def _reopen_current(self, resume_ms: int, was_playing: bool) -> None:
+        """Re-open the current MRL on the current route, at ``resume_ms``.
+
+        Silent by design (``announce=False``): to everything above the engine
+        this is the same media that never stopped, which is exactly what §V.4
+        promises. Nothing to re-open (audio-only, stopped player) is a no-op.
+        """
+        mrl = self._current_mrl
+        if not mrl:
+            return
+        self.open(mrl, max(0, int(resume_ms)), announce=False)
+        if not was_playing:
+            # The user was paused before the switch; do not start playing at
+            # them because they touched a Settings dropdown.
+            QTimer.singleShot(0, self.pause)
 
     def _publish_state_now(self) -> None:
         """Push the current libVLC state out without waiting for the poll.
@@ -883,6 +1131,9 @@ class VlcEngine(QObject):
                 # No VLC event can be in flight now. Remove event and video
                 # callback registrations before releasing either object.
                 self._detach_events()
+                # A Turbo child window must never outlive the player that draws
+                # into it (§V.4 — no background Turbo player, no orphan window).
+                self._release_turbo_surface()
                 self.video_output.detach()
                 self._player.release()
                 self._player = None
@@ -898,11 +1149,25 @@ class VlcEngine(QObject):
             # callback trampolines registered against a dying VLC instance.
             log.exception("shutdown was not clean")
             self._detach_events()
+            self._release_turbo_surface()
             try:
                 self.video_output.detach()
             except Exception:
                 log.debug("video callback detach failed", exc_info=True)
         log.info("engine shut down")
+
+    def _release_turbo_surface(self) -> None:
+        """Destroy the native child, whatever state it is in. Never raises."""
+        surface = self._turbo_surface
+        self._turbo_surface = None
+        self._video_route = video_policy.SOFT
+        self._media_options = []
+        if surface is None:
+            return
+        try:
+            surface.stop(self._player)
+        except Exception:
+            log.debug("Turbo surface teardown failed", exc_info=True)
 
     # ---------------------------------------------------------- properties ---
     @Property(int, notify=stateChanged)
