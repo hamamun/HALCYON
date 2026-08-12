@@ -1,6 +1,6 @@
 # Halcyon — Build Checklist
 
-> Companion to `HALCYON_PLAN.md` v4.2. Every task, in build order, with a plan reference.
+> Companion to `HALCYON_PLAN.md` v4.5. Every task, in build order, with a plan reference. The 12 August 2026 Local video-mode design addendum is recorded below as a future implementation contract; it is not counted as a completed build milestone.
 >
 > **How to use this file**
 > - **`[ ]` → `[x]`** is set by *me* when a task is implemented.
@@ -51,31 +51,79 @@ So: the build is complete and now materially more correct than when this pass st
 
 ## Progress
 
-*One table. Counts are real — regenerated from the boxes below on 2026-08-09.
+*One table. Counts are real — regenerated from the boxes below on 2026-08-12.
 Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.
-Build-task counts re-checked 2026-08-11; `◻` counts unchanged — those are owner marks.*
+Build-task counts re-checked 2026-08-12 after removing the superseded Turbo checkbox task and verification; the new design addendum adds no build/verification boxes. `◻` counts unchanged — those are owner marks.*
 
 | Phase | Milestones | Build tasks | Your verifications | Tag |
 |---|---|---|---|---|
 | 0 — Setup \* | 1 / 1 built | 6 / 8 | 0 / 1 | — |
-| 1 — Local | 10 / 10 | 175 / 175 | 93 / 93 ✅ | `v0.1.0-local` *(tagged 2026-08-02)* |
+| 1 — Local | 10 / 10 | 174 / 174 | 92 / 92 ✅ | `v0.1.0-local` *(tagged 2026-08-02)* |
 | 2 — M3U | 5 / 5 built | 58 / 58 | 0 / 61 | `v0.2.0-m3u` |
 | 3 — Web | 5 / 5 built | 62 / 62 | 0 / 54 | `v1.0.0` |
 | 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 16 | `v1.1.0-mini` |
 | R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 ✅ | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
 | U — Vendor Update tab | 1 / 1 built | 18 / 18 | 0 / 11 | — *(built 2026-08-10/11, awaiting your verification)* |
-| **Total** | **27 / 27 built** | **357 / 359** | **103 / 246** | |
+| **Total** | **27 / 27 built** | **356 / 358** | **102 / 245** | |
 
-*Recounted from the boxes on 2026-08-11. Three corrections to the previous table: Phase U
+*Recounted from the boxes on 2026-08-12. Three corrections to the previous table remain: Phase U
 showed `0 / 11` build tasks when all 18 were in fact ticked; Phase 0 showed `0 / 8` when six
 are objectively satisfied; and the Phase 1/3/4 verification denominators were slightly off
-against an actual count of the marks. **The two remaining build tasks are the libVLC
-binaries in Phase 0** — Windows-only, gitignored, not checkable from here.*
+against an actual count of the marks. The superseded Turbo checkbox task and docked-bar
+verification are intentionally not counted; the replacement design addendum has no boxes.
+**The two remaining build tasks are the libVLC binaries in Phase 0** — Windows-only,
+gitignored, not checkable from here.*
 
 \* Phase 0 was completed in the original dev environment; its boxes were simply
 never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ---
+
+## Design addendum — Local video modes (recorded 2026-08-12)
+
+> This is a requirements lock for the next implementation pass, not a completed
+> milestone. **No code implementation, commit, or push is part of this documentation
+> update.** The build totals above intentionally exclude these future items.
+
+### Settings contract
+
+- **Local:** show an enabled, visible **Video mode** dropdown with **Auto**, **Soft**, and
+  **Turbo**. The default is **Auto**.
+- **Auto:** resolve demanding Local media, such as **3840×2160 at 60 FPS**, to Turbo;
+  resolve ordinary Local media to Soft where possible.
+- **M3U:** keep the same dropdown visible, display **Soft**, and keep it disabled. M3U
+  always uses the existing Soft callback/I420 path, including the RV32 fallback where
+  required; Turbo is never switchable there.
+- **Web:** leave Video mode completely disabled. Web otherwise remains unchanged and
+  has no VLC/Turbo path.
+- Use a real dropdown, not radio buttons or icon buttons. Its background, text,
+  selected state, and disabled state must use readable, clearly contrasting colours.
+- The internal default is `playback.videoMode = "auto"`. Remove the old
+  `playback.turboMode` checkbox and technical `video.backend` dropdown/choices from
+  normal Settings. Existing keys may be migrated or ignored, but must not return to
+  the normal Settings UI.
+
+### Playback and failure boundaries
+
+- Keep one VLC engine/player. Turbo is native VLC/GPU output embedded inside the single
+  Halcyon window; do not create a second background player or an outside video window.
+- Preserve the current Soft callback/I420 route, QML blur, and I420/RV32 fallback.
+- When Turbo is effective, wrap the native child with `QWindow.fromWinId()` and Qt 6.8+
+  `WindowContainer`; put controls/panels that must be above native video in the
+  dedicated transparent QML child-window overlay.
+- If Turbo setup, embedding, resize, or playback fails, fall back to Soft and continue
+  the same media without stopping playback.
+
+### Future verification (not performed in this documentation-only update)
+
+- Local dropdown states and `Auto` resolution are correct for ordinary and demanding
+  media.
+- M3U visibly shows disabled `Soft` and stays on the Soft callback/I420 path.
+- Web Video mode is disabled and Web behavior is otherwise unchanged.
+- Legacy `playback.turboMode` and `video.backend` controls are absent from normal
+  Settings.
+- Turbo has no outside window or second player; failure continues playback on Soft.
+- Soft QML blur and the contrasting dropdown colours remain intact.
 
 # PHASE 0 — Repository Setup
 
@@ -405,7 +453,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
       (`ui/shell/NowPlayingCard.qml` — cover, title, artist, album; shown
       whenever the stage has no picture. Audio-reactive bars still to do.)
 - [x] Settings dialog behind the gear · §4.1
-- [x] **Turbo Mode** toggle in Settings — `set_hwnd()` + `--avcodec-hw=d3d11va`; transport drops to a solid strip below the video · §0.5
+- **Superseded pre-decision task — not a build claim:** the old **Turbo Mode** Settings checkbox (`set_hwnd()` + docked-bar trade-off) is removed from this checklist. The accepted Local-only `Video mode` dropdown contract is documented in the 2026-08-12 design addendum and §V; it is not implemented by this update.
 - [x] All hotkeys wired, every one invoking an `Actions` entry · §P1.5
   - [x] `Space` · `←/→` ±10s · `Shift+←/→` ±60s · `↑/↓` volume · `M` · `F` · `S` · `A` · `[`/`]` · `L` · `Ctrl+E` · `Ctrl+O` · `Ctrl+L` · `Ctrl+I` · `Esc`
 - [x] Animation polish pass — every transition on the §7 curve
@@ -417,7 +465,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - ◼ Metadata and album art display; audio-only files look good
 - ◼ Lyrics scroll in time; click-to-seek works
 - ◼ Every hotkey works
-- ◼ Turbo Mode plays 4K smoothly *(with the documented docked-bar trade-off)*
+- **Superseded pre-decision verification — not performed:** the old docked-bar Turbo check is replaced by the future Local `Auto`/`Soft`/`Turbo` acceptance checks in the 2026-08-12 design addendum and §V.
 
 ---
 
@@ -846,7 +894,7 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] Always-on-top, first-time top-center, only grip drags · §M.5
 - [x] No close from mini: intercept `onClosing` in mini → `close.accepted=false; toggleMiniMode()` → returns to normal; only normal can `Qt.quit()` · §M.5
 - [x] Auto-return on playlist naturally finished (no next, repeat off) → toggle to normal · §M.5
-- [x] Turbo Mode: on entering mini, force soft I420 path (disable HWND), on return restore if setting ON · §M.6
+- [x] Mini video policy: while Mini is active, force the effective Local output to the Soft I420 path (disable the native child); on return, re-resolve the selected `Video mode` (`Auto` or `Turbo`) and fall back to Soft if native setup fails · §M.6 / §V
 - [x] No auto-hide, no cursor hide in mini — bar always visible · §M.5
 
 > **Re-verified 2026-08-11 — three boxes above are ticked but the code has since diverged

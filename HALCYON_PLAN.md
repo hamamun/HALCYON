@@ -7,7 +7,8 @@
 
 | | |
 |---|---|
-| **Version** | Plan **v4.4** — 10 August 2026 *(status reconciled against the code 11 August 2026)* |
+| **Version** | Plan **v4.5** — 12 August 2026 *(status reconciled against the code 11 August 2026; Local video-mode policy recorded, implementation not started)* |
+| **Changes in v4.5** | **Local video modes and Settings policy (§V) — design locked 12 Aug 2026.** The accepted normal Settings contract is one visible `Video mode` dropdown for Local with `Auto`, `Soft`, and `Turbo`; M3U shows the same control as disabled `Soft`; Web leaves Video mode disabled. `Auto` chooses Soft or Turbo only for Local media, Turbo setup failures fall back to Soft without interrupting playback, and the old `playback.turboMode` checkbox plus technical `video.backend` dropdown are not part of normal Settings. The dropdown must use readable contrasting background/text colours. This documentation entry contains no code implementation, commit, or push. |
 | **Changes in v4.4** | **Vendor Update tab (§U) — design locked 10 Aug 2026; BUILT 10–11 Aug 2026, all 18 build tasks verified against the source 11 Aug 2026, awaiting owner sign-off (§U.5 boxes are hands-on-Windows checks).** Third tab in Settings → Update. Checks vendored VLC (3.0.21) and WebView2 DLLs against known latest versions. Two icon buttons (↻ Check / ✕ Cancel). When update available: shows version diff per component, clickable download link (↗ opens browser), extraction guide (where to find files inside the extracted archive), and place-at paths with 📁 "Open Folder" icon buttons (open Windows Explorer). "All up to date" state shows ✓ summary with current versions. Skips Halcyon app version — only checks VLC and WebView2 vendor dependencies. Owner decisions 10 Aug 2026. |
 | **Changes in v4.3** | **Mobile Remote v1.2 — verified COMPLETE (owner, 9 Aug 2026), §R.** All 9 build steps + audit pass landed 2026-08-08 (remote/ package, QR PNG, status SSE, command channel via QueuedConnection, phone UI, Local chip, M3U chip, Web chip, Power). 27 new tests, 366 passed / 0 failed, isolation green, no player path modified (§4.1). Owner verification 09-08-2026: QR <1s, real-time sync, drive browser all drives, playlist pinned bottom 7 rows + autoscroll, subtitle download, M3U add URL + grouped/favourites + PiP/Fullscreen, Web active page + bookmarks + universal media control, Power Sleep/Shutdown. CHECKLIST.md Phase R 10/10 verified, tag `v1.2.0-remote` complete. No push/commit per owner request. |
 | **Changes in v4.2** | **Mobile Remote (v1.2) — full spec locked (owner review, 8 Aug 2026), §R.** Phone controls the PC over Wi-Fi via a web page in the phone browser (no install). Tiny `aiohttp` server inside the app, **on by default, starts as the last step of startup loading**, stops on exit. Connect by scanning a **QR code in PC Settings → Mobile Remote** (or typing `http://<pc-ip>:8765`); QR/URL is the only key — **no PIN** (owner: keep it simple). Real-time sync, **PC is the source of truth**, phone is a mirror. One-shot build — no versions. Chip-wise scope: **Local** = transport, volume, drive browser (all drives), playlist pinned to the **bottom with max 7 rows + autoscroll**, tracks & subtitles incl. **subtitle download**, equalizer, now-playing (no lyrics — owner); **M3U** = transport **incl. PiP + Fullscreen**, sources (**add by URL only** — owner), grouped channels, favourites; **Web** = active-page only, bookmarks + **universal media control** via WebView2 `ExecuteScriptAsync` on the active tab; **⚡ Power** (collapsed, every chip) = Sleep / Shutdown on the PC. Build deliberately deferred until v1.0 ships (§8) — no remote code exists yet. |
@@ -150,7 +151,7 @@ Cheap to write, and it makes §A.1's promise enforceable instead of aspirational
 | **Button anatomy** | 40×40 hit target, same icon set and stroke weight, same hover ring, same tooltip style, same press feedback |
 | **Panel dock** | 300px left slot, same toolbar row height, same list row height, same selection highlight |
 | **Motion language** | 220 ms `OutCubic`; nothing anywhere uses a different duration or curve without reason |
-| **Engine + video path** | One `vlc_engine`, one zero-copy pipeline |
+| **Engine + video path** | One `vlc_engine`; Soft callback pipeline plus bounded Local Turbo output policy |
 | **Actions singleton** | §4.1 — one implementation per action |
 
 A play button in M3U is **the same `IconButton` with the same icon, size, and hover behaviour** as in Local. Not a lookalike — the same component.
@@ -200,7 +201,7 @@ The default way to embed libVLC is `media_player.set_hwnd(winId)`. This makes VL
 
 That is the "click-through / overlay bug." It is not a Qt bug and it is not a VLC bug. It is a fundamental consequence of mixing a native surface with a GPU-composited scene graph.
 
-**Therefore: Halcyon will never give libVLC an HWND.** Video must arrive as *pixels we own*, so it becomes an ordinary item inside the Qt scene graph — sortable, clippable, blurrable, and paintable *under* other items.
+**Therefore: the Soft path will never give libVLC an HWND.** Soft video arrives as *pixels we own*, so it becomes an ordinary item inside the Qt scene graph — sortable, clippable, blurrable, and paintable *under* other items. The Local-only Turbo path is the explicit, bounded exception: it uses a native VLC child HWND only when the effective mode is Turbo, embeds that child inside the main Halcyon window with Qt's `QWindow.fromWinId()` + Qt 6.8+ `WindowContainer`, and hosts any controls/panels that must sit above it in a transparent QML child-window overlay. This is a window-layer composition route, not a claim that ordinary QML siblings can paint over an HWND.
 
 ### 0.2 Why the obvious fix is a trap
 
@@ -221,13 +222,11 @@ Qt forum reports of "high CPU usage" from custom video sinks trace almost entire
 
 **The two costs are separable.** Cost A (no hardware decode) is inherent to `vmem`. Cost B (extra copies) is implementation sloppiness. Halcyon eliminates B entirely and manages A.
 
-### 0.3 The solution — zero-copy triple buffer → QSG texture
+### 0.3 Soft solution — triple buffer → QSG texture
 
-**Core insight:** VLC's `lock` callback asks *us* where to write. We hand it a pointer to memory **we allocated and keep forever**. VLC decodes *directly into our buffer*. No copy on our side — VLC's write is the same write it would have made into its own vout buffer anyway.
+**Core insight:** VLC's `lock` callback asks *us* where to write. We hand it a pointer to memory **we allocated and keep for the callback lifetime**. VLC decodes *directly into our buffer*, with no callback-time format conversion or application memcpy before the frame is published. The render handoff still retains safe ownership before VLC can reuse a slot; that boundary is deliberately explicit rather than promising end-to-end GPU zero-copy.
 
-A `QImage` constructed over a raw pointer is a **view, not a copy**. It goes straight to `QQuickWindow.createTextureFromImage()` — a single DMA upload, unavoidable for *any* renderer including VLC's own.
-
-**Net result: exactly one hardware texture upload per frame, zero CPU memcpy.** The theoretical floor for libVLC 3.
+The ring is the ownership boundary for the Soft path. A `QImage` may view a ring slot during callback work, but the render handoff must retain safe frame ownership before the callback can reuse that slot. The Soft path therefore preserves the existing I420 callback route, its plane uploads, and its RV32 fallback; it must not be described as an end-to-end zero-copy GPU path. Turbo exists separately for demanding Local media so Soft's CPU decode/upload cost is not a 4K60 hard wall.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -239,8 +238,8 @@ A `QImage` constructed over a raw pointer is a **view, not a copy**. It goes str
                             │  (index handoff only — 8 bytes)
 ┌───────────────────────────▼──────────────────────────────────┐
 │  Qt render thread — VideoSurface(QQuickItem)                 │
-│    QImage view over ring[read_idx]        (zero copy)        │
-│    createTextureFromImage(..., NoOwnership)  (1 DMA upload)  │
+│    QImage/plane data retained for render handoff (Soft)      │
+│    createTextureFromImage(...)  (GPU upload per plane)       │
 │    QSGSimpleTextureNode → scene graph                        │
 └──────────────────────────────────────────────────────────────┘
                             │
@@ -286,15 +285,33 @@ RV32 stays as a one-line fallback for odd hardware.
 
 Three mitigations:
 
-1. **`--avcodec-threads=0`** — every core. Default.
-2. **Turbo Mode** — opt-in, switches that media to `set_hwnd()` + `--avcodec-hw=d3d11va`. ~3% CPU. Trade: transport bar drops to a solid strip *below* the video (HWND rule from §0.1 returns). Lives in Settings. 4K is never a hard wall.
-3. **libVLC 4 path** — `libvlc_video_set_output_callbacks()` renders GPU-to-GPU into a texture we own: hardware decode *and* perfect compositing. **Not usable today** — as of mid-2026 VLC 4.0 is still unreleased, VideoLAN still ships 3.0.x, and the first public beta on pre-release libVLC 4 only reached iOS in June 2026. All video output is isolated behind `engine/video_out.py`, so switching later is a single-file change.
+1. **`--avcodec-threads=0`** — every core. Default for the Soft callback path.
+2. **Local video modes (§V)** — the visible Settings dropdown selects `Auto`, `Soft`, or `Turbo`. `Auto` resolves demanding Local media (for example, 3840×2160 at 60 FPS) to Turbo and ordinary Local media to Soft. Forced Turbo uses `set_hwnd()` + `--avcodec-hw=d3d11va`, but the native child is embedded in the single Halcyon window with `QWindow.fromWinId()` + `WindowContainer`; a dedicated transparent QML child-window overlay retains the controls/panels layer. M3U is always Soft and Web has no VLC path. Any Turbo setup, embedding, resize, or playback failure falls back to Soft without stopping playback.
+3. **libVLC 4 path** — a future GPU-to-GPU output route, not a requirement for this feature. **Not usable today** — as of mid-2026 VLC 4.0 is still unreleased, VideoLAN still ships 3.0.x, and the first public beta on pre-release libVLC 4 only reached iOS in June 2026. Keep the current Soft/Turbo boundary isolated so a later libVLC 4 path remains replaceable.
+
+### 0.5.1 Final Settings policy — Local video modes (12 August 2026)
+
+This is the accepted policy for the next implementation pass. It supersedes the earlier Turbo checkbox, docked-bar trade-off, and technical backend-selector wording. It is a documentation decision only; this update does not implement code, create a commit, or push a branch.
+
+| Active mode | Visible Settings control | Effective output |
+|---|---|---|
+| **Local** | Enabled dropdown labelled **Video mode**, with **Auto**, **Soft**, and **Turbo**; default **Auto** | `Auto` chooses Soft for ordinary Local media and Turbo for demanding media such as **3840×2160 at 60 FPS**. A forced choice is respected when it can be used. |
+| **M3U** | The same dropdown remains visible, displays **Soft**, and is **disabled** | Always the existing Soft callback/I420 path, including the RV32 fallback where needed. Turbo is not switchable for M3U. |
+| **Web** | Video mode is **completely disabled** and has no effect | Web remains unchanged: it has no VLC/Turbo path and does not drive the media player. |
+
+The dropdown is a real select control, not radio buttons or icon buttons. Its background, text, selected item, and disabled-state colours must remain readable by using clearly contrasting colours; do not rely on a single low-contrast glass tint.
+
+The internal setting is `playback.videoMode = "auto"`. `playback.turboMode` and the technical `video.backend` choices are legacy compatibility inputs at most (they may be migrated or ignored), and neither appears in normal Settings. There is one VLC engine/player: Turbo is native VLC/GPU output embedded inside the main Halcyon window, never a second background player or an outside video window.
+
+**Soft/Turbo boundaries:** Soft retains the current callback/I420 path, QML blur, and I420/RV32 fallback behaviour. Turbo wraps the native VLC child HWND with `QWindow.fromWinId()` and Qt 6.8+ `WindowContainer`; controls and panels that need to appear above the native pixels live in a transparent QML child-window overlay. Ordinary QML `MultiEffect` blur still applies to Soft scene-graph pixels, not automatically to the separate native HWND surface.
+
+**Failure boundary:** Turbo setup, HWND embedding, resize/reparenting, or playback failure must tear down the failed native route and continue the same media in Soft. The user must not lose playback merely because Turbo could not be initialised.
 
 ### 0.6 Verification gate
 
 **Write no UI until this passes.** ~150-line throwaway script:
 
-- 1080p H.264 through the zero-copy I420 path
+- 1080p H.264 through the Soft I420 callback path
 - A `Rectangle`, 60% opacity, `MultiEffect` blur, rounded corners, sitting **over** the video
 - An animated element crossing the video at a steady 60 fps
 
@@ -311,7 +328,7 @@ Pass and everything after is ordinary application code. Fail and you know in a d
 
 ## P1.1 Scope
 
-**In:** frameless glass shell, title bar, mode registry, panel dock, zero-copy video, full transport bar, OSD, local playlist, tracks/subtitles, equalizer, resume, lyrics, metadata, settings, hotkeys, packaging.
+**In:** frameless glass shell, title bar, mode registry, panel dock, Soft callback video, Local video-mode policy, full transport bar, OSD, local playlist, tracks/subtitles, equalizer, resume, lyrics, metadata, settings, hotkeys, packaging.
 
 **Out:** M3U anything, web anything, PiP, mobile remote. The title bar shows only a `Local` chip — the mode switcher renders from the registry, so it grows on its own in later phases with no edit here.
 
@@ -337,7 +354,7 @@ halcyon/
 ├── main.py
 ├── engine/
 │   ├── vlc_engine.py          # lifecycle, playback, tracks, EQ
-│   ├── video_out.py           # ★ zero-copy ring buffer (§0.3)
+│   ├── video_out.py           # ★ Soft callback ring buffer (§0.3)
 │   ├── surface.py             # ★ VideoSurface(QQuickItem) + QSG node
 │   └── equalizer.py
 ├── core/
@@ -401,7 +418,7 @@ Runtime config lives **only** in `%APPDATA%\Halcyon`. Repo `config/` holds first
 | Equalizer | Right panel, EQ tab |
 | Repeat / shuffle | Transport bar |
 | Mode switch | Title bar |
-| Settings, Turbo Mode | Title bar → gear |
+| Settings, Video mode (Auto / Soft / Turbo) | Title bar → gear; Local-enabled, M3U-disabled Soft, Web-disabled |
 | Fullscreen | Transport bar (double-click stage and `F` bind to the same action) |
 
 ### Window anatomy
@@ -429,6 +446,8 @@ Runtime config lives **only** in `%APPDATA%\Halcyon`. Repo `config/` holds first
 ```
 
 Only one mode chip renders in Phase 1 — the switcher is registry-driven, so Phase 2 adds a chip without touching `TitleBar.qml`.
+
+**Local Turbo window layering:** Soft uses the Stage scene graph shown above. When the effective Local video mode is Turbo, the VLC child HWND is wrapped as a `QWindow` and placed with Qt 6.8+ `WindowContainer` inside the same Stage bounds. A dedicated transparent QML child-window overlay hosts the transport, OSD, panels, and other controls that must sit above that native surface. This is still one Halcyon window and one VLC player; it is not a second background player or an outside video window. M3U never selects this route, and Web never creates it.
 
 **Auto-hide:** playing + pointer still 2.5 s → transport and cursor fade (180 ms). Any movement/keypress restores instantly. Never hides while a popover is open, while scrubbing, or while paused.
 
@@ -472,7 +491,7 @@ Only one mode chip renders in Phase 1 — the switcher is registry-driven, so Ph
 
 ### OSD — Local media feedback and M3U transport feedback
 
-Transient overlay drawn *in the scene graph over the video* — possible only because of §0.3.
+Transient overlay drawn above the video: in Soft it is a scene-graph item over the callback texture; in Turbo it is hosted by the dedicated transparent QML child-window overlay described in §0.5.1. The native HWND is never treated as an ordinary QML texture.
 
 | Trigger | Shows |
 |---|---|
@@ -607,6 +626,8 @@ SPEC = ModeSpec(
     setup=build_m3u_context,  # exposes the channel model to QML as modeContext_m3u
 )
 ```
+
+**Video output policy:** M3U always uses the existing Soft callback/I420 path (with the RV32 fallback where required). It never switches the shared VLC engine to Turbo, even if a legacy or Local preference says Turbo. The Settings dropdown remains visible as `Soft` and disabled while M3U is active.
 
 > **Correction (v3.2):** earlier drafts showed a `controls=[...]` field on `ModeSpec`. The shipped, frozen `core/mode_api.py` has no such field — §B.4 replaced the idea: a mode ships *its own transport QML*, and the shell never filters control lists. The mechanism below is the law; the field was the mistake.
 
@@ -916,6 +937,53 @@ SPEC = ModeSpec(
 
 ---
 
+# POST v1.0 — Local Video Modes (Settings + Local-only Turbo)
+
+> **Design locked:** 12 August 2026 · **Implementation status:** not started; this documentation update intentionally changes no code, creates no commit, and pushes nothing.
+> **Scope:** one Settings control and one effective-output policy for Local/M3U/Web. This section supersedes all earlier Turbo checkbox, docked-bar, and `video.backend` wording.
+
+## V.1 Settings surface — one visible dropdown
+
+The normal Settings dialog contains one real select control labelled **Video mode**. It is a dropdown, not radio buttons or icon buttons.
+
+- **Local:** the dropdown is visible and enabled. Choices are **Auto**, **Soft**, and **Turbo**; the default is **Auto**.
+- **M3U:** the same dropdown remains visible, visibly displays **Soft**, and is disabled. It is informational only: M3U always uses the existing Soft callback/I420 path and cannot switch to Turbo.
+- **Web:** Video mode is completely disabled and has no effect. Web otherwise remains unchanged and has no VLC/Turbo playback path.
+- The dropdown's background and text, including selected and disabled states, must have clearly contrasting readable colours. Do not substitute a low-contrast glass tint, radio group, or icon-only selector.
+
+The new internal setting is `playback.videoMode`, defaulting to `"auto"`. The old `playback.turboMode` checkbox and technical `video.backend` dropdown/choices are removed from normal Settings. For existing profiles those keys may be migrated or ignored for compatibility, but they must not reappear as user-facing controls.
+
+## V.2 Effective mode resolution
+
+- `Auto` is evaluated only for Local media. It chooses **Turbo** for demanding content such as **3840×2160 at 60 FPS**, and chooses **Soft** for ordinary Local media where possible.
+- Forced `Soft` keeps the current callback/I420 path, QML blur, and RV32 fallback behaviour.
+- Forced `Turbo` uses the native VLC/GPU path, not the callback surface. There is still **one VLC engine/player**: no second background player, no second decoder, and no outside video window.
+- M3U is always Soft regardless of the stored Local preference. Web does not resolve a video mode at all.
+
+## V.3 Turbo window and overlay boundary
+
+Turbo gives libVLC the native child HWND and enables the D3D11 hardware-decode route. The child is wrapped with `QWindow.fromWinId()` and embedded with Qt 6.8+ `WindowContainer` inside the Stage bounds of the single Halcyon window. A dedicated transparent QML child-window overlay hosts the transport, OSD, controls, and panels that need to appear above the native pixels. Ordinary QML siblings cannot paint over the HWND, and ordinary QML `MultiEffect` blur does not automatically sample it; full scene-graph blur remains the Soft-path guarantee.
+
+M3U never creates this native route. Web remains the existing WebView2 mode and never creates a VLC/Turbo surface.
+
+## V.4 Failure and lifecycle rule
+
+If Turbo setup, HWND wrapping/embedding, resize/reparenting, or native playback fails, the engine must fall back to Soft and continue the same media without stopping playback. Any partially-created native child is cleaned up before the Soft surface is restored. Switching modes still obeys the one-tuner rule; it never leaves a background Turbo player running.
+
+## V.5 Acceptance — Local video modes (future implementation)
+
+- [ ] Local Settings shows an enabled `Video mode` dropdown with `Auto`, `Soft`, and `Turbo`; default is `Auto`.
+- [ ] `Auto` selects Turbo for demanding Local media and Soft for ordinary Local media; forced Soft/Turbo choices behave accordingly.
+- [ ] M3U keeps the dropdown visible as disabled `Soft` and always renders through the Soft callback/I420 path, including RV32 fallback where required.
+- [ ] Web leaves Video mode disabled and otherwise behaves exactly as before.
+- [ ] The old `playback.turboMode` checkbox and `video.backend` dropdown are absent from normal Settings.
+- [ ] Dropdown background/text/selected/disabled colours are readable and clearly contrasting.
+- [ ] Turbo stays inside the single Halcyon window/player via the native child + `WindowContainer` route; no outside video window or second player appears.
+- [ ] A Turbo setup/embedding/resize/playback failure falls back to Soft without stopping playback.
+- [ ] Soft QML blur remains intact; no native-HWND path is introduced for M3U or Web.
+
+---
+
 # POST v1.0 — Mini Mode (v1.1) — Local Compact Bar
 
 > **Ship target:** `v1.1.0-mini` · **Est:** 0.5–1 day · **Branch:** `phase-4-mini` (or `main` post-v1.0)
@@ -993,7 +1061,7 @@ Together they give precise seek + glanceable status with **0px width increase**,
 |---|---|
 | **Black flash on return** | Keep Stage alive hidden, not destroyed — same as Web `keep_stage_alive`. On return, latest frame already in ring. Skip `createTextureFromImage` while hidden to save. |
 | **Geometry restore** | Save normal `x,y,w,h,wasMaximized,wasFullscreen` before entering mini. On return restore. If wasMaximized, call `showMaximized()` after. |
-| **Turbo Mode HWND child** | Turbo uses native child HWND — hidden Stage would leave orphan. On entering mini, force switch to I420 soft path keeping position; on return, if Turbo setting ON, re-enable hw. Simplest: disable Turbo while mini. |
+| **Turbo child while Mini is active** | Turbo uses a native child HWND — a hidden Stage would leave an orphan. While Mini is active, force the effective Local output to the existing Soft I420 path; on return, re-resolve the selected `Video mode` (`Auto` or `Turbo`) and fall back to Soft if native setup fails. Do not resurrect the old Turbo checkbox. |
 | **Fixed-size frameless drag** | Only grip calls `startSystemMove()`, not whole bar — avoids accidental drags. Handles hidden. |
 | **Close from mini** | Intercept `onClosing` in mini: `close.accepted=false; toggleMiniMode()` → returns to normal. Only normal mode `Qt.quit()`. |
 
@@ -1489,7 +1557,7 @@ Deliberately excluded from all three phases to keep each shippable:
 
 | Risk | Sev | Mitigation |
 |---|---|---|
-| 4K60 software decode too heavy | Med | Turbo Mode (§0.5); libVLC 4 later |
+| 4K60 software decode too heavy | Med | Local `Auto`/`Turbo` policy (§0.5.1/§V); demanding Local media may use native D3D11 output, while every failure falls back to Soft without stopping playback; libVLC 4 remains future work |
 | ctypes callback GC'd mid-playback | **High** | **Hold hard references on a long-lived object.** Classic `python-vlc` segfault — a callback going out of scope crashes instantly. Bites in Milestone 1.0 |
 | `stop()` race on close | Med | Stop → await `Stopped` event → release; never release from a Qt slot |
 | GIL contention on callbacks | Med | Callbacks do *zero* pixel work — index swap only |
@@ -1500,6 +1568,8 @@ Deliberately excluded from all three phases to keep each shippable:
 | Nuitka misses VLC plugins | Med | Explicit `--include-data-dir`; set `VLC_PLUGIN_PATH` at startup |
 | HiDPI fractional scaling blur | Low | `PassThrough` rounding, DPR-aware texture sizing |
 | WebView2 overlay limit (native child window) | Med | The page is a native child HWND — QML cannot paint over it (§0.1 physics). All chrome lives above the web area; the ⋮/★ popups are Halcyon-owned frameless popup windows; app messages render as plain text in the tabs row (§P3.2/§P3.4). Design complies by construction |
+| Turbo HWND embedding / resize failure | Med | Keep Turbo behind the effective-mode boundary; if `QWindow.fromWinId()` / `WindowContainer` setup, reparenting, resize, or native playback fails, clean up and continue the same media on Soft. M3U and Web never enter this path (§V.3–V.4) |
+| Turbo overlay cannot receive ordinary scene-graph blur | Med | Host controls/panels in the dedicated transparent QML child-window overlay; keep full `MultiEffect` blur as a Soft-path guarantee rather than pretending it samples native HWND pixels (§V.3) |
 | COM / pythonnet interop bugs | Med | Use the proven Smart Player recipe: one shared CoreWebView2Environment, hard-referenced event handlers, COM init per thread. Spike first in M3.1 (§P3.2) |
 | WebView2 runtime missing (rare) | Low | Evergreen Runtime ships with Windows 11 and eligible Windows 10 (§P3.2). Startup registry + import check; if absent the stage shows "WebView2 is not available" — no crash, no bundling |
 | pythonnet + Nuitka packaging | Low | Vendor the WebView2 SDK bridge files (Microsoft.Web.WebView2.Core.dll + WebView2Loader.dll win-x64) in vendor/webview2/ and make them discoverable in the frozen build. Verify in M3.5 (§10) |
@@ -1519,7 +1589,12 @@ Deliberately excluded from all three phases to keep each shippable:
 | Requirement | Phase | Status |
 |---|:---:|---|
 | Frameless glass UI | 1 | ✅ |
-| **No overlay / click-through bug** | 1 | ✅ **structurally impossible — §0** |
+| **No overlay / click-through bug** | 1 / V | ✅ Soft uses the scene graph; Turbo uses the dedicated child-window overlay boundary — ordinary QML is never expected to paint over a native HWND |
+| **Local Video mode dropdown: Auto / Soft / Turbo** | V | ◻ **Design locked §V; implementation not started** |
+| **Local Auto chooses Soft/Turbo; Turbo failure falls back to Soft** | V | ◻ **Design locked §V; implementation not started** |
+| **M3U visible disabled Soft control + existing Soft callback/I420 path** | 2 / V | ◻ **Design locked §V; implementation not started** |
+| **Web Video mode disabled; Web otherwise unchanged** | 3 / V | ◻ **Design locked §V; implementation not started** |
+| **Legacy `playback.turboMode` and `video.backend` absent from normal Settings** | V | ◻ **Design locked §V; implementation not started** |
 | Vast format support, no codec install | 1 | ✅ bundled libVLC |
 | **OSD — Local + M3U transport feedback** | 1 / 2 | ✅ |
 | **Local: play/pause/stop/prev/next** | 1 | ✅ |
@@ -1552,7 +1627,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | **Mini Mode v1.1: Local compact bar 400×44, grip only drag, prev/seek ±10/play/stop/next/volume/mute/return, hairline top seek + circular play ring, vertical volume pop-up, always-on-top top-center, no close from mini, auto-return on finished** | 4 | ✅ §M — shell state not ModeSpec, 44px = TitleBar height |
 | Mobile remote + QR | R (v1.2) | ✅ **COMPLETE — verified 2026-08-09, tag `v1.2.0-remote`** — §R, full remote: server on by default, QR in Settings, real-time sync, Local/M3U/Web chips, playlist pinned bottom 7 rows, drive browser all drives, subtitle download, PiP+Fullscreen, universal media control, Power Sleep/Shutdown |
 
-**One conscious trade-off, bounded:** 4K60 needs Turbo Mode (§0.5). *The separate-window limitation from earlier drafts is resolved — see §P3.2.*
+**One conscious trade-off, bounded:** demanding Local media may need Turbo (§0.5.1/§V), but Turbo is Local-only, remains inside the single Halcyon window/player, and falls back to Soft without stopping playback. *The separate-window limitation from earlier drafts is resolved by the explicit child-window embedding boundary — see §V.3 and §P3.2.*
 
 ---
 
