@@ -140,18 +140,24 @@ def main(argv: list[str] | None = None) -> int:
         QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
 
     # --- surface format, before any window exists --------------------------
-    # The shell is a transparent (layered) window for its rounded corners, so
-    # Qt's D3D11 swapchain carries premultiplied alpha. When the window's
-    # QSurfaceFormat does not declare an alpha buffer, Qt logs "Swapchain says
-    # surface has alpha but the window has no alphaBufferSize set. This may
-    # lead to problems." — and the mismatch is real (see QRhiSwapChain docs:
-    # SurfaceHasPreMulAlpha requires a non-zero alphaBufferSize on the window).
-    # Declare it once, for every window; the Turbo child overrides its own
-    # format to an opaque 0 in turbo_surface.py, so this default only ever
-    # applies to the surfaces that are genuinely transparent.
+    # Both the rounded shell and TurboChromeWindow are transparent
+    # QQuickWindows.  QSurfaceFormat's global default alone is not sufficient
+    # for dynamically-created QML Window instances on the D3D11/RHI path:
+    # QQuickWindow can still create a premultiplied-alpha swapchain while its
+    # own requested format reports no alpha buffer.  That is the exact mismatch
+    # behind "Swapchain says surface has alpha but the window has no
+    # alphaBufferSize set" when Turbo creates its chrome overlay.
+    #
+    # Set QQuickWindow's alpha policy explicitly *before QGuiApplication* so it
+    # is copied into the main shell and every later QML Window, including the
+    # Turbo overlay.  Keep the QSurfaceFormat default as the platform-level
+    # declaration.  The native VLC child is a plain QWindow and overrides its
+    # own format to opaque alpha size 0 in turbo_surface.py.
+    QQuickWindow.setDefaultAlphaBuffer(True)
+
     from PySide6.QtGui import QSurfaceFormat
 
-    surface_format = QSurfaceFormat()
+    surface_format = QSurfaceFormat.defaultFormat()
     surface_format.setAlphaBufferSize(8)
     QSurfaceFormat.setDefaultFormat(surface_format)
 
