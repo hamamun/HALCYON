@@ -139,6 +139,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
 
+    # --- surface format, before any window exists --------------------------
+    # The shell is a transparent (layered) window for its rounded corners, so
+    # Qt's D3D11 swapchain carries premultiplied alpha. When the window's
+    # QSurfaceFormat does not declare an alpha buffer, Qt logs "Swapchain says
+    # surface has alpha but the window has no alphaBufferSize set. This may
+    # lead to problems." — and the mismatch is real (see QRhiSwapChain docs:
+    # SurfaceHasPreMulAlpha requires a non-zero alphaBufferSize on the window).
+    # Declare it once, for every window; the Turbo child overrides its own
+    # format to an opaque 0 in turbo_surface.py, so this default only ever
+    # applies to the surfaces that are genuinely transparent.
+    from PySide6.QtGui import QSurfaceFormat
+
+    surface_format = QSurfaceFormat()
+    surface_format.setAlphaBufferSize(8)
+    QSurfaceFormat.setDefaultFormat(surface_format)
+
     from PySide6.QtCore import QCoreApplication, QUrl
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtQml import QQmlApplicationEngine

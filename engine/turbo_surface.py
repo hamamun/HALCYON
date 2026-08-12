@@ -61,13 +61,37 @@ _BLACK_BRUSH = 4
 
 
 def _win32_long_funcs():
-    """Return ``(get_long, set_long)`` for the pointer-width of this process."""
+    """Return ``(get_long, set_long)`` typed for this process's pointer width.
+
+    ``ctypes.windll`` defaults every argument to ``c_int`` and every return
+    value to ``c_int``. A WndProc address is a 64-bit pointer on Win64, so the
+    default ``c_int`` third argument raises ``OverflowError: int too long to
+    convert`` on ``SetWindowLongPtrW`` (the exact failure in
+    ``_keep_hwnd_black``), and reading a 64-bit pointer back through a
+    ``c_int`` restype silently truncates it — which also broke the
+    "did WindowContainer replace our WndProc?" check and ``_restore_wndproc``.
+    Declare the real ``LONG_PTR`` signatures once so every helper here gets
+    untruncated values on both process widths.
+    """
     import ctypes
+    from ctypes import wintypes
 
     user32 = ctypes.windll.user32
     if ctypes.sizeof(ctypes.c_void_p) == 8:
-        return user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
-    return user32.GetWindowLongW, user32.SetWindowLongW
+        get_long = user32.GetWindowLongPtrW
+        set_long = user32.SetWindowLongPtrW
+    else:
+        get_long = user32.GetWindowLongW
+        set_long = user32.SetWindowLongW
+
+    # LONG_PTR: pointer-width signed integer. On Win64 this is 64 bits — the
+    # only type that can carry a WndProc address in either position.
+    long_ptr = ctypes.c_ssize_t
+    get_long.restype = long_ptr
+    get_long.argtypes = [wintypes.HWND, ctypes.c_int]
+    set_long.restype = long_ptr
+    set_long.argtypes = [wintypes.HWND, ctypes.c_int, long_ptr]
+    return get_long, set_long
 
 
 def _harden_hwnd(window) -> None:
