@@ -175,6 +175,26 @@ def test_starting_turbo_off_windows_simply_refuses(monkeypatch):
 # ---------------------------------------------------------------------------
 # The surface's own lifecycle
 # ---------------------------------------------------------------------------
+def test_the_child_window_is_opaque_black(qt_application, forced_turbo):
+    """A transparent child inside Halcyon's layered shell is the desktop hole."""
+    player = FakePlayer()
+    surface = TurboSurface()
+
+    assert surface.start(player) is True
+    try:
+        color = surface.window.color
+        if callable(color):
+            color = color()
+        assert color.alpha() == 255
+        assert color.red() == 0 and color.green() == 0 and color.blue() == 0
+        opacity = surface.window.opacity
+        if callable(opacity):
+            opacity = opacity()
+        assert opacity == 1.0
+    finally:
+        surface.stop(player)
+
+
 def test_the_surface_creates_one_hidden_child_and_binds_it(qt_application, forced_turbo):
     player = FakePlayer()
     surface = TurboSurface()

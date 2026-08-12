@@ -44,6 +44,7 @@ Item {
         width: root.targetWidth
         height: parent.height
         blurSource: root.blurSource
+        solidIfUnblurred: true
         radius: 0
         showBorder: false
 

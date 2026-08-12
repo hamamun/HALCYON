@@ -46,6 +46,11 @@ QtObject {
     readonly property color glassFillPressed: Qt.rgba(1, 1, 1, 0.14)
     readonly property color glassBorder:   Qt.rgba(1, 1, 1, 0.12)
     readonly property color glassBorderStrong: Qt.rgba(1, 1, 1, 0.20)
+    // When there is nothing to blur (Turbo's native video HWND), the 6%
+    // glass tint is invisible over a bright picture. Docks and the
+    // transport bar use this instead so text and controls stay readable.
+    property color glassFillSolid: darkMode ? Qt.rgba(0, 0, 0, 0.88)
+                                            : Qt.rgba(0.043, 0.055, 0.078, 0.88)
 
     // ---------------------------------------------------------------- text --
     property color text:          darkMode ? "#EDEDED" : "#F2F5F9"

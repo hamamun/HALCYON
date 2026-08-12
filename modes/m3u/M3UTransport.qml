@@ -29,6 +29,9 @@ Item {
     //: Reflects the left dock's state so the playlist button can light up.
     //: Bound by the shell in Main.qml — see bindTransport().
     property bool playlistVisible: false
+    // Bound by the shell for Turbo; M3U never takes that route, so this
+    // stays false. Declared so bindTransport() can set it without a warning.
+    property bool solidChrome: false
 
     implicitHeight: 52
     height: implicitHeight
@@ -36,6 +39,7 @@ Item {
     TransportScrim {
         anchors.fill: parent
         anchors.topMargin: -24        // same fade as Local's bar
+        solid: root.solidChrome
     }
 
     // Buffering hairline — accent gradient, exactly the family look of the
