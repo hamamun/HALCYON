@@ -184,12 +184,36 @@ Item {
     readonly property bool isFullscreen: root.Window.window && root.Window.window.fullscreen
     readonly property bool miniEnabled: activeMode === "local" && hasMedia && !isFullscreen
 
+    //: Controller source for the video-route badge. Injectable on the same
+    //: terms as `meta` and `player` so this file still loads standalone.
+    property var app: typeof App !== "undefined" ? App : null
+
+    // The video-route badge is a playback read-out, so it appears only while
+    // there is media on a mode that has a player: Local and M3U. Web has no
+    // video route of its own (§V.1) and Mini Mode has its own chrome.
+    readonly property bool videoBadgeVisible:
+        (activeMode === "local" || activeMode === "m3u") && hasMedia && !isFullscreen
+
     // ------------------------------------------------------ window buttons --
     Row {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.rightMargin: Theme.spaceSm
         spacing: 0
+
+        // Which video path the playing media is actually on — §V.7. Sits
+        // ahead of the gear because it is a status read-out, not a control,
+        // and so it never shifts the window buttons: it takes its own slot,
+        // collapsing to zero width when there is nothing to report.
+        VideoModeBadge {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.videoBadgeVisible && root.app ? root.app.videoModeBadge : ""
+            tooltip: root.app ? root.app.videoModeTooltip : ""
+        }
+        Item {
+            width: root.videoBadgeVisible ? Theme.spaceSm : 0
+            height: 1
+        }
 
         IconButton {
             glyph: Glyphs.settings

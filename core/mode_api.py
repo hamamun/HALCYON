@@ -68,6 +68,14 @@ class ModeSpec:
     #: mode hides the left dock entirely (§P3.3 — v4.0 generic capability).
     panel_enabled: bool = True
 
+    #: Whether this mode may use the native Turbo video route (§V.2). Defaults
+    #: to False, which is the safe answer for every mode that is not Local:
+    #: M3U keeps the Soft callback/I420 path (with its RV32 fallback) whatever
+    #: the stored Local preference says, and Web has no VLC path at all. This
+    #: is a generic capability in the same class as ``panel_enabled`` — the
+    #: chassis reads a flag, it never names a mode.
+    turbo_allowed: bool = False
+
     #: Whether the stage component is parked (hidden, not destroyed) when
     #: switching away from this mode. Defaults to False. Web mode sets True so
     #: open tabs and live pages survive mode switches within a session (§P3.3 —

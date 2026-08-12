@@ -38,6 +38,28 @@ Shell {
     readonly property var modeSpec: Modes.spec(activeMode)
     property bool chromeVisible: true
 
+    // ---------------------------------------------------- video mode §0.5.1/§V
+    // The *effective* route the engine reports, never the selection: a Turbo
+    // attempt that failed has already fallen back to Soft, and every consumer
+    // here must follow what is really on screen.
+    readonly property string effectiveVideoMode:
+        (typeof App !== "undefined" && App && App.effectiveVideoMode)
+        ? App.effectiveVideoMode : "soft"
+    readonly property bool turboActive: effectiveVideoMode === "turbo"
+
+    // What the glass panels blur. Soft video is scene-graph pixels, so the
+    // Stage is a real backdrop. Turbo's picture is a native child window that
+    // MultiEffect cannot sample (§V.3) — and while the chrome lives in the
+    // overlay window the Stage is in a different scene entirely — so the
+    // panels fall back to their plain tint rather than blurring nothing.
+    readonly property var chromeBlurSource: turboActive ? null : stage
+
+    function reportTurboFailure(reason) {
+        console.warn("Turbo: " + reason + " — falling back to Soft");
+        if (typeof App !== "undefined" && App && App.reportTurboFailure)
+            App.reportTurboFailure(String(reason));
+    }
+
     // The docks' open state lives here as plain bools, NOT as an imperative
     // toggle on the docks, and NOT as bindings. `panelHost.open = !x` and
     // `rightPanelOpen: Settings.get(...)` both compile, but the first removes
@@ -59,7 +81,6 @@ Shell {
     property int normalH: -1
     property bool normalWasMaximized: false
     property bool normalWasFullscreen: false
-    property bool wasTurbo: false
     // Width from settings, height = titleBarHeight per spec
     property int miniBarWidth: Math.max(460, Settings.get("window.miniBarWidth", 460))
     readonly property int miniBarHeight: Theme.titleBarHeight // 44px
@@ -151,11 +172,15 @@ Shell {
         if (normalWasMaximized) {
             visibility = Window.Windowed;
         }
-        // Turbo — save and disable simplest
-        wasTurbo = Settings.get("playback.turboMode", false);
-        if (wasTurbo) {
-            Settings.set("playback.turboMode", false);
-        }
+        // Video mode — Mini runs on Soft (§M, §V.4).
+        //
+        // The 460×44 bar has no stage to embed a native child window in, so a
+        // Turbo child here would be orphaned or invisible: exactly the state
+        // the failure rule forbids. The *selection* is untouched — nothing is
+        // written to settings and no old Turbo checkbox is resurrected — the
+        // controller simply forces Soft while Mini is on and re-resolves the
+        // chosen mode (including Auto -> Turbo) on the way back out.
+        App.setMiniMode(true);
 
         // Determine mini position — each session's first entry is top-center
         // (startup resets the saved position to -1); within this session the
@@ -206,11 +231,10 @@ Shell {
         if (normalWasFullscreen) {
             setFullscreen(true);
         }
-        // Restore Turbo
-        if (wasTurbo) {
-            Settings.set("playback.turboMode", true);
-        }
-        wasTurbo = false;
+        // Back to the full window: re-resolve the selected Video mode, which
+        // may be Auto and may land on Turbo. A Turbo attempt that fails here
+        // falls back to Soft exactly as it does anywhere else (§V.4).
+        App.setMiniMode(false);
     }
 
     function toggleMiniMode() {
@@ -669,6 +693,58 @@ Shell {
                 // switch; Local and M3U continue to unload normally.
                 modeSpecs: Modes.list
                 activeMode: window.activeMode
+            }
+
+            // ----------------------------------------------------------------
+            // TURBO — the native video surface, inside this window (§V.3).
+            //
+            // Occupies exactly the Stage rectangle. Instantiated only while the
+            // engine reports it is genuinely on the native route, so a Soft
+            // session (which is every session on a platform without the route)
+            // never creates a WindowContainer at all. Any problem adopting the
+            // child is reported straight back to the engine, which continues
+            // the same media on Soft (§V.4).
+            Loader {
+                id: turboSurfaceLoader
+                anchors.fill: parent
+                z: 1
+                // A Loader, not a hidden item: an invisible WindowContainer is
+                // still a constructed one, and there is no reason for a Soft
+                // session to own a native-window embedder it will never use.
+                active: window.turboActive && !window.miniModeActive
+                sourceComponent: turboSurfaceComponent
+            }
+
+            Component {
+                id: turboSurfaceComponent
+
+                TurboSurfaceHost {
+                    turboActive: window.turboActive
+                    windowProvider: function() {
+                        return (typeof App !== "undefined" && App && App.turboWindow)
+                               ? App.turboWindow() : null;
+                    }
+                    onFailed: function(reason) { window.reportTurboFailure(reason) }
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // CHROME LAYER — the transport bar, both docks and the OSD.
+            //
+            // Grouped into one item for exactly one reason: a native child
+            // window (Turbo) is composited above the Qt Quick scene graph, so
+            // ordinary QML siblings cannot paint over it. While Turbo runs,
+            // this whole layer is moved into the transparent overlay window
+            // (§V.3) and moved straight back afterwards — one implementation of
+            // every control, in one of two homes, never two copies.
+            //
+            // In Soft (and therefore in every non-Windows session) it never
+            // leaves this window and the layout is exactly what it always was.
+            Item {
+                id: chromeLayer
+                objectName: "chromeLayer"
+                anchors.fill: parent
+                z: 5
 
                 // The mode's own bar, floating over the video (§B.4).
                 Loader {
@@ -712,87 +788,136 @@ Shell {
                         GradientStop { position: 1.0; color: Theme.accentAlt }
                     }
                 }
-            }
 
-            // Left panel — floats over the stage (overlay).
-            // Stops at the top of the transport bar so the controls stay
-            // visible and clickable while the dock is open.
-            PanelHost {
-                id: panelHost
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: body.transportInset
-                open: window.leftPanelOpen && window.leftPanelAvailable()
-                      && (!window.fullscreen || window.chromeVisible)
-                // Clearing the source matters as well as width: a native Web
-                // stage must not leave Web's placeholder panel instantiated
-                // behind an invisible zero-width dock.
-                source: window.leftPanelAvailable() && window.modeSpec ? window.modeSpec.panelQml : ""
-                blurSource: stage
-                z: 10
+                // Left panel — floats over the stage (overlay).
+                // Stops at the top of the transport bar so the controls stay
+                // visible and clickable while the dock is open.
+                PanelHost {
+                    id: panelHost
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: body.transportInset
+                    open: window.leftPanelOpen && window.leftPanelAvailable()
+                          && (!window.fullscreen || window.chromeVisible)
+                    // Clearing the source matters as well as width: a native Web
+                    // stage must not leave Web's placeholder panel instantiated
+                    // behind an invisible zero-width dock.
+                    source: window.leftPanelAvailable() && window.modeSpec ? window.modeSpec.panelQml : ""
+                    // Backdrop blur samples scene-graph pixels. Turbo's picture
+                    // is a native child window, which MultiEffect cannot read —
+                    // and once this layer lives in the overlay window the Stage
+                    // is not even in the same scene. Dropping the source there
+                    // is honest (a tinted panel, §V.3) instead of asking Qt to
+                    // sample across windows. Soft keeps the full blur.
+                    blurSource: window.chromeBlurSource
+                    z: 10
 
-                // Match the bar's own fade so the panel edge and the bar move
-                // together rather than the panel snapping to a new height.
-                Behavior on anchors.bottomMargin {
-                    NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    // Match the bar's own fade so the panel edge and the bar move
+                    // together rather than the panel snapping to a new height.
+                    Behavior on anchors.bottomMargin {
+                        NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    }
                 }
-            }
 
-            // Right panel — floats over the stage (overlay).
-            // Same bottom stop as the left dock — see body.transportInset.
-            InfoPanel {
-                id: infoPanel
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: body.transportInset
-                // Gated on the mode's rich-chrome flag: in M3U/Web the dock is
-                // simply absent — even if it was open when the chip flipped.
-                // In fullscreen panels auto-hide together with the transport
-                // bar (chromeVisible) — move mouse to bring all back.
-                open: window.rightPanelOpen && window.rightDockAvailable()
-                      && (!window.fullscreen || window.chromeVisible)
-                blurSource: stage
-                z: 10
+                // Right panel — floats over the stage (overlay).
+                // Same bottom stop as the left dock — see body.transportInset.
+                InfoPanel {
+                    id: infoPanel
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: body.transportInset
+                    // Gated on the mode's rich-chrome flag: in M3U/Web the dock is
+                    // simply absent — even if it was open when the chip flipped.
+                    // In fullscreen panels auto-hide together with the transport
+                    // bar (chromeVisible) — move mouse to bring all back.
+                    open: window.rightPanelOpen && window.rightDockAvailable()
+                          && (!window.fullscreen || window.chromeVisible)
+                    blurSource: window.chromeBlurSource
+                    z: 10
 
-                Behavior on anchors.bottomMargin {
-                    NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    Behavior on anchors.bottomMargin {
+                        NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    }
                 }
-            }
 
-            // ----------------------------------------------------------------
-            // OSD — a sibling of the docks at a higher z, NOT a child of Stage.
-            //
-            // It used to live inside Stage, which is a z:0 sibling of two z:10
-            // docks. z only orders siblings, so every pill — status, volume and
-            // the resume toast — was painted *underneath* the 300px playlist
-            // dock that shares its top-left origin, and was simply invisible in
-            // windowed mode with the queue open. It only ever looked correct in
-            // fullscreen, where both docks are forced shut.
-            //
-            // Anchored inside the docks rather than merely drawn over them: a
-            // pill floating on top of the glass would be legible but would sit
-            // on the wrong background. Both margins animate with the docks so
-            // the pill slides with them instead of jumping.
-            Osd {
-                id: osdLayer
-                anchors.fill: parent
-                // Both docks already animate their own width, and the transport
-                // inset animates with the chrome, so these margins inherit that
-                // motion. A Behavior here would animate an already-animating
-                // value and make the pill lag behind the dock edge.
-                anchors.leftMargin: panelHost.width
-                anchors.rightMargin: infoPanel.width
-                anchors.bottomMargin: body.transportInset
-                z: 20
-                osdEnabled: window.osdEnabled()
-                suppressed: settingsDialog.visible
-                // The clock, the seek bar and the toast all read time the same
-                // way — one formatter, not three (§4.1).
-                formatTime: window.formatTime
+                // ------------------------------------------------------------
+                // OSD — a sibling of the docks at a higher z, NOT a child of Stage.
+                //
+                // It used to live inside Stage, which is a z:0 sibling of two z:10
+                // docks. z only orders siblings, so every pill — status, volume and
+                // the resume toast — was painted *underneath* the 300px playlist
+                // dock that shares its top-left origin, and was simply invisible in
+                // windowed mode with the queue open. It only ever looked correct in
+                // fullscreen, where both docks are forced shut.
+                //
+                // Anchored inside the docks rather than merely drawn over them: a
+                // pill floating on top of the glass would be legible but would sit
+                // on the wrong background. Both margins animate with the docks so
+                // the pill slides with them instead of jumping.
+                Osd {
+                    id: osdLayer
+                    anchors.fill: parent
+                    // Both docks already animate their own width, and the transport
+                    // inset animates with the chrome, so these margins inherit that
+                    // motion. A Behavior here would animate an already-animating
+                    // value and make the pill lag behind the dock edge.
+                    anchors.leftMargin: panelHost.width
+                    anchors.rightMargin: infoPanel.width
+                    anchors.bottomMargin: body.transportInset
+                    z: 20
+                    osdEnabled: window.osdEnabled()
+                    suppressed: settingsDialog.visible
+                    // The clock, the seek bar and the toast all read time the same
+                    // way — one formatter, not three (§4.1).
+                    formatTime: window.formatTime
+                }
             }
         }
+    }
+
+    // ======================================================================
+    // TURBO CHROME OVERLAY — §V.3.
+    //
+    // Created only while Turbo is actually running. On load the chrome layer
+    // moves into it; on unload — including a Turbo failure falling back to
+    // Soft — it moves straight back into `body`, so the controls can never be
+    // stranded in a window that is going away.
+    // ======================================================================
+    Loader {
+        id: turboChromeLoader
+        active: window.turboActive && !window.miniModeActive
+        sourceComponent: turboChromeComponent
+        onLoaded: window.moveChromeToOverlay()
+        // Runs before the Window is destroyed, which is the only safe moment
+        // to take the chrome back out of it.
+        onActiveChanged: if (!active) window.moveChromeHome()
+    }
+
+    Component {
+        id: turboChromeComponent
+
+        TurboChromeWindow {
+            hostWindow: window
+            // The body rectangle in window coordinates. The container
+            // Rectangle fills the window with no offset of its own, so the
+            // only inset is the title bar's height (zero in fullscreen).
+            bodyRect: Qt.rect(0, titleBar.height, body.width, body.height)
+            visible: true
+        }
+    }
+
+    function moveChromeToOverlay() {
+        var overlay = turboChromeLoader.item;
+        if (!overlay || !overlay.hostItem)
+            return;
+        chromeLayer.parent = overlay.hostItem;
+    }
+
+    function moveChromeHome() {
+        if (chromeLayer.parent !== body)
+            chromeLayer.parent = body;
     }
 
     // ======================================================================

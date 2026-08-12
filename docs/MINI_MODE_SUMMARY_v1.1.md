@@ -65,6 +65,11 @@ Together = precise + glanceable, 0px width increase, perfect for title-bar sit.
 - **Black flash on return:** Keep Stage alive hidden, skip `createTextureFromImage` while hidden.
 - **Geometry restore:** Save normal x,y,w,h,wasMaximized,wasFullscreen before entering mini, restore on return.
 - **Turbo HWND:** On entering mini, force soft I420 path, on return restore if setting ON.
+  *(Updated 2026-08-12, §V.) Implemented as `App.setMiniMode(true/false)`: the controller
+  forces the effective route to Soft while Mini is up and re-resolves the selected
+  `Video mode` — including `Auto` landing on Turbo — on return, falling back to Soft if
+  native setup fails. Mini deliberately writes **nothing** to settings; the old
+  `playback.turboMode` save/restore is gone along with the checkbox itself.)*
 - **Close intercept:** `onClosing` in mini -> return to normal.
 
 ## 8. Files Touched (Disclosed v4.1)

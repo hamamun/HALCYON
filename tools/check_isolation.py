@@ -131,6 +131,43 @@ PHASE_U_DISCLOSED = [
     "main.py",
 ]
 
+#: Disclosed Phase-T (Local video modes) additions to frozen Phase 1 paths —
+#: post-v1.0 §0.5.1 / §V, owner design lock 2026-08-12. One visible Settings
+#: dropdown (`playback.videoMode`) and one effective-output policy. Every entry
+#: below is a *generic chassis capability*, in the same class as v4.0's
+#: `panel_enabled`: the shell and the engine gain a Soft/Turbo route and a
+#: `turbo_allowed` flag, and no shared file learns the name of a mode. Local
+#: opts in through its own ModeSpec; M3U and Web are unchanged and inherit the
+#: safe default (Soft only). Covered by tests/test_video_mode_policy.py,
+#: tests/test_video_mode_controller.py, tests/test_video_mode_settings.py and
+#: tests/test_video_mode_ui.py.
+PHASE_T_DISCLOSED = [
+    # playback.videoMode default + the load-time migration that folds the
+    # removed playback.turboMode checkbox into it (§V.1).
+    "core/settings.py",
+    # `turbo_allowed`: the capability flag that keeps M3U on Soft without the
+    # chassis naming a mode. Same generic-capability precedent as §P3.3.
+    "core/mode_api.py",
+    # set_video_route()/turbo_failed(): Soft <-> Turbo on the single existing
+    # player, plus the per-playback :avcodec-hw media option and the teardown
+    # that guarantees no Turbo child outlives a stop or a shutdown (§V.4).
+    "engine/vlc_engine.py",
+    # The native child window itself: create -> set_hwnd -> hand to
+    # WindowContainer -> destroy. New file, engine-internal (§V.3).
+    "engine/turbo_surface.py",
+    # WindowContainer host and the transparent chrome overlay window that §V.3
+    # requires, because QML siblings cannot paint over a native child HWND.
+    "ui/shell/TurboSurfaceHost.qml",
+    "ui/shell/TurboChromeWindow.qml",
+    # Chrome layer grouping (so it can move into the overlay and back), the
+    # Turbo stage wiring and the Mini Mode rewrite that replaces the old
+    # turboMode save/restore with the video-mode policy.
+    "ui/Main.qml",
+    # Registers the two new shell types; without it `import Halcyon.Shell`
+    # cannot resolve them (tests/test_qml_modules.py enforces this).
+    "Halcyon/Shell/qmldir",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -295,7 +332,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED or path in PHASE_T_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

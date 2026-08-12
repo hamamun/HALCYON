@@ -22,6 +22,7 @@ from typing import Any
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from core import paths
+from core import video_mode
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,11 @@ DEFAULTS: dict[str, Any] = {
     "audio.volume": 80,
     "audio.muted": False,
     "playback.rate": 1.0,
-    "playback.turboMode": False,
+    # Local video modes — §0.5.1 / §V.1. One visible dropdown: auto | soft |
+    # turbo. This replaces the old "playback.turboMode" checkbox, which is now
+    # a load-time migration input only (core.video_mode.migrate_legacy) and
+    # never a user-facing control again.
+    "playback.videoMode": "auto",
     "playback.resumeEnabled": True,
     # ui
     "ui.mode": "local",
@@ -56,7 +61,11 @@ DEFAULTS: dict[str, Any] = {
     # glossy glass, monochrome). See ui/Theme.qml.
     "ui.theme": "color",
     # video / engine
-    "video.backend": "auto",  # auto | i420 | rv32
+    # Internal Soft-path chroma only (auto | i420 | rv32), kept because the
+    # RV32 fallback still needs a switch and HALCYON_VIDEO_BACKEND still
+    # overrides it for diagnosis. Removed from normal Settings by §V.1: it is
+    # not a Turbo control and must not reappear as a user-facing dropdown.
+    "video.backend": "auto",
     "video.adjustEnabled": False,
     "video.contrast": 1.0,
     "video.brightness": 1.0,
@@ -102,7 +111,32 @@ class Settings(QObject):
             self._backup_corrupt()
             return
         if isinstance(raw, dict):
+            # Fold the removed Turbo checkbox into playback.videoMode and drop
+            # the legacy key, so an old profile keeps its intent without the
+            # old control ever coming back (§V.1).
+            #
+            # Migrated on the *loaded* document, before it is merged over the
+            # defaults. Doing it afterwards would see the default
+            # "playback.videoMode": "auto" that is already in self._data and
+            # read it as a deliberate new-UI choice, which silently discards
+            # every profile it was written to rescue.
+            #
+            # Never fatal: a profile that cannot be migrated keeps the default.
+            migrated = False
+            try:
+                before = dict(raw)
+                video_mode.migrate_legacy(raw)
+                migrated = raw != before
+            except Exception:  # pragma: no cover - defensive
+                log.debug("video-mode migration failed", exc_info=True)
             self._data.update(raw)
+            self._data.pop(video_mode.LEGACY_TURBO_KEY, None)
+            if migrated:
+                # Rewrite on the next flush so the legacy key leaves the file
+                # rather than lying dormant in it, ready to be picked up by a
+                # tool (or a future reader) that still knows the old name.
+                self._dirty = True
+                log.info("migrated legacy Turbo setting to playback.videoMode")
 
     def _backup_corrupt(self) -> None:
         try:

@@ -8,3 +8,5 @@ VideoStage 1.0 ../../ui/shell/VideoStage.qml
 AuroraBackground 1.0 ../../ui/shell/AuroraBackground.qml
 NowPlayingCard 1.0 ../../ui/shell/NowPlayingCard.qml
 MiniBar 1.0 ../../ui/shell/MiniBar.qml
+TurboSurfaceHost 1.0 ../../ui/shell/TurboSurfaceHost.qml
+TurboChromeWindow 1.0 ../../ui/shell/TurboChromeWindow.qml
