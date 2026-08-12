@@ -47,12 +47,27 @@ Shell {
         ? App.effectiveVideoMode : "soft"
     readonly property bool turboActive: effectiveVideoMode === "turbo"
 
+    // True while chromeLayer lives in the Turbo overlay window. Kept as an
+    // explicit flag (not inferred from parent) so blur can stay off for the
+    // whole move — MultiEffect must not sample `stage` from a different window.
+    property bool chromeInOverlay: false
+
+    // A transparent (layered) window plus a native HWND punches through to the
+    // desktop. Soft keeps the rounded-corner transparency; Turbo paints an
+    // opaque base so the letterbox is the window, not File Explorer.
+    color: (turboActive && !miniModeActive) ? Theme.base : "transparent"
+
     // What the glass panels blur. Soft video is scene-graph pixels, so the
     // Stage is a real backdrop. Turbo's picture is a native child window that
     // MultiEffect cannot sample (§V.3) — and while the chrome lives in the
     // overlay window the Stage is in a different scene entirely — so the
     // panels fall back to their plain tint rather than blurring nothing.
-    readonly property var chromeBlurSource: turboActive ? null : stage
+    //
+    // Blur stays off for the whole overlay residency, not just while
+    // turboActive is true: turning Soft back on must move chrome home *before*
+    // MultiEffect is recreated against `stage`, or Qt raises
+    // "Cannot use same item on different windows".
+    readonly property var chromeBlurSource: (turboActive || chromeInOverlay) ? null : stage
 
     function reportTurboFailure(reason) {
         console.warn("Turbo: " + reason + " — falling back to Soft");
@@ -631,6 +646,8 @@ Shell {
             item.lyricsAvailable = Qt.binding(function() {
                 return typeof Lyrics !== "undefined" && !!Lyrics && Lyrics.lines.length > 0;
             });
+        if ("solidChrome" in item)
+            item.solidChrome = Qt.binding(function() { return window.turboActive });
     }
 
     // ======================================================================
@@ -695,6 +712,17 @@ Shell {
                 activeMode: window.activeMode
             }
 
+            // Letterbox fill behind the native Turbo surface. If the HWND does
+            // not cover every pixel of the body (aspect-fit), this — not the
+            // desktop — is what shows in the gap.
+            Rectangle {
+                objectName: "turboLetterbox"
+                anchors.fill: parent
+                color: "#000000"
+                visible: window.turboActive && !window.miniModeActive
+                z: 0
+            }
+
             // ----------------------------------------------------------------
             // TURBO — the native video surface, inside this window (§V.3).
             //
@@ -745,6 +773,23 @@ Shell {
                 objectName: "chromeLayer"
                 anchors.fill: parent
                 z: 5
+
+                // VideoStage's click target lives in the main window. Once this
+                // layer moves into the overlay, those clicks never arrive, so
+                // the same play/pause + fullscreen actions are offered here,
+                // underneath the docks and the bar.
+                MouseArea {
+                    id: overlayStageClick
+                    anchors.fill: parent
+                    z: -1
+                    acceptedButtons: Qt.LeftButton
+                    hoverEnabled: true
+                    onClicked: Actions.playPause()
+                    onDoubleClicked: Actions.toggleFullscreen()
+                    onPositionChanged: function(mouse) {
+                        window.notePointer(mouse.x, mouse.y)
+                    }
+                }
 
                 // The mode's own bar, floating over the video (§B.4).
                 Loader {
@@ -889,10 +934,24 @@ Shell {
         id: turboChromeLoader
         active: window.turboActive && !window.miniModeActive
         sourceComponent: turboChromeComponent
-        onLoaded: window.moveChromeToOverlay()
+        // Do not reparent on the same frame the overlay is created: the docks'
+        // MultiEffect must be destroyed first (chromeBlurSource is already
+        // null), otherwise Qt logs "Cannot use same item on different windows"
+        // and the playlist/info panels vanish under the HWND.
+        onLoaded: chromeMoveTimer.restart()
         // Runs before the Window is destroyed, which is the only safe moment
         // to take the chrome back out of it.
-        onActiveChanged: if (!active) window.moveChromeHome()
+        onActiveChanged: if (!active) {
+            chromeMoveTimer.stop()
+            window.moveChromeHome()
+        }
+    }
+
+    Timer {
+        id: chromeMoveTimer
+        interval: 16
+        repeat: false
+        onTriggered: window.moveChromeToOverlay()
     }
 
     Component {
@@ -909,15 +968,19 @@ Shell {
     }
 
     function moveChromeToOverlay() {
+        if (!window.turboActive)
+            return;
         var overlay = turboChromeLoader.item;
         if (!overlay || !overlay.hostItem)
             return;
         chromeLayer.parent = overlay.hostItem;
+        window.chromeInOverlay = true;
     }
 
     function moveChromeHome() {
         if (chromeLayer.parent !== body)
             chromeLayer.parent = body;
+        window.chromeInOverlay = false;
     }
 
     // ======================================================================

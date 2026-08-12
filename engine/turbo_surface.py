@@ -34,7 +34,7 @@ import logging
 import os
 import sys
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,39 @@ def is_supported() -> bool:
     if os.environ.get(_FORCE_ENV, "").strip() == "1":
         return True
     return sys.platform == "win32"
+
+
+def _harden_hwnd(window) -> None:
+    """Strip layered / click-through styles from *this* HWND only.
+
+    A child that inherited ``WS_EX_LAYERED`` from Halcyon's transparent
+    shell is see-through even after ``QWindow.setColor(black)``. Class-long
+    background-brush changes are deliberately avoided: Qt QWindows share a
+    window class, and painting every Qt window black would be worse than
+    the hole we are closing.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        hwnd = int(window.winId())
+        if not hwnd:
+            return
+        user32 = ctypes.windll.user32
+        gwl_exstyle = -20
+        ws_ex_layered = 0x00080000
+        ws_ex_transparent = 0x00000020
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            get_long = user32.GetWindowLongPtrW
+            set_long = user32.SetWindowLongPtrW
+        else:
+            get_long = user32.GetWindowLongW
+            set_long = user32.SetWindowLongW
+        style = int(get_long(hwnd, gwl_exstyle) or 0)
+        set_long(hwnd, gwl_exstyle, style & ~ws_ex_layered & ~ws_ex_transparent)
+    except Exception:
+        log.debug("Turbo: could not harden the native child HWND", exc_info=True)
 
 
 class TurboSurface(QObject):
@@ -131,9 +164,16 @@ class TurboSurface(QObject):
         self._window = window
         self._handle = handle
         self._player = player
+        # WindowContainer reparents this HWND on the next tick and can put
+        # WS_EX_LAYERED back. Re-strip it after the embed, not only at create.
+        QTimer.singleShot(0, self._reharden)
         log.info("Turbo: native child window ready (handle=%s)", handle)
         self.windowChanged.emit()
         return True
+
+    def _reharden(self) -> None:
+        if self._window is not None:
+            _harden_hwnd(self._window)
 
     def _create_child_window(self):
         """A hidden, frameless ``QWindow`` with a real platform handle.
@@ -147,9 +187,21 @@ class TurboSurface(QObject):
 
         window = QWindow()
         window.setFlags(Qt.FramelessWindowHint)
+        # Opaque black, not the default clear/transparent colour. Halcyon's
+        # shell is itself a transparent (layered) window for rounded corners.
+        # A transparent native child inside that window punches a hole
+        # straight through to the desktop in every pixel VLC does not paint
+        # — the letterbox between the title bar and the picture. VLC only
+        # presents the video rectangle; this colour fills the rest of the
+        # HWND so the gap is black, not File Explorer.
+        from PySide6.QtGui import QColor
+
+        window.setColor(QColor(0, 0, 0))
+        window.setOpacity(1.0)
         # Never call show(). See the module docstring: an unparented visible
         # QWindow is exactly the "outside video window" §V.3 forbids.
         window.create()
+        _harden_hwnd(window)
         return window
 
     @staticmethod

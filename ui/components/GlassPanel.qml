@@ -20,30 +20,59 @@ Item {
     property real borderWidth: 1
     property real radius: Theme.radiusPanel
     property bool showBorder: true
+    // Docks set this so Turbo (no blur, native HWND) still reads as a surface.
+    // MiniBar leaves it false: it wants the light tint, and Mini is always Soft.
+    property bool solidIfUnblurred: false
+
+    readonly property bool blurActive: blurSource !== null
+    readonly property color effectiveFill: (solidIfUnblurred && !blurActive)
+                                           ? Theme.glassFillSolid
+                                           : fillColor
 
     // Backdrop blur. MultiEffect is the supported route in Qt 6 and runs
     // entirely on the GPU.
-    MultiEffect {
+    //
+    // Instantiated only while there is something to sample. A live MultiEffect
+    // (or its layer-enabled mask) that still points at the Stage cannot be
+    // moved into the Turbo overlay window — Qt rejects "the same item on
+    // different windows" and the docks vanish under the native HWND. Destroying
+    // the effect *before* the chrome is reparented is what makes that move
+    // legal.
+    Loader {
+        id: blurLoader
         anchors.fill: parent
-        source: root.blurSource
-        visible: root.blurSource !== null
-        blurEnabled: true
-        blur: 1.0
-        blurMax: Math.round(root.blurRadius)
-        autoPaddingEnabled: false
-        maskEnabled: true
-        maskSource: mask
+        active: root.blurActive
+        sourceComponent: blurComponent
     }
 
-    Item {
-        id: mask
-        anchors.fill: parent
-        layer.enabled: true
-        visible: false
-        Rectangle {
+    Component {
+        id: blurComponent
+
+        Item {
             anchors.fill: parent
-            radius: root.radius
-            color: "white"
+
+            MultiEffect {
+                anchors.fill: parent
+                source: root.blurSource
+                blurEnabled: true
+                blur: 1.0
+                blurMax: Math.round(root.blurRadius)
+                autoPaddingEnabled: false
+                maskEnabled: true
+                maskSource: mask
+            }
+
+            Item {
+                id: mask
+                anchors.fill: parent
+                layer.enabled: true
+                visible: false
+                Rectangle {
+                    anchors.fill: parent
+                    radius: root.radius
+                    color: "white"
+                }
+            }
         }
     }
 
@@ -52,7 +81,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: root.radius
-        color: root.fillColor
+        color: root.effectiveFill
         border.width: root.showBorder ? root.borderWidth : 0
         border.color: root.borderColor
     }

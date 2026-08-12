@@ -30,6 +30,7 @@ Item {
         width: Theme.leftPanelWidth
         height: parent.height
         blurSource: root.blurSource
+        solidIfUnblurred: true
         radius: 0
         showBorder: false
 

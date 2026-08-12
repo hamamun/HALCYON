@@ -38,6 +38,10 @@ Item {
     property bool subtitlesAvailable: false
     property bool lyricsAvailable: false
 
+    // Bound by the shell: true while Turbo's native surface is up, so the
+    // scrim is a readable dark strip instead of a fade over missing pixels.
+    property bool solidChrome: false
+
     // The bar must never auto-hide while the subtitle popover or the download
     // flyout is open (§P1.4).
     readonly property bool popoverOpen: trackPopover.opened || subDownload.opened
@@ -54,6 +58,7 @@ Item {
     TransportScrim {
         anchors.fill: parent
         anchors.topMargin: -24        // fade begins above the bar
+        solid: root.solidChrome
     }
 
     Column {

@@ -159,12 +159,20 @@ def test_the_soft_stage_is_unchanged():
 def test_soft_keeps_the_full_qml_blur():
     main = _read(MAIN_QML)
     assert "blurSource: window.chromeBlurSource" in main
-    assert "readonly property var chromeBlurSource: turboActive ? null : stage" in main, (
+    assert "readonly property var chromeBlurSource: (turboActive || chromeInOverlay) ? null : stage" in main, (
         "Soft must keep the Stage as a real backdrop; only Turbo — whose "
-        "picture MultiEffect cannot sample — drops to a plain tint (§V.3)"
+        "picture MultiEffect cannot sample — drops to a plain tint (§V.3). "
+        "Blur must also stay off while chrome is still on the overlay, or "
+        "turning Soft back on recreates MultiEffect across two windows."
     )
     glass = _read(ROOT / "ui" / "components" / "GlassPanel.qml")
     assert "MultiEffect" in glass and "blurEnabled: true" in glass
+    assert "active: root.blurActive" in glass, (
+        "MultiEffect must be destroyed when there is nothing to blur, so the "
+        "chrome can move into the Turbo overlay without a cross-window sample"
+    )
+    assert "solidIfUnblurred" in glass
+    assert "Theme.glassFillSolid" in glass
 
 
 def test_the_engine_still_boots_on_the_soft_callbacks():
@@ -225,8 +233,22 @@ def test_the_chrome_moves_into_a_transparent_overlay_window():
     main = _read(MAIN_QML)
     assert "chromeLayer.parent = overlay.hostItem" in main
     assert "function moveChromeHome()" in main
-    assert "onActiveChanged: if (!active) window.moveChromeHome()" in main, (
+    assert "window.moveChromeHome()" in main, (
         "the controls must come home before the overlay window is destroyed"
+    )
+    assert "chromeMoveTimer" in main, (
+        "the chrome must not reparent on the same frame the overlay is built "
+        "— MultiEffect has to be destroyed first"
+    )
+    assert "chromeInOverlay = true" in main
+    assert "chromeInOverlay = false" in main
+    assert "turboLetterbox" in main, (
+        "the body must paint an opaque letterbox behind the native surface "
+        "so a gap never shows the desktop"
+    )
+    assert "color: (turboActive && !miniModeActive) ? Theme.base : \"transparent\"" in main, (
+        "a layered transparent window plus a native HWND punches through to "
+        "the desktop — Turbo must make the shell opaque"
     )
 
 
@@ -246,6 +268,16 @@ def test_no_second_player_is_ever_created():
             f"{module} creates more than one media player — §V.2 allows exactly one"
         )
     assert "media_player_new" not in _read(TURBO_HOST_QML)
+
+
+def test_docks_ask_for_a_solid_fill_when_unblurred():
+    """Turbo has no blur backdrop; 6% glass would be invisible over video."""
+    panel = _read(ROOT / "ui" / "shell" / "PanelHost.qml")
+    info = _read(ROOT / "ui" / "panels" / "InfoPanel.qml")
+    theme = _read(ROOT / "ui" / "Theme.qml")
+    assert "solidIfUnblurred: true" in panel
+    assert "solidIfUnblurred: true" in info
+    assert "property color glassFillSolid" in theme
 
 
 def test_the_new_shell_types_are_registered():
@@ -548,6 +580,14 @@ def test_turbo_embeds_the_native_child_and_moves_the_chrome(turbo_window):
     )
     assert chrome.parentItem() is not home, "the chrome stayed under the native surface"
     assert chrome.parentItem().objectName() == "turboChromeHost"
+    assert window.property("chromeInOverlay") is True
+    letterbox = _named(window, "turboLetterbox")
+    assert letterbox is not None and letterbox.property("visible") is True
+    shell_color = window.color() if callable(getattr(window, "color", None)) else window.color
+    assert shell_color.alpha() == 255, (
+        "Turbo must make the shell opaque so the native HWND cannot punch "
+        "through to the desktop"
+    )
     assert not stub.failures, f"unexpected Turbo failures: {stub.failures}"
 
 
@@ -573,6 +613,7 @@ def test_returning_to_soft_brings_the_chrome_home_intact(turbo_window):
         "the chrome came home with no size; its anchors did not survive the "
         "round trip"
     )
+    assert window.property("chromeInOverlay") is False
 
 
 @gui_only

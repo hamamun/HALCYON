@@ -98,8 +98,9 @@ def test_pointer_wakeups_go_through_the_movement_test():
         "waking directly from positionChanged reintroduces the fullscreen "
         "hide/show flicker — route it through notePointer()"
     )
-    assert source.count("window.notePointer(mouse.x, mouse.y)") == 2, (
-        "both idleWatcher and cursorBlanker must use the movement test"
+    assert source.count("window.notePointer(mouse.x, mouse.y)") >= 2, (
+        "idleWatcher and cursorBlanker must use the movement test; the Turbo "
+        "overlay stage-click may add a third site"
     )
 
 
