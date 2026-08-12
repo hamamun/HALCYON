@@ -116,6 +116,34 @@ def _harden_hwnd(window) -> None:
         log.debug("Turbo: could not harden the native child HWND", exc_info=True)
 
 
+def _gdi_fill_signatures() -> None:
+    """Type the GDI calls that paint an HWND black.
+
+    Same bug class as the WndProc hook: ``ctypes.windll`` defaults every
+    argument to ``c_int``, and HDC/HBRUSH are pointer-sized HANDLEs on Win64.
+    ``GetDC`` read back through a ``c_int`` restype truncates the device
+    context, and ``FillRect`` with a truncated HDC either fails silently or
+    paints nothing — the letterbox stays the default erase colour instead of
+    black. Idempotent: call from every helper that paints.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    user32.GetDC.restype = wintypes.HDC
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.ReleaseDC.restype = ctypes.c_int
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.GetClientRect.restype = ctypes.c_int
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.FillRect.restype = ctypes.c_int
+    user32.FillRect.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.HBRUSH]
+    gdi32.GetStockObject.restype = ctypes.c_void_p
+    gdi32.GetStockObject.argtypes = [ctypes.c_int]
+
+
 def _fill_hwnd_black(hwnd: int) -> None:
     """Paint this HWND's client area black once. Best-effort."""
     if sys.platform != "win32" or not hwnd:
@@ -124,6 +152,7 @@ def _fill_hwnd_black(hwnd: int) -> None:
         import ctypes
         from ctypes import wintypes
 
+        _gdi_fill_signatures()
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
         hdc = user32.GetDC(hwnd)
@@ -157,6 +186,7 @@ def _keep_hwnd_black(window) -> None:
         if not hwnd:
             return
 
+        _gdi_fill_signatures()
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
         get_long, set_long = _win32_long_funcs()
@@ -193,6 +223,12 @@ def _keep_hwnd_black(window) -> None:
             wintypes.LPARAM,
         ]
         user32.DefWindowProcW.restype = lresult
+        user32.DefWindowProcW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
 
         @wndproc_type
         def wndproc(hwnd_msg, msg, wparam, lparam):
@@ -254,6 +290,7 @@ class TurboSurface(QObject):
         self._window = None
         self._handle = 0
         self._player = None
+        self._reharden_attempts = 0
 
     # ------------------------------------------------------------- state ---
     @property
@@ -314,17 +351,27 @@ class TurboSurface(QObject):
         self._window = window
         self._handle = handle
         self._player = player
-        # WindowContainer reparents this HWND on the next tick and can put
-        # WS_EX_LAYERED back. Re-strip it after the embed, not only at create.
-        QTimer.singleShot(0, self._reharden)
+        # WindowContainer reparents this HWND on its next render tick and can
+        # put WS_EX_LAYERED back (and replace our WndProc) at that point, so a
+        # single strip now would run before the embed and be undone by it.
+        # Re-strip on a short schedule: the first attempt usually catches the
+        # pre-embed state, one of the later ones lands after the reparent.
+        self._reharden_attempts = 0
+        # Context-object overload: if this surface is destroyed mid-schedule,
+        # Qt drops the pending timers instead of calling into a dead QObject.
+        QTimer.singleShot(16, self, self._reharden)
+        QTimer.singleShot(48, self, self._reharden)
+        QTimer.singleShot(120, self, self._reharden)
         log.info("Turbo: native child window ready (handle=%s)", handle)
         self.windowChanged.emit()
         return True
 
     def _reharden(self) -> None:
-        if self._window is not None:
-            _harden_hwnd(self._window)
-            _keep_hwnd_black(self._window)
+        if self._window is None:
+            return
+        self._reharden_attempts += 1
+        _harden_hwnd(self._window)
+        _keep_hwnd_black(self._window)
 
     def _create_child_window(self):
         """A hidden, frameless ``QWindow`` with a real platform handle.
@@ -415,6 +462,7 @@ class TurboSurface(QObject):
     def stop(self, player=None) -> None:
         """Unbind libVLC and destroy the child. Safe to call twice, or never
         having started, or halfway through a failed :meth:`start`."""
+        self._reharden_attempts = 0
         target = player if player is not None else self._player
         if target is not None:
             setter = getattr(target, "set_hwnd", None)
