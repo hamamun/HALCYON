@@ -556,10 +556,22 @@ class Metadata(QObject):
         self._music_details = music_rows
         self.changed.emit()
 
-        # If the parse has not produced tags yet, look again shortly. Bounded
-        # so a file that genuinely has no tags does not retry forever.
-        if self._retries < self._MAX_RETRIES and not (
+        # If the parse is still incomplete, look again shortly. Bounded so a
+        # file that genuinely has no tags / no tracks does not retry forever.
+        # Auto needs width×height, so a video whose tags arrived before its
+        # resolution (or a file whose tracks have not been enumerated yet)
+        # must keep retrying — the original "tags only" guard stopped after
+        # the first artist/album hit and left Auto stuck on Soft.
+        parsed_tags = bool(
             self._artist or self._album or self._artwork or self._music_details
+        )
+        has_tracks = bool(self._has_video or self._has_audio)
+        video_sized = (not self._has_video) or any(
+            str(row.get("label", "")).strip().lower() == "resolution"
+            for row in self._video_details
+        )
+        if self._retries < self._MAX_RETRIES and not (
+            parsed_tags and has_tracks and video_sized
         ):
             self._retries += 1
             QTimer.singleShot(400, self._retry)

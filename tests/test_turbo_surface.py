@@ -195,6 +195,30 @@ def test_the_child_window_is_opaque_black(qt_application, forced_turbo):
         surface.stop(player)
 
 
+def test_turbo_does_not_call_qwindow_setcolor(qt_application, forced_turbo):
+    """Regression: ``QWindow.setColor`` does not exist (it is QQuickWindow).
+
+    The previous Turbo path called it on a plain ``QWindow`` and every
+    start raised AttributeError, so explicit Turbo and Auto→Turbo both
+    fell back to Soft on Windows.
+    """
+    player = FakePlayer()
+    surface = TurboSurface()
+    assert surface.start(player) is True, (
+        "Turbo start must not raise on QWindow.setColor — that API is not "
+        "on QWindow and used to abort every native-route attempt"
+    )
+    try:
+        assert surface.active is True
+        assert hasattr(surface.window, "setColor")
+        color = surface.window.color
+        if callable(color):
+            color = color()
+        assert color.red() == 0 and color.green() == 0 and color.blue() == 0
+    finally:
+        surface.stop(player)
+
+
 def test_the_surface_creates_one_hidden_child_and_binds_it(qt_application, forced_turbo):
     player = FakePlayer()
     surface = TurboSurface()
@@ -266,6 +290,19 @@ def test_adopting_a_foreign_handle_is_guarded(qt_application):
 def test_the_engine_starts_on_soft():
     engine = _engine()
     assert engine.videoRoute == vm.SOFT
+
+
+def test_the_engine_reports_live_video_geometry():
+    """Auto's fallback when the container parse has no resolution yet."""
+    engine = _engine()
+    engine._player.video_get_size = lambda _num=0: (3840, 2160)
+    engine._player.get_fps = lambda: 59.94
+    assert engine.video_size() == (3840, 2160)
+    assert engine.video_fps() == pytest.approx(59.94)
+    engine._player.video_get_size = lambda _num=0: (0, 0)
+    engine._player.get_fps = lambda: 0.0
+    assert engine.video_size() == (0, 0)
+    assert engine.video_fps() == 0.0
 
 
 def test_switching_to_turbo_takes_the_soft_callbacks_off(qt_application, forced_turbo):
