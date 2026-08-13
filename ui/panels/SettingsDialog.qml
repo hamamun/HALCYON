@@ -23,6 +23,12 @@ Dialog {
     // Current tab state
     property int currentTab: 0
 
+    // The host window (Main.qml's root), injected by the host so the Borderless
+    // toggle can drive live window state. Set in Main.qml where the dialog is
+    // declared; left null on standalone/test loads (the toggle then falls back
+    // to writing the setting directly).
+    property var hostWindow: null
+
     background: Rectangle {
         radius: Theme.radiusPanel
         color: Qt.rgba(Theme.baseElevated.r, Theme.baseElevated.g, Theme.baseElevated.b, 0.98)
@@ -286,6 +292,42 @@ Dialog {
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.textFaint
+                }
+
+                Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
+
+                Text {
+                    text: "Window"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeBody
+                    font.weight: Theme.weightBold
+                    color: Theme.text
+                }
+
+                SettingRow {
+                    width: parent.width
+                    label: "Borderless"
+                    description: "Hide the title bar for a clean, chrome-free window. "
+                               + "The window buttons, the video-route badge and a "
+                               + "drag-to-move strip fade in when you move the mouse "
+                               + "and out when idle; in Web mode the buttons sit at the "
+                               + "right of the tab strip. Toggle any time with "
+                               + "Ctrl+Shift+B. Fullscreen and Mini Mode are unaffected."
+                    checked: (root.hostWindow
+                              && root.hostWindow.borderlessActive !== undefined)
+                             ? root.hostWindow.borderlessActive
+                             : Settings.get("window.borderless", false)
+                    onToggled: function(on) {
+                        // Drive the live window when reachable so the change is
+                        // instant; the window property persists itself to
+                        // Settings. Fall back to writing the setting directly for
+                        // the rare standalone/test load with no host window.
+                        if (root.hostWindow
+                                && root.hostWindow.borderlessActive !== undefined)
+                            root.hostWindow.borderlessActive = on;
+                        else
+                            Settings.set("window.borderless", on);
+                    }
                 }
 
                 Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }

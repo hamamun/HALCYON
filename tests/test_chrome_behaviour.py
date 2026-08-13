@@ -63,7 +63,12 @@ def test_the_cursor_is_blanked_only_in_fullscreen():
 
     assert "Qt.BlankCursor" in source, "fullscreen must hide the mouse cursor"
     blanker = source.split("id: cursorBlanker", 1)[1]
-    assert "window.autoHideActive && !window.chromeVisible" in blanker, (
+    # Blanking is fullscreen-ONLY, deliberately narrower than the auto-hide gate
+    # (which now also covers borderless windowed mode). Fading the chrome in a
+    # borderless window is fine; blanking the pointer in a windowed frame is not,
+    # so the blanker keys off `window.fullscreen` directly rather than
+    # `autoHideActive`.
+    assert "window.fullscreen && !window.chromeVisible" in blanker, (
         "the cursor must only vanish in fullscreen, and only with the chrome"
     )
 

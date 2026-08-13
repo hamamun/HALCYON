@@ -169,6 +169,34 @@ PHASE_T_DISCLOSED = [
 ]
 
 
+#: Disclosed Borderless (windowed, no title bar) additions to frozen Phase 1
+#: paths — post-v1.0. A generic chassis capability in the same class as v4.1's
+#: Mini Mode: a new windowed state that hides the title bar and moves the window
+#: buttons + video-route badge + a drag strip into an auto-hiding overlay
+#: (Local/M3U) or inline into the Web tab strip. No shared file learns the name
+#: of a mode; the window-button cluster is extracted once into a shared
+#: component so every home renders the identical control (§B.1). Toggle via
+#: Settings ▸ Window ▸ Borderless or Ctrl+Shift+B. Fullscreen/Mini untouched.
+PHASE_B_DISCLOSED = [
+    # The borderlessActive/borderlessEffective state, the toggleBorderless
+    # action, the auto-hide gate extension, and the Local/M3U overlay + dock
+    # top-inset. (ui/Main.qml is already disclosed under P3/P4/T; listed again
+    # here for provenance.)
+    "ui/Main.qml",
+    # TitleBar now delegates its window-button Row to the shared WindowButtons
+    # component instead of declaring it inline — no behaviour change in the
+    # title-bar path.
+    "ui/shell/TitleBar.qml",
+    # New shared component: the badge + Settings/Mini/Minimise/Maximise/Close
+    # cluster, so the title bar, the borderless overlay and the Web tab strip
+    # all render one control, not three lookalikes.
+    "ui/components/WindowButtons.qml",
+    # Registers WindowButtons under Halcyon.Ui so `import Halcyon.Ui` resolves
+    # it (tests/test_qml_modules.py enforces registration).
+    "Halcyon/Ui/qmldir",
+]
+
+
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
         self.rule = rule
@@ -332,7 +360,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED or path in PHASE_T_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED or path in PHASE_T_DISCLOSED or path in PHASE_B_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

@@ -118,6 +118,27 @@ Shell {
     property bool leftPanelOpen: false
     property bool rightPanelOpen: false
 
+    // ------------------------------------------------------------ Borderless
+    // Windowed-borderless: the title bar is removed and the window keeps its
+    // current size (this is NOT fullscreen — the video does not fill the
+    // screen). The window buttons, the route badge and the drag surface move
+    // into a slim overlay that fades in on mouse-move and out when idle, reusing
+    // the exact auto-hide machinery fullscreen already has.
+    //
+    // It never stacks with Mini Mode or fullscreen — both already draw no title
+    // bar of their own and have their own chrome — so borderlessActive is gated
+    // to plain windowed use everywhere it is read (`borderlessEffective`).
+    //
+    // A PLAIN bool, not `Settings.get(...)` — the same rule as leftPanelOpen
+    // above: toggleBorderless() writes this, and a declared Settings binding
+    // would be clobbered on the first write (qt.qml.binding.removal). The
+    // persisted value is seeded in Component.onCompleted; the write-back lives
+    // in onBorderlessActiveChanged.
+    property bool borderlessActive: false
+    readonly property bool borderlessEffective:
+        borderlessActive && !miniModeActive && !fullscreen
+    onBorderlessActiveChanged: Settings.set("window.borderless", borderlessActive)
+
     // --------------------------------------------------------- Mini Mode v1.1 §M
     property bool miniModeActive: false
     property int normalX: -1
@@ -294,6 +315,11 @@ Shell {
         // declared binding (and so Qt never logs "Overwriting binding").
         leftPanelOpen = Settings.get("window.leftPanelVisible", true);
         rightPanelOpen = Settings.get("window.rightPanelVisible", false);
+        // Seed borderless from settings here (plain-bool convention above), so
+        // the onBorderlessActiveChanged write-back never fights a declared
+        // binding. Seeding after the handler exists also persists the same
+        // value harmlessly rather than clobbering anything.
+        borderlessActive = Settings.get("window.borderless", false);
         restoreGeometry();
         // Mini Mode always re-enters top-center on a fresh session (§M).
         // Startup clears any position the previous session's drag persisted;
@@ -545,6 +571,20 @@ Shell {
         function toggleMaximized() { window.toggleMaximized() }
         function closeWindow()     { window.close() }
         function toggleMiniMode()  { window.toggleMiniMode() }
+        function toggleBorderless() {
+            // Borderless is a plain windowed affordance. In Mini Mode or
+            // fullscreen the title bar is already gone and the request is
+            // meaningless, so the toggle simply flips the stored preference and
+            // takes effect the moment the window returns to ordinary windowed
+            // use (borderlessEffective gates every read).
+            var entering = !window.borderlessActive;
+            window.borderlessActive = entering;
+            // Make the controls reachable straight away rather than waiting for
+            // the first mouse-move after the bar vanishes.
+            window.wakeChrome();
+            osd(entering ? "Borderless on" : "Borderless off",
+                entering ? Glyphs.fullscreen : Glyphs.fullscreenExit);
+        }
 
         // --------------------------------------------------------- osd --
         function osd(text, glyph)  { if (osdEnabled()) osdLayer.show(text, glyph) }
@@ -694,8 +734,9 @@ Shell {
             width: parent.width
             anchors.top: parent.top
             activeMode: window.activeMode
-            visible: !window.fullscreen && !window.miniModeActive
-            height: (window.fullscreen || window.miniModeActive) ? 0 : Theme.titleBarHeight
+            visible: !window.fullscreen && !window.miniModeActive && !window.borderlessEffective
+            height: (window.fullscreen || window.miniModeActive || window.borderlessEffective)
+                    ? 0 : Theme.titleBarHeight
             onModeRequested: function(id) { Actions.switchMode(id) }
         }
 
@@ -727,6 +768,18 @@ Shell {
             readonly property real transportInset:
                 (hasTransport && transportLoader.active && window.chromeVisible)
                 ? transportLoader.height : 0
+
+            // How much of the body's TOP edge the borderless overlay owns, so
+            // the full-height docks (playlist, InfoPanel) start below it instead
+            // of being covered by the drag strip and the window buttons — the
+            // exact top-side twin of transportInset. Zero unless the borderless
+            // overlay is actually on screen for a mode that shows it (Local/M3U;
+            // Web keeps its buttons inline in the tab strip, so no top strip).
+            readonly property bool borderlessOverlayShown:
+                window.borderlessEffective && window.chromeVisible
+                && (window.activeMode === "local" || window.activeMode === "m3u")
+            readonly property real borderlessTopInset:
+                borderlessOverlayShown ? Theme.titleBarHeight : 0
 
             // Stage takes full width — panels float on top
             Stage {
@@ -859,6 +912,87 @@ Shell {
                     onLoaded: window.bindTransport(item)
                 }
 
+                // ------------------------------------------------------------
+                // BORDERLESS OVERLAY — Local/M3U only.
+                //
+                // With the title bar gone, this slim strip is the home for the
+                // three things the bar used to carry: a drag surface, the route
+                // badge and the window buttons. It fades with `chromeVisible`
+                // (the same auto-hide cycle fullscreen uses) so it is one
+                // mouse-move away and never sits permanently over the picture.
+                //
+                // Web is intentionally excluded: it keeps the same controls
+                // inline at the right of its tab strip (TabsRow), which is real
+                // Qt chrome and cannot collide with the native page surface.
+                Item {
+                    id: borderlessOverlay
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: Theme.titleBarHeight
+                    z: 15   // above the docks (z:10) so the buttons are hittable
+                    visible: window.borderlessEffective
+                             && (window.activeMode === "local" || window.activeMode === "m3u")
+                             && opacity > 0
+                    opacity: (window.borderlessEffective && window.chromeVisible) ? 1 : 0
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.durAutoHide; easing.type: Theme.easing }
+                    }
+
+                    // A soft top scrim so the badge and glyphs stay legible over
+                    // bright video, mirroring the transport bar's own backing.
+                    Rectangle {
+                        anchors.fill: parent
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.55) }
+                            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.0) }
+                        }
+                    }
+
+                    // Drag-to-move + double-click maximise — the identical pair
+                    // the title bar exposed, so there is one move/maximise
+                    // behaviour, not a second implementation. Anchored short of
+                    // the button cluster so a click on Close is never eaten by
+                    // the drag handler.
+                    MouseArea {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.right: borderlessButtons.left
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.SizeAllCursor
+                        onPressed: window.startSystemMove()
+                        onDoubleClicked: Actions.toggleMaximized()
+
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spaceLg
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Theme.spaceSm
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                // A plain-text move glyph (four-way arrows) in
+                                // the regular font — no icon-font dependency.
+                                text: "\u2725  Drag to move"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeTiny
+                                color: Theme.textMuted
+                            }
+                        }
+                    }
+
+                    WindowButtons {
+                        id: borderlessButtons
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.rightMargin: Theme.spaceSm
+                        activeMode: window.activeMode
+                        win: window
+                    }
+                }
+
                 // Slim progress hairline in fullscreen once the chrome is gone (§7).
                 Rectangle {
                     anchors.bottom: parent.bottom
@@ -881,6 +1015,9 @@ Shell {
                     id: panelHost
                     anchors.left: parent.left
                     anchors.top: parent.top
+                    // Start below the borderless overlay so the drag strip and
+                    // window buttons are never covered by the open playlist.
+                    anchors.topMargin: body.borderlessTopInset
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: body.transportInset
                     open: window.leftPanelOpen && window.leftPanelAvailable()
@@ -911,6 +1048,9 @@ Shell {
                     id: infoPanel
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    // Same top offset as the left dock: never sit under the
+                    // borderless overlay's buttons.
+                    anchors.topMargin: body.borderlessTopInset
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: body.transportInset
                     // Gated on the mode's rich-chrome flag: in M3U/Web the dock is
@@ -951,6 +1091,8 @@ Shell {
                     anchors.leftMargin: panelHost.width
                     anchors.rightMargin: infoPanel.width
                     anchors.bottomMargin: body.transportInset
+                    // Keep toasts clear of the borderless overlay strip.
+                    anchors.topMargin: body.borderlessTopInset
                     z: 20
                     osdEnabled: window.osdEnabled()
                     suppressed: settingsDialog.visible
@@ -1094,9 +1236,17 @@ Shell {
     // rule lives in exactly one place rather than being re-tested at each of
     // the sites that reads `chromeVisible`.
     // ======================================================================
-    readonly property bool autoHideActive: fullscreen
+    //
+    // Borderless (windowed) opts in too: with the title bar gone, the transport
+    // bar and the borderless overlay follow the same fade-in-on-move /
+    // fade-out-when-idle cycle, so the controls are reachable but do not sit
+    // permanently over the picture. Cursor *blanking* stays fullscreen-only
+    // (see cursorBlanker) — hiding the pointer in a windowed frame would be
+    // disorienting, whereas fading the chrome is not.
+    readonly property bool autoHideActive: fullscreen || borderlessEffective
 
-    // Entering or leaving fullscreen resets the cycle. Leaving is the important
+    // Entering or leaving fullscreen (or borderless) resets the cycle. Leaving
+    // is the important
     // direction: without this, exiting while the bar is hidden would drop the
     // user into a window with no controls and no cursor, and nothing windowed
     // ever hides or shows them again.
@@ -1137,7 +1287,9 @@ Shell {
         id: cursorBlanker
         anchors.fill: parent
         z: 10000
-        visible: window.autoHideActive && !window.chromeVisible
+        // Fullscreen only — never blank the cursor in a windowed frame, even a
+        // borderless one (§ borderless keeps the pointer, only fades chrome).
+        visible: window.fullscreen && !window.chromeVisible
         enabled: visible
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
@@ -1396,6 +1548,11 @@ Shell {
         // --- Fullscreen — global even in Web ---
         Shortcut { sequence: "F"; context: Qt.WindowShortcut; enabled: !globalShortcuts.isTextInputFocused; onActivated: Actions.toggleFullscreen() }
 
+        // --- Borderless (windowed, no title bar) — global, plain-windowed only ---
+        // Ignored in Mini/fullscreen (borderlessEffective gates the visuals) and
+        // chosen as Ctrl+Shift+B so no single-key text-input path can trigger it.
+        Shortcut { sequence: "Ctrl+Shift+B"; context: Qt.WindowShortcut; onActivated: Actions.toggleBorderless() }
+
         // --- Panels / file dialogs — gated ---
         Shortcut { sequence: "Ctrl+O"; context: Qt.WindowShortcut; enabled: window.usesPlayer(); onActivated: Actions.addFiles() }
         Shortcut { sequence: "Ctrl+E"; context: Qt.WindowShortcut; enabled: window.rightDockAvailable(); onActivated: Actions.showEqualizer() }
@@ -1489,6 +1646,9 @@ Shell {
     SettingsDialog {
         id: settingsDialog
         objectName: "settingsDialog"
+        // Give the dialog a handle on the window so the Borderless toggle can
+        // flip live state instantly (it also persists itself to Settings).
+        hostWindow: window
     }
 
     // ---- Phase R mobile remote (v1.2) ------------------------------------
