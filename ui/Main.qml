@@ -37,6 +37,9 @@ Shell {
     property string activeMode: App.activeMode
     readonly property var modeSpec: Modes.spec(activeMode)
     property bool chromeVisible: true
+    // A visible QML modal must temporarily hide WebView2's native child HWND.
+    // Otherwise the HWND composites over the Qt scene and obscures the dialog.
+    readonly property bool settingsDialogOpen: settingsDialog.visible
 
     // ---------------------------------------------------- video mode §0.5.1/§V
     // The *effective* route the engine reports, never the selection: a Turbo
@@ -981,6 +984,18 @@ Shell {
                                 color: Theme.textMuted
                             }
                         }
+                    }
+
+                    // The title bar is absent here, so keep the same mode
+                    // switcher available in the centre of the overlay.  It is a
+                    // sibling above the drag surface, allowing its clicks through.
+                    ModeChips {
+                        id: borderlessModeChips
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        z: 1
+                        activeMode: window.activeMode
+                        onModeRequested: function(modeId) { Actions.switchMode(modeId) }
                     }
 
                     WindowButtons {

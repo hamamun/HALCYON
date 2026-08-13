@@ -14,7 +14,7 @@ Item {
     id: root
 
     property string activeMode: ""
-    property bool showModeChips: modeRepeater.count > 1
+    property bool showModeChips: modeChips.modeCount > 1
 
     //: Metadata source. Injectable so this file stays loadable on its own
     //: (qmlscene, tests), exactly as NowPlayingCard does it.
@@ -76,7 +76,7 @@ Item {
         height: parent.height
         // Stop short of the chip row; fall back to half the bar if the chips
         // have not been laid out yet.
-        width: Math.max(0, (chipRow.width > 0 ? chipRow.x : root.width / 2)
+        width: Math.max(0, (modeChips.width > 0 ? modeChips.x : root.width / 2)
                            - Theme.spaceLg * 2)
         clip: true
 
@@ -134,50 +134,13 @@ Item {
     }
 
     // --------------------------------------------------------- mode chips --
-    Row {
-        id: chipRow
+    // Shared with the borderless Local/M3U overlay and Web tab strip.  Keeping
+    // the active state and click signal here preserves the TitleBar contract.
+    ModeChips {
+        id: modeChips
         anchors.centerIn: parent
-        spacing: Theme.spaceXs
-
-        Repeater {
-            id: modeRepeater
-            model: Modes.list
-
-            delegate: Rectangle {
-                required property var modelData
-                readonly property bool isActive: modelData.id === root.activeMode
-
-                width: chipLabel.implicitWidth + Theme.spaceLg * 2
-                height: 28
-                radius: Theme.radiusPill
-                color: isActive ? Theme.glassFillHover
-                     : chipMouse.containsMouse ? Theme.glassFill : "transparent"
-                border.width: isActive ? 1 : 0
-                border.color: Theme.accentDim
-
-                Behavior on color {
-                    ColorAnimation { duration: Theme.durNormal; easing.type: Theme.easing }
-                }
-
-                Text {
-                    id: chipLabel
-                    anchors.centerIn: parent
-                    text: modelData.title
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: parent.isActive ? Theme.weightBold : Theme.weightNormal
-                    color: parent.isActive ? Theme.accent : Theme.textMuted
-                }
-
-                MouseArea {
-                    id: chipMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.modeRequested(modelData.id)
-                }
-            }
-        }
+        activeMode: root.activeMode
+        onModeRequested: function(modeId) { root.modeRequested(modeId) }
     }
 
     //: Controller source for the video-route badge. Injectable on the same

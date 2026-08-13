@@ -24,6 +24,10 @@ Rectangle {
     property var hostWindow: webStage.Window.window
     property bool stageActive: true
     property bool viewportSyncPending: false
+    // Settings is QML while WebView2 is a native child HWND.  Inform the
+    // browser context whenever its modal is open so it can hide that HWND.
+    readonly property bool settingsDialogOpen:
+        !!webStage.hostWindow && webStage.hostWindow.settingsDialogOpen === true
     readonly property bool contentFullscreen: !!browser && browser.contentFullscreen
     property bool windowFullscreenEnteredForWeb: false
 
@@ -77,6 +81,7 @@ Rectangle {
                             Math.round(viewportItem.width * dpr),
                             Math.round(viewportItem.height * dpr))
         browser.setStageActive(stageActive)
+        browser.setChromeModalOpen(settingsDialogOpen)
     }
 
     function scheduleBrowserSurfaceSync() {
@@ -100,6 +105,12 @@ Rectangle {
     }
     onContentFullscreenChanged: applyContentFullscreen()
     onStageActiveChanged: scheduleBrowserSurfaceSync()
+    // Do this synchronously when the Popup opens: waiting for the queued
+    // viewport sync leaves one frame where WebView2 can still cover Settings.
+    onSettingsDialogOpenChanged: {
+        if (browser)
+            browser.setChromeModalOpen(settingsDialogOpen)
+    }
     onWidthChanged: scheduleBrowserSurfaceSync()
     onHeightChanged: scheduleBrowserSurfaceSync()
 
