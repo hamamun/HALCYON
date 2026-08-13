@@ -535,7 +535,7 @@ Shell {
             infoPanel.currentTab = 1;   // 0 Info, 1 Lyrics, 2 Equalizer
             Settings.set("window.rightPanelVisible", true);
         }
-        function showSettings()    { settingsDialog.open() }
+        function showSettings()    { window.showSettings() }
 
         // -------------------------------------------------------- mode --
         function switchMode(id)    { App.setActiveMode(id) }
@@ -1007,6 +1007,40 @@ Shell {
         }
     }
 
+    // Settings is a Dialog on a window Overlay. The Turbo picture is a native
+    // HWND above the main scene graph, so a dialog left on the shell paints
+    // *under* the video. The chrome overlay already sits above that HWND
+    // (§V.3); seating Settings there is the same lift, not a second dialog.
+    // Soft never builds the overlay, so this is a no-op and the gear path
+    // is unchanged.
+    function settingsHostWindow() {
+        if (window.turboActive && !window.miniModeActive && turboChromeLoader.item)
+            return turboChromeLoader.item;
+        return window;
+    }
+
+    function seatSettingsDialog() {
+        var hostWin = window.settingsHostWindow();
+        if (!hostWin || !hostWin.contentItem)
+            return;
+        if (settingsDialog.Window.window === hostWin)
+            return;
+        var wasOpen = !!settingsDialog.visible;
+        // Close first: moving a live Popup between windows is the same
+        // "item on two windows" class as the chrome MultiEffect. Reopen
+        // only after the parent is the new window.
+        if (wasOpen)
+            settingsDialog.close();
+        settingsDialog.parent = hostWin.contentItem;
+        if (wasOpen)
+            settingsDialog.open();
+    }
+
+    function showSettings() {
+        window.seatSettingsDialog();
+        settingsDialog.open();
+    }
+
     function moveChromeToOverlay() {
         if (!window.turboActive)
             return;
@@ -1015,6 +1049,8 @@ Shell {
             return;
         chromeLayer.parent = overlay.hostItem;
         window.chromeInOverlay = true;
+        // In case Settings was already open on the shell when Turbo started.
+        window.seatSettingsDialog();
     }
 
     function moveChromeHome() {
@@ -1023,6 +1059,10 @@ Shell {
         window.chromeInOverlay = false;
         if (chromeLayer.parent !== body)
             chromeLayer.parent = body;
+        // Must run while the overlay Window still exists (Loader.onActiveChanged
+        // fires before the item is destroyed) so an open dialog is not
+        // destroyed with it.
+        window.seatSettingsDialog();
     }
 
     // ======================================================================
@@ -1448,6 +1488,7 @@ Shell {
 
     SettingsDialog {
         id: settingsDialog
+        objectName: "settingsDialog"
     }
 
     // ---- Phase R mobile remote (v1.2) ------------------------------------
