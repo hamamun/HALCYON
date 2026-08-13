@@ -180,84 +180,36 @@ Item {
         }
     }
 
-    readonly property bool hasMedia: player && (player.duration > 0 || (player.currentMedia !== undefined && player.currentMedia !== null && player.currentMedia !== ""))
-    readonly property bool isFullscreen: root.Window.window && root.Window.window.fullscreen
-    readonly property bool miniEnabled: activeMode === "local" && hasMedia && !isFullscreen
-
     //: Controller source for the video-route badge. Injectable on the same
     //: terms as `meta` and `player` so this file still loads standalone.
     property var app: typeof App !== "undefined" ? App : null
 
-    // The video-route badge is a playback read-out, so it appears only while
-    // there is media on a mode that has a player: Local and M3U. Web has no
-    // video route of its own (§V.1) and Mini Mode has its own chrome.
+    // The badge/window-button cluster now lives in the shared WindowButtons
+    // component (see below), but the visibility rule is still part of the title
+    // bar's public contract — kept here so callers and tests can read it off the
+    // bar exactly as before. Mirrors WindowButtons.videoBadgeVisible.
+    readonly property bool hasMedia:
+        player && (player.duration > 0
+                   || (player.currentMedia !== undefined
+                       && player.currentMedia !== null
+                       && player.currentMedia !== ""))
+    readonly property bool isFullscreen: root.Window.window && root.Window.window.fullscreen
     readonly property bool videoBadgeVisible:
         (activeMode === "local" || activeMode === "m3u") && hasMedia && !isFullscreen
 
     // ------------------------------------------------------ window buttons --
-    Row {
+    //
+    // The badge + Settings/Mini/Minimise/Maximise/Close cluster now lives in
+    // one shared component (ui/components/WindowButtons.qml) so borderless mode
+    // — which removes this whole bar — can render the identical controls in its
+    // overlay and in the Web tab strip (§B.1).
+    WindowButtons {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.rightMargin: Theme.spaceSm
-        spacing: 0
-
-        // Which video path the playing media is actually on — §V.7. Sits
-        // ahead of the gear because it is a status read-out, not a control,
-        // and so it never shifts the window buttons: it takes its own slot,
-        // collapsing to zero width when there is nothing to report.
-        VideoModeBadge {
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.videoBadgeVisible && root.app ? root.app.videoModeBadge : ""
-            tooltip: root.app ? root.app.videoModeTooltip : ""
-        }
-        Item {
-            width: root.videoBadgeVisible ? Theme.spaceSm : 0
-            height: 1
-        }
-
-        IconButton {
-            glyph: Glyphs.settings
-            tooltip: "Settings"
-            onClicked: Actions.showSettings()
-        }
-        Item { width: Theme.spaceSm; height: 1 }
-        // Mini Mode toggle — v1.1 §M.5 — left of minimize, Local + media only
-        IconButton {
-            glyph: Glyphs.miniMode
-            tooltip: miniEnabled ? "Mini Mode" : "Mini Mode (Local playback only)"
-            showRing: false
-            enabled: miniEnabled
-            onClicked: Actions.toggleMiniMode()
-        }
-        IconButton {
-            glyph: Glyphs.minimize
-            tooltip: "Minimise"
-            showRing: false
-            onClicked: Actions.minimizeWindow()
-        }
-        IconButton {
-            glyph: root.Window.window && root.Window.window.visibility === Window.Maximized
-                   ? Glyphs.restore : Glyphs.maximize
-            tooltip: root.Window.window && root.Window.window.visibility === Window.Maximized
-                     ? "Restore" : "Maximise"
-            showRing: false
-            onClicked: Actions.toggleMaximized()
-        }
-        IconButton {
-            glyph: Glyphs.close
-            tooltip: "Close"
-            showRing: false
-            iconColor: Theme.danger
-            onClicked: Actions.closeWindow()
-
-            background: Rectangle {
-                radius: Theme.radiusControl
-                color: parent.pressed ? Qt.darker(Theme.danger, 1.3)
-                     : parent.hovered ? Theme.danger : "transparent"
-                Behavior on color {
-                    ColorAnimation { duration: Theme.durFast; easing.type: Theme.easing }
-                }
-            }
-        }
+        activeMode: root.activeMode
+        app: root.app
+        player: root.player
+        win: root.Window.window
     }
 }

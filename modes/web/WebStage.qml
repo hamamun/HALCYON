@@ -16,6 +16,12 @@ Rectangle {
     color: Theme.base
 
     property var browser: typeof modeContext_web !== "undefined" ? modeContext_web : null
+    // The host window (Main.qml root), resolved once so the TabsRow bindings
+    // below can reference its properties directly and stay reactive. A
+    // `var w = Window.window` read inside a JS block would not track changes to
+    // borderlessEffective/activeMode, so the inline window buttons would never
+    // appear on toggle.
+    property var hostWindow: webStage.Window.window
     property bool stageActive: true
     property bool viewportSyncPending: false
     readonly property bool contentFullscreen: !!browser && browser.contentFullscreen
@@ -96,6 +102,15 @@ Rectangle {
     onStageActiveChanged: scheduleBrowserSurfaceSync()
     onWidthChanged: scheduleBrowserSurfaceSync()
     onHeightChanged: scheduleBrowserSurfaceSync()
+
+    // Toggling borderless removes/restores the 44px title bar above this stage,
+    // which shifts the page area's on-screen origin without changing any of its
+    // local coordinates — so pageArea's own x/y handlers do not fire. Watch the
+    // host flag directly and resync the native WebView2 surface to the new
+    // position, or the browser viewport would drift by the title-bar height.
+    readonly property bool hostBorderless:
+        !!webStage.hostWindow && webStage.hostWindow.borderlessEffective === true
+    onHostBorderlessChanged: scheduleBrowserSurfaceSync()
 
     // -------------------- helpers for keyboard shortcuts §P3
     function goNextTab() {
@@ -287,6 +302,13 @@ Rectangle {
             id: tabsRow
             browser: webStage.browser
             visible: !webStage.contentFullscreen
+            // Host the window buttons inline when the top title bar is gone.
+            // Guarded so WebStage still loads standalone (tests): the host
+            // window exposes borderlessEffective + activeMode.
+            borderless: !!webStage.hostWindow
+                        && webStage.hostWindow.borderlessEffective === true
+            activeMode: (webStage.hostWindow && webStage.hostWindow.activeMode)
+                        ? webStage.hostWindow.activeMode : "web"
             Layout.fillWidth: true
             Layout.preferredHeight: webStage.contentFullscreen ? 0 : Theme.toolbarRowHeight
         }

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Window
 import Halcyon.Ui
 
 // Browser tab strip.  No page tab exists on entry: the strip shows only the +
@@ -10,6 +11,26 @@ Rectangle {
     color: Theme.baseElevated
 
     property var browser: null
+
+    // Borderless mode (§ the borderless toggle) removes the top title bar. In
+    // Web mode there is no floating overlay — instead the very same window
+    // buttons are hosted inline at the right end of this strip (Edge/Chrome
+    // convention), and the empty part of the strip becomes the drag surface.
+    // Off by default so ordinary (title-bar) mode is byte-for-byte unchanged.
+    property bool borderless: false
+    property string activeMode: "web"
+
+    // Drag-to-move over the empty tab-strip area, active only in borderless —
+    // this is real Qt chrome (unlike the native page below), so startSystemMove
+    // works. Sits behind the controls (z default 0) so tab clicks still win.
+    MouseArea {
+        anchors.fill: parent
+        enabled: root.borderless
+        visible: root.borderless
+        acceptedButtons: Qt.LeftButton
+        onPressed: if (root.Window.window) root.Window.window.startSystemMove()
+        onDoubleClicked: Actions.toggleMaximized()
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -88,6 +109,19 @@ Rectangle {
                     onClicked: if (root.browser) root.browser.setActiveTab(tabItem.index)
                 }
             }
+        }
+
+        // Window buttons inline at the far right — borderless only. Reserved as
+        // its own layout slot (not an overlay), so it can never collide with
+        // the tab chips. No Mini button: Web is not a Local playback surface.
+        WindowButtons {
+            id: webWindowButtons
+            visible: root.borderless
+            Layout.preferredWidth: root.borderless ? implicitWidth : 0
+            Layout.alignment: Qt.AlignVCenter
+            activeMode: root.activeMode
+            win: root.Window.window
+            showMiniButton: false
         }
     }
 

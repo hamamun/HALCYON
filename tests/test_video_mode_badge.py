@@ -24,6 +24,7 @@ from core import video_mode as policy
 ROOT = Path(__file__).resolve().parent.parent
 TITLEBAR_QML = ROOT / "ui" / "shell" / "TitleBar.qml"
 BADGE_QML = ROOT / "ui" / "components" / "VideoModeBadge.qml"
+WINDOW_BUTTONS_QML = ROOT / "ui" / "components" / "WindowButtons.qml"
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +368,17 @@ def test_the_badge_never_recomputes_the_route_in_qml():
     QML deciding "turbo if X" locally is how the badge and the engine drift
     apart.
     """
-    source = TITLEBAR_QML.read_text(encoding="utf-8")
-    assert "videoModeBadge" in source
-    assert "effectiveVideoMode" not in source, (
-        "the title bar must render the controller's badge string, not derive "
-        "its own from the route"
-    )
+    # The badge markup now lives in the shared WindowButtons cluster (rendered
+    # by the title bar and, in borderless mode, by the overlay and the Web tab
+    # strip). Wherever it lives, it must render the controller's badge string and
+    # never derive the route itself.
+    window_buttons = WINDOW_BUTTONS_QML.read_text(encoding="utf-8")
+    assert "videoModeBadge" in window_buttons
+    for source in (
+        TITLEBAR_QML.read_text(encoding="utf-8"),
+        window_buttons,
+    ):
+        assert "effectiveVideoMode" not in source, (
+            "neither the title bar nor the window-button cluster may derive its "
+            "own route; both render the controller's badge string"
+        )
