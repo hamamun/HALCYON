@@ -1348,6 +1348,17 @@ class VlcEngine(QObject):
     def currentMedia(self) -> str:  # noqa: N802 - QML-facing
         return self._current_mrl
 
+    def set_taskbar_frame_capture_enabled(self, enabled: bool) -> None:
+        """Toggle Soft decoded-frame caching for minimized taskbar previews."""
+        output = getattr(self, "video_output", None)
+        if output is not None:
+            output.set_taskbar_frame_capture_enabled(enabled)
+
+    def latest_taskbar_frame(self):
+        """Latest independently-owned Soft decoded frame, if this route has one."""
+        output = getattr(self, "video_output", None)
+        return output.latest_taskbar_frame() if output is not None else None
+
     @property
     def raw_player(self):
         """Escape hatch for engine-internal helpers (equalizer, metadata).
