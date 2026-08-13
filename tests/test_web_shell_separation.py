@@ -26,6 +26,31 @@ def test_main_gates_left_panel_and_ctrl_l_by_mode_capability():
     assert "source: window.leftPanelAvailable() && window.modeSpec" in source
 
 
+def test_turbo_stage_click_catcher_is_off_unless_chrome_is_in_the_overlay():
+    """Web (and Soft Local) must not sit under the Turbo video click sheet.
+
+    overlayStageClick was added so play/pause + fullscreen still work once
+    chromeLayer moves into TurboChromeWindow. Leaving it always-on covers
+    Web's tabs/address bar and turns every double-click into fullscreen.
+    """
+    source = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
+    block = source.split("id: overlayStageClick", 1)[1].split("onClicked", 1)[0]
+    assert "enabled: window.chromeInOverlay" in block
+    assert "visible: window.chromeInOverlay" in block
+    assert "hoverEnabled: window.chromeInOverlay" in block
+    assert "acceptedButtons: window.chromeInOverlay ? Qt.LeftButton : Qt.NoButton" in block
+
+
+def test_leaving_a_mode_brings_turbo_chrome_home_when_turbo_is_off():
+    """Mode switch must not leave the always-on-top Turbo overlay on Web."""
+    source = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
+    handler = source.split("function onActiveModeChanged()", 1)[1]
+    handler = handler.split("\n    }", 1)[0]
+    assert "osdLayer.clear()" in handler
+    assert "window.moveChromeHome()" in handler
+    assert "!window.turboActive" in handler
+
+
 def test_web_has_no_transport_loader_or_bottom_inset():
     source = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
 

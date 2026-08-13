@@ -244,6 +244,27 @@ def test_transparent_quick_windows_request_an_alpha_buffer_before_startup():
     assert "surface_format.setAlphaBufferSize(8)" in bootstrap
 
 
+def test_overlay_stage_click_only_runs_while_chrome_is_in_the_turbo_overlay():
+    """The catcher is Turbo-overlay furniture, not a permanent shell sheet."""
+    main = _read(MAIN_QML)
+    block = main.split("id: overlayStageClick", 1)[1].split("onClicked", 1)[0]
+    assert "enabled: window.chromeInOverlay" in block
+    assert "visible: window.chromeInOverlay" in block
+    assert "hoverEnabled: window.chromeInOverlay" in block
+
+
+def test_move_chrome_home_drops_the_catcher_before_reparenting():
+    """chromeInOverlay must go false before chromeLayer returns to body."""
+    main = _read(MAIN_QML)
+    body = main.split("function moveChromeHome()", 1)[1].split("function ", 1)[0]
+    drop = body.index("chromeInOverlay = false")
+    reparent = body.index("chromeLayer.parent = body")
+    assert drop < reparent, (
+        "the video click catcher must turn off before chrome re-enters "
+        "the main window, or Web takes a frame of stolen clicks"
+    )
+
+
 def test_the_chrome_moves_into_a_transparent_overlay_window():
     """QML siblings cannot paint over a native child window (§V.3)."""
     chrome = _read(TURBO_CHROME_QML)
