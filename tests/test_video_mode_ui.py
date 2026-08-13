@@ -197,6 +197,7 @@ def test_turbo_is_embedded_with_a_window_container():
     source = _read(TURBO_HOST_QML)
     assert "WindowContainer {" in source
     assert "container.window = w" in source
+    assert "App.noteTurboEmbedded" in source
 
 
 def test_the_turbo_host_reports_every_embedding_failure():
@@ -258,7 +259,7 @@ def test_the_chrome_moves_into_a_transparent_overlay_window():
         "the body must paint an opaque letterbox behind the native surface "
         "so a gap never shows the desktop"
     )
-    assert "color: (turboActive && !miniModeActive) ? Theme.base : \"transparent\"" in main, (
+    assert 'color: (turboActive && !miniModeActive) ? "#000000" : "transparent"' in main, (
         "a layered transparent window plus a native HWND punches through to "
         "the desktop — Turbo must make the shell opaque"
     )

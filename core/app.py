@@ -167,6 +167,10 @@ class AppController(QObject):
         self._video_mode = video_policy.normalise(
             settings.get("playback.videoMode", video_policy.AUTO)
         )
+        #: The selection that was last handed to the engine. Settings changes
+        #: update ``_video_mode`` immediately but do *not* switch the live
+        #: route — Soft / Auto / Turbo only apply when the next video starts.
+        self._last_applied_selection = self._video_mode
         #: Guards the Auto re-resolution against thrashing: Auto is evaluated
         #: once per media, when metadata for that media is available.
         self._video_mode_media = ""
@@ -337,6 +341,8 @@ class AppController(QObject):
                 available = bool(probe())
             except Exception:  # pragma: no cover - defensive, never blocks UI
                 log.debug("turbo_available() failed", exc_info=True)
+        last = getattr(self, "_last_applied_selection", self._video_mode)
+        pending = self._video_mode != last
         return video_policy.describe(
             self._video_mode,
             self.effectiveVideoMode,
@@ -347,18 +353,24 @@ class AppController(QObject):
             has_video=getattr(self, "_video_mode_has_video", None),
             mini_mode=bool(getattr(self, "_mini_mode", False)),
             turbo_available=available,
+            pending=pending,
         )
 
     @Slot(str)
     def setVideoMode(self, mode: str) -> None:  # noqa: N802 - QML-facing
-        """The dropdown's one entry point. Persists, then applies."""
+        """The dropdown's one entry point. Persists only.
+
+        Soft, Auto and Turbo are a *preference* for the next media start,
+        not a live switch. Applying here would tear Soft down and build a
+        native HWND while Settings is still open — which buries the modal
+        dialog and kills the title bar. Mini Mode and a mode change still
+        re-resolve immediately; a new file does too, via mediaChanged.
+        """
         value = video_policy.normalise(mode)
         if value != self._video_mode:
             self._video_mode = value
             self._settings.set("playback.videoMode", value)
-            log.info("video mode -> %s", value)
-        self._video_mode_media = ""
-        self._schedule_video_mode()
+            log.info("video mode -> %s (applies when the next video starts)", value)
         self.videoModeChanged.emit()
 
     @Slot(result="QVariant")
@@ -372,6 +384,21 @@ class AppController(QObject):
         back to Soft.
         """
         return getattr(self._engine, "turbo_window", None)
+
+    @Slot()
+    def noteTurboEmbedded(self) -> None:  # noqa: N802 - QML-facing
+        """The shell adopted the native child. Seal the HWND and start play.
+
+        WindowContainer reparents the child *after* the engine pointed
+        libVLC at it. That reparent is what punches a desktop hole under
+        the title bar and what leaves D3D11 silent until a second play().
+        """
+        handler = getattr(self._engine, "note_turbo_embedded", None)
+        if callable(handler):
+            try:
+                handler()
+            except Exception:
+                log.debug("note_turbo_embedded failed", exc_info=True)
 
     @Slot(str)
     def reportTurboFailure(self, reason: str = "") -> None:  # noqa: N802 - QML-facing
@@ -593,6 +620,7 @@ class AppController(QObject):
             return
         finally:
             self._video_mode_applying = False
+        self._last_applied_selection = self._video_mode
         if achieved != target:
             log.info("video route %s unavailable — running on %s", target, achieved)
 

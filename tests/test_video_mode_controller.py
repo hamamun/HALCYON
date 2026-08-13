@@ -261,14 +261,38 @@ def test_forced_soft_never_upgrades(qt_application):
     assert vm.TURBO not in engine.requested
 
 
-def test_choosing_a_mode_persists_it_and_applies_it(qt_application):
+def test_choosing_a_mode_persists_it_without_switching_now(qt_application):
+    """The dropdown only saves. A live switch would bury Settings under HWND."""
     controller, engine, _, settings = _controller(qt_application)
+    engine.currentMedia = "file:///film.mkv"
+    controller._on_media_changed("file:///film.mkv")
+    _settle(qt_application)
+    assert engine.videoRoute == vm.SOFT
+    engine.requested.clear()
 
     controller.setVideoMode("turbo")
     _settle(qt_application)
 
     assert settings.values["playback.videoMode"] == "turbo"
     assert controller.videoMode == "turbo"
+    assert engine.videoRoute == vm.SOFT
+    assert vm.TURBO not in engine.requested
+
+
+def test_choosing_turbo_applies_when_the_next_video_starts(qt_application):
+    controller, engine, _, settings = _controller(qt_application)
+    engine.currentMedia = "file:///film.mkv"
+    controller._on_media_changed("file:///film.mkv")
+    _settle(qt_application)
+    controller.setVideoMode("turbo")
+    _settle(qt_application)
+    assert engine.videoRoute == vm.SOFT
+
+    engine.currentMedia = "file:///next.mkv"
+    controller._on_media_changed("file:///next.mkv")
+    _settle(qt_application)
+
+    assert settings.values["playback.videoMode"] == "turbo"
     assert engine.videoRoute == vm.TURBO
 
 

@@ -55,6 +55,9 @@ class FakePlayer:
     def play(self):
         self.plays += 1
 
+    def set_pause(self, value):
+        self.pauses = getattr(self, "pauses", 0) + 1
+
     def set_media(self, media):
         self.media = media
 
@@ -144,6 +147,8 @@ def _engine(*, hwnd_works=True, playing=True):
     engine._video_route = vm.SOFT
     engine._turbo_surface = None
     engine._media_options = []
+    engine._user_paused = not playing
+    engine._pending_turbo_play = False
     return engine
 
 
@@ -379,6 +384,22 @@ def test_switching_route_does_not_announce_a_media_change(qt_application, forced
     engine.set_video_route(vm.SOFT)
 
     assert seen == []
+
+
+def test_opening_is_not_treated_as_paused():
+    """Opening/Buffering is still 'the user wanted play'."""
+    from engine.vlc_engine import State
+
+    engine = _engine()
+    engine._state = State.Opening
+    engine._user_paused = False
+    _pos, was_paused = engine._capture_playback()
+    assert was_paused is False
+
+    engine._state = State.Paused
+    engine._user_paused = True
+    _pos, was_paused = engine._capture_playback()
+    assert was_paused is True
 
 
 def test_switching_to_the_route_already_in_force_does_nothing(qt_application):

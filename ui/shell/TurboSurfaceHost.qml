@@ -68,8 +68,12 @@ Item {
             root.failed("WindowContainer rejected the native window: " + e2);
             return;
         }
-        if (container.window === null)
+        if (container.window === null) {
             root.failed("WindowContainer did not adopt the native window");
+            return;
+        }
+        if (typeof App !== "undefined" && App && App.noteTurboEmbedded)
+            App.noteTurboEmbedded();
     }
 
     function detach() {
