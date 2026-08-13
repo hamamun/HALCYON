@@ -7,11 +7,13 @@ taskbar thumbnail becomes a still image — the last cached bitmap.
 This module enables DWM's iconic bitmap mode and supplies a fresh frame on
 demand:
 
-* DwmSetWindowAttribute(DWMWA_HAS_ICONIC_BITMAP, TRUE)
-* DwmSetWindowAttribute(DWMWA_FORCE_ICONIC_REPRESENTATION, TRUE)
+* Enable DWMWA_HAS_ICONIC_BITMAP only while the window is minimized.
+  DWMWA_FORCE_ICONIC_REPRESENTATION is deliberately never enabled: it would
+  replace Windows' normal, live preview for a visible window.
 * Native event filter for WM_DWMSENDICONICTHUMBNAIL / WM_DWMSENDICONICLIVE
-* On each request: snapshot current frame via libVLC video_take_snapshot
-  (Soft and Turbo both go through the same main player) -> BMP -> HBITMAP
+* On each request: snapshot current frame via libVLC video_take_snapshot ->
+  BMP -> HBITMAP. If that backend cannot snapshot, return a valid fallback
+  bitmap rather than leaving DWM waiting.
   -> DwmSetIconicThumbnail / DwmSetIconicLivePreviewBitmap
 
 No second player, no continuous playback behind. Snapshot is taken only
@@ -20,7 +22,8 @@ while minimized + playing.
 
 Safe by design:
 * Off Windows: is_supported() == False, module does nothing.
-* Any DWM call failure -> falls back to default Windows thumbnail.
+* A valid fallback bitmap is returned for every DWM request while iconic mode
+  is active, so DWM never displays a blank, pending thumbnail.
 * All Win32 calls guarded, never raises to Qt.
 * Filter installed on QApplication, removed on shutdown.
 """
@@ -65,7 +68,8 @@ else:
 
     # DWM attributes
     DWMWA_HAS_ICONIC_BITMAP = 10
-    DWMWA_FORCE_ICONIC_REPRESENTATION = 7
+    # Do not enable DWMWA_FORCE_ICONIC_REPRESENTATION (7).  It forces the
+    # iconic path for visible windows and breaks DWM's normal live preview.
 
     # LoadImage flags
     IMAGE_BITMAP = 0
@@ -120,6 +124,8 @@ else:
 
         gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
         gdi32.DeleteObject.restype = wintypes.BOOL
+        gdi32.CreateBitmap.argtypes = [wintypes.INT, wintypes.INT, wintypes.UINT, wintypes.UINT, ctypes.c_void_p]
+        gdi32.CreateBitmap.restype = wintypes.HBITMAP
 
         _WIN32_OK = True
     except Exception:
@@ -244,32 +250,37 @@ else:
                     max_w = lparam & 0xFFFF
                     max_h = (lparam >> 16) & 0xFFFF
                     hbm = self._owner._create_hbitmap(max_w, max_h)
-                    if hbm:
-                        try:
-                            dwmapi.DwmSetIconicThumbnail(msg.hwnd, hbm, 0)
-                        except Exception:
-                            log.debug("DwmSetIconicThumbnail failed", exc_info=True)
+                    if not hbm:
+                        return False, 0
+                    try:
+                        # DWM copies the bitmap during this call. Always reply
+                        # while iconic mode is enabled; otherwise it displays
+                        # the white pending-thumbnail spinner.
+                        dwmapi.DwmSetIconicThumbnail(msg.hwnd, hbm, 0)
+                    except Exception:
+                        log.debug("DwmSetIconicThumbnail failed", exc_info=True)
+                    finally:
                         try:
                             gdi32.DeleteObject(hbm)
                         except Exception:
                             pass
-                        return True, 0
-                    return False, 0
+                    return True, 0
 
                 if msg.message == WM_DWMSENDICONICLIVE:
                     hbm = self._owner._create_hbitmap(0, 0)
-                    if hbm:
-                        try:
-                            pt = POINT(0, 0)
-                            dwmapi.DwmSetIconicLivePreviewBitmap(msg.hwnd, hbm, ctypes.byref(pt), DWM_SIT_DISPLAYFRAME)
-                        except Exception:
-                            log.debug("DwmSetIconicLivePreviewBitmap failed", exc_info=True)
+                    if not hbm:
+                        return False, 0
+                    try:
+                        pt = POINT(0, 0)
+                        dwmapi.DwmSetIconicLivePreviewBitmap(msg.hwnd, hbm, ctypes.byref(pt), DWM_SIT_DISPLAYFRAME)
+                    except Exception:
+                        log.debug("DwmSetIconicLivePreviewBitmap failed", exc_info=True)
+                    finally:
                         try:
                             gdi32.DeleteObject(hbm)
                         except Exception:
                             pass
-                        return True, 0
-                    return False, 0
+                    return True, 0
 
             except Exception:
                 log.debug("taskbar filter exception", exc_info=True)
@@ -317,65 +328,62 @@ else:
                     QTimer.singleShot(250, self._try_enable)
                     return
                 self._hwnd = wid
-                self._enable_iconic()
+                self._install_filter()
+                try:
+                    self._window.visibilityChanged.connect(self._on_visibility_changed)
+                except Exception:
+                    pass
+                # The timer itself is cheap; it only invalidates while the
+                # window is minimized and playback is active.
+                self._invalidate_timer.start()
+                # Do not claim iconic ownership while the window is visible.
+                # That is what previously replaced normal-mode live preview.
+                self._on_visibility_changed(win.visibility())
             except Exception:
                 log.debug("taskbar _try_enable failed", exc_info=True)
 
-        def _enable_iconic(self):
-            if self._hwnd == 0 or self._enabled:
+        def _set_iconic_mode(self, enabled: bool):
+            """Enable custom DWM bitmaps only for the minimized window.
+
+            The visible window must remain on DWM's default composition path;
+            it is the only reliable live preview for both render backends.
+            """
+            if self._hwnd == 0:
                 return
             try:
-                hwnd = wintypes.HWND(self._hwnd)
-                true_val = ctypes.c_int(1)
-                # HAS_ICONIC_BITMAP
-                hr1 = dwmapi.DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_HAS_ICONIC_BITMAP,
-                    ctypes.byref(true_val),
-                    ctypes.sizeof(true_val),
+                value = ctypes.c_int(1 if enabled else 0)
+                hr = dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(self._hwnd), DWMWA_HAS_ICONIC_BITMAP,
+                    ctypes.byref(value), ctypes.sizeof(value),
                 )
-                # FORCE_ICONIC_REPRESENTATION
-                hr2 = dwmapi.DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_FORCE_ICONIC_REPRESENTATION,
-                    ctypes.byref(true_val),
-                    ctypes.sizeof(true_val),
-                )
-                if hr1 == 0 and hr2 == 0:
-                    self._enabled = True
-                    log.info("taskbar live preview enabled (hwnd=%s)", self._hwnd)
-                    # Install filter
-                    try:
-                        from PySide6.QtGui import QGuiApplication
-                        app = QGuiApplication.instance()
-                        if app is not None:
-                            self._filter = _TaskbarFilter(self)
-                            app.installNativeEventFilter(self._filter)
-                            # Keep ref alive via _filter
-                    except Exception:
-                        log.debug("installing native filter failed", exc_info=True)
-
-                    # Start invalidation when playing+minimized
-                    self._invalidate_timer.start()
-
-                    # Watch visibility to know minimized state
-                    try:
-                        self._window.visibilityChanged.connect(self._on_visibility_changed)
-                    except Exception:
-                        pass
-                else:
-                    log.info("DwmSetWindowAttribute failed hr1=%s hr2=%s", hr1, hr2)
+                self._enabled = (hr == 0 and enabled)
+                if hr != 0:
+                    log.info("DwmSetWindowAttribute(HAS_ICONIC_BITMAP) failed hr=%s", hr)
             except Exception:
-                log.debug("taskbar _enable_iconic failed", exc_info=True)
+                self._enabled = False
+                log.debug("taskbar _set_iconic_mode failed", exc_info=True)
+
+        def _install_filter(self):
+            if self._filter is not None:
+                return
+            try:
+                from PySide6.QtGui import QGuiApplication
+                app = QGuiApplication.instance()
+                if app is not None:
+                    self._filter = _TaskbarFilter(self)
+                    app.installNativeEventFilter(self._filter)
+            except Exception:
+                log.debug("installing native filter failed", exc_info=True)
 
         def _on_visibility_changed(self, vis):
-            # Optional: invalidate immediately when minimizing to refresh
             try:
                 from PySide6.QtGui import QWindow
-                if vis == QWindow.Visibility.Minimized:
+                minimized = vis == QWindow.Visibility.Minimized
+                self._set_iconic_mode(minimized)
+                if minimized:
                     self._invalidate_once()
             except Exception:
-                pass
+                log.debug("taskbar visibility change failed", exc_info=True)
 
         def _is_minimized(self) -> bool:
             try:
@@ -418,17 +426,25 @@ else:
                 pass
 
         def _create_hbitmap(self, max_w: int, max_h: int):
-            # Use snapshot from main player - works for Soft and Turbo
-            # Soft: vmem snapshot, Turbo: HWND snapshot
+            # Use a snapshot from the main player when that output backend
+            # supports it; otherwise the mandatory fallback below is used.
             try:
-                if not self._is_playing():
-                    return 0
-                # ignore max_w/h for live bitmap, use small fixed
-                w = max_w if 80 <= max_w <= 480 else 320
-                h = max_h if 80 <= max_h <= 270 else 180
-                return _snapshot_to_hbitmap(self._engine, w, h)
+                if self._is_playing():
+                    # Ignore invalid DWM hints, but honour sensible thumbnail
+                    # dimensions so DWM does not needlessly rescale.
+                    w = max_w if 80 <= max_w <= 480 else 320
+                    h = max_h if 80 <= max_h <= 270 else 180
+                    hbm = _snapshot_to_hbitmap(self._engine, w, h)
+                    if hbm:
+                        return hbm
             except Exception:
                 log.debug("create_hbitmap failed", exc_info=True)
+            # video_take_snapshot is unavailable with some vmem/Soft outputs.
+            # A real bitmap is still mandatory after advertising iconic support;
+            # a small black bitmap is preferable to DWM's blank busy spinner.
+            try:
+                return int(gdi32.CreateBitmap(320, 180, 1, 32, None) or 0)
+            except Exception:
                 return 0
 
         def shutdown(self):
@@ -445,13 +461,14 @@ else:
                         hwnd, DWMWA_HAS_ICONIC_BITMAP,
                         ctypes.byref(false_val), ctypes.sizeof(false_val)
                     )
-                    dwmapi.DwmSetWindowAttribute(
-                        hwnd, DWMWA_FORCE_ICONIC_REPRESENTATION,
-                        ctypes.byref(false_val), ctypes.sizeof(false_val)
-                    )
             except Exception:
                 pass
-            # Filter removal - Qt has no uninstall, but dropping ref is enough
-            # as app is quitting
+            try:
+                from PySide6.QtGui import QGuiApplication
+                app = QGuiApplication.instance()
+                if app is not None and self._filter is not None:
+                    app.removeNativeEventFilter(self._filter)
+            except Exception:
+                pass
             self._filter = None
             log.info("taskbar preview shutdown")
