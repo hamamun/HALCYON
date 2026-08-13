@@ -11,14 +11,13 @@ demand:
   DWMWA_FORCE_ICONIC_REPRESENTATION is deliberately never enabled: it would
   replace Windows' normal, live preview for a visible window.
 * Native event filter for WM_DWMSENDICONICTHUMBNAIL / WM_DWMSENDICONICLIVE
-* On each request: snapshot current frame via libVLC video_take_snapshot ->
-  BMP -> HBITMAP. If that backend cannot snapshot, return a valid fallback
+* On each request: convert the latest owned Soft/vmem decoded frame directly
+  to a DIB-section HBITMAP. If no frame has arrived, return a valid neutral
   bitmap rather than leaving DWM waiting.
   -> DwmSetIconicThumbnail / DwmSetIconicLivePreviewBitmap
 
-No second player, no continuous playback behind. Snapshot is taken only
-when Windows asks (hover) and is throttled by a 120ms invalidate timer
-while minimized + playing.
+No second player, no window capture, and no snapshot files. Soft copying is
+enabled only while minimized and is rate-limited; DWM invalidation is ~8 FPS.
 
 Safe by design:
 * Off Windows: is_supported() == False, module does nothing.
@@ -32,10 +31,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
 import sys
-import tempfile
-from pathlib import Path
+
+from core.taskbar_pixels import preview_bgra
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +68,6 @@ else:
     DWMWA_HAS_ICONIC_BITMAP = 10
     # Do not enable DWMWA_FORCE_ICONIC_REPRESENTATION (7).  It forces the
     # iconic path for visible windows and breaks DWM's normal live preview.
-
-    # LoadImage flags
-    IMAGE_BITMAP = 0
-    LR_LOADFROMFILE = 0x10
-    LR_CREATEDIBSECTION = 0x2000
 
     DWM_SIT_DISPLAYFRAME = 0x00000001
 
@@ -116,12 +109,6 @@ else:
         dwmapi.DwmInvalidateIconicBitmaps.argtypes = [wintypes.HWND]
         dwmapi.DwmInvalidateIconicBitmaps.restype = ctypes.c_long
 
-        user32.LoadImageW.argtypes = [
-            wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
-            wintypes.INT, wintypes.INT, wintypes.UINT
-        ]
-        user32.LoadImageW.restype = wintypes.HANDLE
-
         gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
         gdi32.DeleteObject.restype = wintypes.BOOL
         gdi32.CreateBitmap.argtypes = [wintypes.INT, wintypes.INT, wintypes.UINT, wintypes.UINT, ctypes.c_void_p]
@@ -133,88 +120,56 @@ else:
         _WIN32_OK = False
 
     # ------------------------------------------------------------------
-    # Helper: snapshot -> HBITMAP
+    # Helper: owned decoded pixels -> HBITMAP
     # ------------------------------------------------------------------
 
-    def _snapshot_to_hbitmap(player, width_hint: int = 0, height_hint: int = 0):
-        """Use main libVLC player to take a BMP snapshot, load as HBITMAP.
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long),
+            ("biHeight", ctypes.c_long), ("biPlanes", wintypes.WORD),
+            ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+            ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD),
+            ("biClrImportant", wintypes.DWORD),
+        ]
 
-        Returns HBITMAP handle or 0 on failure. Caller must DeleteObject().
-        Snap is short-lived, no second player.
-        """
-        if not _WIN32_OK:
+    class BITMAPINFO(ctypes.Structure):
+        _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 1)]
+
+    BI_RGB = 0
+    DIB_RGB_COLORS = 0
+
+    gdi32.CreateDIBSection.argtypes = [
+        wintypes.HDC, ctypes.POINTER(BITMAPINFO), wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD,
+    ]
+    gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+
+    def _bgra_to_hbitmap(pixels: bytes, width: int, height: int) -> int:
+        """Create a top-down 32-bit DIB whose storage receives owned BGRA."""
+        if not _WIN32_OK or width <= 0 or height <= 0 or len(pixels) != width * height * 4:
             return 0
-        if player is None:
+        info = BITMAPINFO()
+        info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        info.bmiHeader.biWidth = width
+        # Negative height is a top-down DIB: exactly the row order generated
+        # by preview_bgra, avoiding an extra flip/copy.
+        info.bmiHeader.biHeight = -height
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        info.bmiHeader.biCompression = BI_RGB
+        info.bmiHeader.biSizeImage = len(pixels)
+        bits = ctypes.c_void_p()
+        hbm = gdi32.CreateDIBSection(None, ctypes.byref(info), DIB_RGB_COLORS,
+                                     ctypes.byref(bits), None, 0)
+        if not hbm or not bits.value:
             return 0
-        raw = getattr(player, "raw_player", None) or getattr(player, "_player", None)
-        if raw is None:
-            return 0
-        # Only when media is loaded
         try:
-            cur = getattr(player, "currentMedia", "")
-            if not cur:
-                return 0
+            ctypes.memmove(bits, pixels, len(pixels))
+            return int(hbm)
         except Exception:
-            pass
-
-        # Clamp hint to reasonable live-preview size. 0 = original, but we
-        # want small to keep it fast. Windows will scale anyway.
-        w = int(width_hint) if width_hint > 0 else 320
-        h = int(height_hint) if height_hint > 0 else 180
-        # Don't ask for huge - cap
-        w = min(w, 480)
-        h = min(h, 270)
-        if w < 32 or h < 32:
-            w, h = 320, 180
-
-        tmp_dir = Path(tempfile.gettempdir()) / "halcyon_taskbar"
-        try:
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            tmp_dir = Path(tempfile.gettempdir())
-
-        bmp_path = tmp_dir / f"live_{os.getpid()}.bmp"
-
-        try:
-            # video_take_snapshot returns 0 on success
-            # Signature: video_take_snapshot(num, filepath, width, height)
-            # Use 0 = first video track
-            setter = getattr(raw, "video_take_snapshot", None)
-            if not callable(setter):
-                return 0
-            # Remove old file first
-            try:
-                if bmp_path.exists():
-                    bmp_path.unlink()
-            except Exception:
-                pass
-
-            res = setter(0, str(bmp_path), w, h)
-            if res != 0:
-                return 0
-            if not bmp_path.exists() or bmp_path.stat().st_size == 0:
-                return 0
-
-            # Load as DIB section HBITMAP
-            hbm = user32.LoadImageW(
-                None,
-                str(bmp_path),
-                IMAGE_BITMAP,
-                0, 0,
-                LR_LOADFROMFILE | LR_CREATEDIBSECTION,
-            )
-            return int(hbm or 0)
-        except Exception:
-            log.debug("taskbar snapshot failed", exc_info=True)
+            gdi32.DeleteObject(hbm)
             return 0
-        finally:
-            # Clean file after load attempt, DWM already has its own copy
-            # after LoadImage, file not needed. Keep deletion best-effort.
-            try:
-                if bmp_path.exists():
-                    bmp_path.unlink()
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     # Native event filter
@@ -379,6 +334,12 @@ else:
             try:
                 from PySide6.QtGui import QWindow
                 minimized = vis == QWindow.Visibility.Minimized
+                # The engine only feeds this cache from its Soft/vmem callback
+                # path. Turbo intentionally yields None; do not capture a
+                # potentially stale native child HWND.
+                setter = getattr(self._engine, "set_taskbar_frame_capture_enabled", None)
+                if callable(setter):
+                    setter(minimized)
                 self._set_iconic_mode(minimized)
                 if minimized:
                     self._invalidate_once()
@@ -426,28 +387,33 @@ else:
                 pass
 
         def _create_hbitmap(self, max_w: int, max_h: int):
-            # Use a snapshot from the main player when that output backend
-            # supports it; otherwise the mandatory fallback below is used.
+            # Live preview requests carry dimensions; WM_DWMSENDICONICLIVE does
+            # not, so use a modest fixed bitmap and let DWM scale it.
+            w = max_w if 80 <= max_w <= 480 else 320
+            h = max_h if 80 <= max_h <= 270 else 180
             try:
-                if self._is_playing():
-                    # Ignore invalid DWM hints, but honour sensible thumbnail
-                    # dimensions so DWM does not needlessly rescale.
-                    w = max_w if 80 <= max_w <= 480 else 320
-                    h = max_h if 80 <= max_h <= 270 else 180
-                    hbm = _snapshot_to_hbitmap(self._engine, w, h)
+                getter = getattr(self._engine, "latest_taskbar_frame", None)
+                frame = getter() if callable(getter) else None
+                if frame is not None:
+                    pixels, out_w, out_h = preview_bgra(frame, w, h)
+                    hbm = _bgra_to_hbitmap(pixels, out_w, out_h)
                     if hbm:
                         return hbm
             except Exception:
-                log.debug("create_hbitmap failed", exc_info=True)
-            # video_take_snapshot is unavailable with some vmem/Soft outputs.
-            # A real bitmap is still mandatory after advertising iconic support;
-            # a small black bitmap is preferable to DWM's blank busy spinner.
-            try:
-                return int(gdi32.CreateBitmap(320, 180, 1, 32, None) or 0)
-            except Exception:
-                return 0
+                log.debug("creating taskbar DIB from decoded frame failed", exc_info=True)
+            # Once HAS_ICONIC_BITMAP is advertised DWM must always receive a
+            # real HBITMAP. Opaque neutral black prevents its white spinner
+            # during the gap before the first Soft decoded frame (and Turbo,
+            # whose native output deliberately has no unsafe capture path).
+            return _bgra_to_hbitmap(bytes((0, 0, 0, 255)) * (w * h), w, h)
 
         def shutdown(self):
+            try:
+                setter = getattr(self._engine, "set_taskbar_frame_capture_enabled", None)
+                if callable(setter):
+                    setter(False)
+            except Exception:
+                pass
             try:
                 self._invalidate_timer.stop()
             except Exception:

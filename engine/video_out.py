@@ -112,6 +112,8 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
+from engine.taskbar_frame import LatestTaskbarFrameCache, TaskbarFrame
+
 #: Used by :meth:`VideoOutput._callback_alive` to detect surfaces whose C++
 #: half has been deleted (a closed PiP window). Guarded so this module keeps
 #: importing in pure-Python contexts (the Qt-free engine tests).
@@ -384,7 +386,7 @@ class FrameRing:
                 return 0
             return generation.addresses[self._write]
 
-    def publish(self) -> None:
+    def publish(self) -> tuple[int, int, FrameFormat] | None:
         """Mark the written slot complete and pick the next write target.
 
         Called from ``display``. This is the entire handoff: no copy, no signal
@@ -392,8 +394,8 @@ class FrameRing:
         """
         with self._lock:
             generation = self._generation
-            if generation is None or not generation.addresses:
-                return
+            if generation is None or not generation.addresses or self._fmt is None:
+                return None
             if self._ready >= 0 and self._ready != self._read:
                 # The previous ready frame was never consumed — Qt is rendering
                 # slower than we decode. Expected and harmless; count it so the
@@ -402,6 +404,11 @@ class FrameRing:
             self._ready = self._write
             self._serial += 1
             self._frames_seen += 1
+            # Capture consumers run after this method returns.  This address
+            # remains a completed ring slot until a later callback chooses it
+            # as a write target; the current VLC callback is serial, so it is
+            # safe to copy it immediately after publication.
+            published = (self._serial, generation.addresses[self._ready], self._fmt)
             # Next write target: rotate forward to the first slot that is
             # neither the newest-complete frame nor pinned by a reader.
             # Rotating (rather than always scanning from 0) matters: it keeps
@@ -413,6 +420,7 @@ class FrameRing:
                 if candidate != self._ready and candidate != self._read:
                     self._write = candidate
                     break
+            return published
 
     # ------------------------------------------------- reader (Qt thread) ---
     def acquire_read(self) -> ReadClaim | None:
@@ -486,6 +494,9 @@ class VideoOutput:
     def __init__(self, chroma: str = Chroma.I420) -> None:
         self.ring = FrameRing()
         self.chroma = chroma
+        # Only Soft/vmem callbacks feed this cache. Turbo deliberately detaches
+        # this VideoOutput and is not represented by a stale HWND capture.
+        self._taskbar_cache = LatestTaskbarFrameCache()
         #: Legacy single-slot notifications. A simple caller that sets one of
         #: these gets exactly the old behaviour; surfaces registered through
         #: :meth:`add_reader` are notified *in addition to* these, never
@@ -668,6 +679,19 @@ class VideoOutput:
     def readers(self) -> int:
         return self._readers
 
+    def set_taskbar_frame_capture_enabled(self, enabled: bool) -> None:
+        """Enable bounded Soft-frame copies for minimized DWM previews."""
+        self._taskbar_cache.set_enabled(enabled)
+
+    def latest_taskbar_frame(self) -> TaskbarFrame | None:
+        """Return the latest owned Soft decoded frame, or ``None``.
+
+        The returned pixels are never backed by a mutable FrameRing/libVLC
+        buffer. Turbo has no vmem callbacks by design and therefore returns
+        ``None`` rather than pretending an HWND capture is current.
+        """
+        return self._taskbar_cache.latest()
+
     def _listener_snapshot(self) -> list[_Reader]:
         """Copy of the reader list for decoder-thread dispatch.
 
@@ -847,6 +871,9 @@ class VideoOutput:
         suppressed the Now Playing card.
         """
         self.ring.mark_stopped()
+        # End/new-media is not pause: do not show a previous title's final
+        # picture in an iconic preview while the next source opens.
+        self._taskbar_cache.clear()
         # Every reader must drop back to idle, not just the last one that
         # attached — a PiP window and the main Stage both have a `hasVideo`
         # flag to clear (§P2.5).
@@ -915,7 +942,13 @@ class VideoOutput:
             return 0
 
     def _on_display(self) -> None:
-        self.ring.publish()
+        published = self.ring.publish()
+        if published is not None:
+            serial, address, fmt = published
+            # This is the only copy from libVLC-owned ring memory. It runs on
+            # the decoder callback thread but is disabled outside minimized
+            # taskbar mode and rate-limited to avoid affecting playback.
+            self._taskbar_cache.capture(address, fmt, serial)
         # Fan out to every registered reader, not just the last one that
         # attached (§P2.5). Before the fan-out, a second surface's bind()
         # overwrote `frame_ready` and the main Stage stopped being told that
