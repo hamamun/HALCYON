@@ -1593,6 +1593,7 @@ ui/panels/SettingsDialog.qml     # ★ toggle row under "On-screen display"
 ui/Main.qml                      # ★ bindTransport(): scrubPreviewEnabled from Settings
 tools/check_isolation.py         # ★ PHASE_S_DISCLOSED for the frozen-path rule
 tests/test_scrub_preview.py      # ★ NEW — settings default, decoder fakes, engine wiring
+tests/test_scrub_preview_qml.py  # ★ NEW — GUI-gated: SeekBar hoverFraction, popup shown/time
 ```
 
 Frozen Phase 1 paths touched (all disclosed in `PHASE_S_DISCLOSED`, same

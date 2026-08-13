@@ -44,6 +44,7 @@ Robustness contract (§S.3)
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -61,6 +62,15 @@ DECODE_SETTLE_MS = 70
 
 #: Retry delay if the first snapshot arrived before the frame was ready.
 SNAPSHOT_RETRY_MS = 90
+
+#: Watchdog for a snapshot that libVLC accepted but whose SnapshotTaken event
+#: never arrives. Without it the chain would hang with no timer running.
+SNAPSHOT_EVENT_TIMEOUT_MS = 600
+
+#: Chain phases, tracked in ``self._step``.
+_STEP_SETTLE = "settle"     # seeked; waiting for the decoder to produce the frame
+_STEP_RETRY = "retry"       # snapshot failed; one retry is armed
+_STEP_WAIT = "wait-event"   # snapshot accepted; waiting for SnapshotTaken (or watchdog)
 
 #: The hidden player's libVLC options. Mirrors the main engine's BASE_VLC_ARGS
 #: (same decode policy), minus the vmem callbacks, plus a dummy vout and no
@@ -123,6 +133,11 @@ class ScrubPreview(QObject):
         self._position_ms = 0
         self._pending_ms: int | None = None
         self._chain_active = False
+        self._step = _STEP_SETTLE
+        #: Retries left for the current seek's snapshot attempt. Capped so a
+        #: file whose frames cannot be snapshotted cannot spin the chain
+        #: forever (see ``_on_step``).
+        self._retries_left = 0
         self._snapshot_index = 0
         self._snapshot_path: Path | None = None
 
@@ -155,6 +170,9 @@ class ScrubPreview(QObject):
         # Cancel any in-flight chain; nothing it produces is wanted any more.
         self._pending_ms = None
         self._chain_active = False
+        self._retries_left = 0
+        self._step = _STEP_SETTLE
+        self._snapshot_path = None
         self._timer.stop()
         # Drop the stale frame immediately — the popup must never show the
         # previous file's picture while the new one loads. Only when there
@@ -217,6 +235,9 @@ class ScrubPreview(QObject):
         self._timer.stop()
         self._pending_ms = None
         self._chain_active = False
+        self._retries_left = 0
+        self._step = _STEP_SETTLE
+        self._snapshot_path = None
         self._mrl = ""
         self._set_ready(False)
         self._set_available(False)
@@ -393,6 +414,7 @@ class ScrubPreview(QObject):
     def _start_chain(self) -> None:
         """Begin seek→settle→snapshot at the newest pending position."""
         self._chain_active = True
+        self._step = _STEP_SETTLE
         self._seek_to_pending()
         self._timer.start(DECODE_SETTLE_MS)
 
@@ -402,6 +424,8 @@ class ScrubPreview(QObject):
         try:
             self._player.set_time(self._pending_ms)
             self._position_ms = self._pending_ms
+            # A fresh seek deserves a fresh pair of snapshot attempts.
+            self._retries_left = 1
         except Exception:
             log.debug("scrub preview: seek failed", exc_info=True)
 
@@ -422,29 +446,64 @@ class ScrubPreview(QObject):
         return False
 
     def _on_step(self) -> None:
-        """Timer step: the settle has elapsed — take (or retry) the snapshot."""
-        if not self._ready or self._player is None:
+        """Timer step: settle elapsed → snapshot; or watchdog for the event."""
+        if not self._chain_active or not self._ready or self._player is None:
             self._chain_active = False
+            self._timer.stop()
             return
-        if not self._take_snapshot():
-            # The frame may not have been decoded yet; give it one retry,
-            # then give up this round rather than spin.
-            self._timer.start(SNAPSHOT_RETRY_MS)
-            return
-        # The SnapshotTaken event finishes the chain. If a newer request
-        # arrived meanwhile, the event handler starts the next chain.
 
-    # --------------------------------------------------- GUI-thread sinks ---
-    def _on_shot_taken_gui(self, path: str) -> None:
-        """SnapshotTaken delivered on the GUI thread — finish the chain."""
-        if self._snapshot_path is not None:
+        if self._step in (_STEP_SETTLE, _STEP_RETRY):
+            if not self._take_snapshot():
+                # The frame may not have been decoded yet — one retry, then
+                # give up this round rather than spin. A fresh request()
+                # restarts the chain with a fresh retry budget.
+                if self._retries_left > 0:
+                    self._retries_left -= 1
+                    self._step = _STEP_RETRY
+                    self._timer.start(SNAPSHOT_RETRY_MS)
+                else:
+                    self._pending_ms = None
+                    self._chain_active = False
+                    self._timer.stop()
+                return
+            # Accepted. The SnapshotTaken event normally finishes the chain;
+            # the timer is re-armed as a watchdog in case that event never
+            # arrives (a broken libVLC must not hang the chain forever).
+            self._step = _STEP_WAIT
+            self._timer.start(SNAPSHOT_EVENT_TIMEOUT_MS)
+            return
+
+        # _STEP_WAIT and the watchdog fired: the event never arrived. Publish
+        # the file if libVLC did write it anyway, then rest the chain.
+        self._timer.stop()
+        if self._snapshot_path is not None and self._snapshot_path.exists():
             self.snapshotReady.emit(
                 QUrl.fromLocalFile(str(self._snapshot_path)).toString()
             )
+        self._pending_ms = None
+        self._chain_active = False
+
+    # --------------------------------------------------- GUI-thread sinks ---
+    def _on_shot_taken_gui(self, path: str) -> None:
+        """SnapshotTaken delivered on the GUI thread — finish the chain.
+
+        ``path`` must match the snapshot we last requested. Events from a
+        *previous* request (or the previous media) are stale — their file may
+        not even exist any more (rotating names), so publishing them would
+        show the wrong frame or a broken image. Ignore them entirely; the
+        event for the current request is still coming.
+        """
+        if self._snapshot_path is None:
+            return  # nothing requested since the last clear — stale event
+        if os.path.normcase(str(self._snapshot_path)) != os.path.normcase(path):
+            return  # belongs to an older request (rotated file) — stale
+        self._timer.stop()  # the watchdog is not needed — the event arrived
+        self.snapshotReady.emit(QUrl.fromLocalFile(str(self._snapshot_path)).toString())
 
         if self._pending_ms is not None and self._pending_ms != self._position_ms:
             # A newer request arrived while this snapshot was in flight.
             self._seek_to_pending()
+            self._step = _STEP_SETTLE
             self._timer.start(DECODE_SETTLE_MS)
             return
         self._pending_ms = None

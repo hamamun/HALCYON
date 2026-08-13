@@ -239,6 +239,128 @@ def test_a_too_early_snapshot_gets_one_retry(qt_application) -> None:
     assert len(player.snapshot_paths) == 2, "first attempt + one retry"
 
 
+def test_persistent_snapshot_failure_gives_up_not_spins(qt_application) -> None:
+    """§S.3 — a file that can never be snapshotted must rest the chain.
+
+    Regression: the retry timer used to re-arm unconditionally, so a
+    persistently failing ``video_take_snapshot`` spun the chain at ~90 ms
+    forever, even after the pointer left the bar. The chain must give up
+    after the retry budget, and a fresh request must restart it.
+    """
+    preview, _instance, player = _preview_with_fakes()
+    preview.set_source("file:///tmp/clip.mp4")
+    preview._on_playing_gui()
+
+    player.snapshot_rc = -1  # permanently failing
+    preview.request(2000)
+    preview._on_step()  # first attempt fails → retry armed (budget 1)
+    preview._on_step()  # retry fails → budget exhausted → chain rests
+
+    assert preview._chain_active is False, "chain must rest after the retry budget"
+    assert not preview._timer.isActive(), "no timer spinning"
+
+    player.snapshot_rc = 0
+    attempts_before = len(player.snapshot_paths)
+    preview.request(2000)  # a fresh request restarts the chain
+    assert preview._chain_active is True, "fresh request gets a fresh budget"
+    preview._on_step()
+    assert len(player.snapshot_paths) == attempts_before + 1, "fresh attempt succeeds"
+
+
+def test_a_stale_snapshot_event_is_ignored(qt_application) -> None:
+    """§S.3 — SnapshotTaken events from an older request are dropped.
+
+    Regression: the sink emitted whatever ``_snapshot_path`` last held,
+    ignoring the event's own filename. With rotating temp files, a duplicate
+    or delayed event from request A arriving while request B is in flight
+    would publish B's URL before B's file existed (broken image), and an
+    event still in flight from the *previous media* could republish an old
+    frame after a media switch (covered separately below).
+    """
+    preview, _instance, player = _preview_with_fakes()
+    seen: list[str] = []
+    preview.snapshotReady.connect(seen.append)
+
+    preview.set_source("file:///tmp/clip.mp4")
+    preview._on_playing_gui()
+
+    # Request A accepted → snapshot_path is scrub_1.png (index 0→1).
+    preview.request(1000)
+    preview._on_step()
+    first = str(player.snapshot_paths[-1])
+    preview._on_shot_taken_gui(first)  # A's event: published, chain rests
+    assert len(seen) == 1 and seen[0].startswith("file://"), seen
+
+    # Request B rotates to scrub_0.png.
+    preview.request(2000)
+    preview._on_step()
+    second = str(player.snapshot_paths[-1])
+    assert second != first, "rotating filenames"
+
+    # A's duplicate/late event arrives now → filename mismatch → ignored.
+    preview._on_shot_taken_gui(first)
+    assert len(seen) == 1, "a stale event must not publish a frame"
+
+    # B's own event arrives → published.
+    preview._on_shot_taken_gui(second)
+    assert len(seen) == 2 and seen[-1].startswith("file://"), seen
+    assert str(preview._snapshot_path) in seen[-1], seen
+
+
+def test_missing_snapshot_event_is_watched_and_the_chain_rests(qt_application) -> None:
+    """A snapshot libVLC accepted but never confirmed must not hang the chain.
+
+    The watchdog (``SNAPSHOT_EVENT_TIMEOUT_MS``) fires in the ``wait-event``
+    phase: it publishes the file if libVLC wrote it anyway, then rests the
+    chain so the next hover starts fresh.
+    """
+    preview, _instance, player = _preview_with_fakes()
+    seen: list[str] = []
+    preview.snapshotReady.connect(seen.append)
+
+    preview.set_source("file:///tmp/clip.mp4")
+    preview._on_playing_gui()
+
+    preview.request(1000)
+    preview._on_step()  # accepted → WAIT phase, watchdog armed
+    assert preview._step == "wait-event"
+    assert preview._timer.isActive(), "the watchdog must be armed"
+
+    preview._on_step()  # watchdog fires; the event never arrived
+    assert preview._chain_active is False, "the chain rests"
+    assert preview._pending_ms is None
+    assert seen == [], "file was not written → nothing to publish"
+
+    # Variant: libVLC wrote the file but skipped the event.
+    preview.request(2000)
+    preview._on_step()
+    preview._tmp_dir.mkdir(parents=True, exist_ok=True)
+    (preview._tmp_dir / "scrub_0.png").write_bytes(b"png")  # index flips 1→0
+    preview._on_step()  # watchdog again
+    assert seen and seen[-1].startswith("file://"), seen
+    assert preview._chain_active is False
+    assert not preview._timer.isActive()
+
+
+def test_a_stale_event_after_media_switch_is_ignored(qt_application) -> None:
+    """A SnapshotTaken still in flight across set_source must not republish."""
+    preview, _instance, player = _preview_with_fakes()
+    seen: list[str] = []
+    preview.snapshotReady.connect(seen.append)
+
+    preview.set_source("file:///tmp/one.mp4")
+    preview._on_playing_gui()
+    preview.request(1000)
+    preview._on_step()
+    old_path = str(player.snapshot_paths[-1])
+
+    preview.set_source("file:///tmp/two.mp4")  # cancels; clears snapshot_path
+    preview._on_shot_taken_gui(old_path)       # the old media's event arrives
+
+    assert seen == [""], "only the clear signal — never the old frame"
+    assert preview._chain_active is False
+
+
 def test_new_source_clears_the_previous_frame_and_seeks(qt_application) -> None:
     preview, _instance, player = _preview_with_fakes()
     seen: list[str] = []
