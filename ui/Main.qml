@@ -808,15 +808,22 @@ Shell {
                 z: 5
 
                 // VideoStage's click target lives in the main window. Once this
-                // layer moves into the overlay, those clicks never arrive, so
-                // the same play/pause + fullscreen actions are offered here,
+                // layer moves into the Turbo overlay, those clicks never arrive,
+                // so the same play/pause + fullscreen actions are offered here,
                 // underneath the docks and the bar.
+                //
+                // ONLY while chrome is actually in that overlay. Soft Local
+                // already has VideoStage's own MouseArea; Web has its own
+                // chrome and must never sit under a player catcher.
                 MouseArea {
                     id: overlayStageClick
+                    objectName: "overlayStageClick"
                     anchors.fill: parent
                     z: -1
-                    acceptedButtons: Qt.LeftButton
-                    hoverEnabled: true
+                    enabled: window.chromeInOverlay
+                    visible: window.chromeInOverlay
+                    acceptedButtons: window.chromeInOverlay ? Qt.LeftButton : Qt.NoButton
+                    hoverEnabled: window.chromeInOverlay
                     onClicked: Actions.playPause()
                     onDoubleClicked: Actions.toggleFullscreen()
                     onPositionChanged: function(mouse) {
@@ -1011,9 +1018,11 @@ Shell {
     }
 
     function moveChromeHome() {
+        // Drop the catcher *before* chrome re-enters the main window, so Web
+        // (and Soft Local) never take a frame of stolen clicks.
+        window.chromeInOverlay = false;
         if (chromeLayer.parent !== body)
             chromeLayer.parent = body;
-        window.chromeInOverlay = false;
     }
 
     // ======================================================================
@@ -1222,7 +1231,14 @@ Shell {
     // themselves must not add Local-only or M3U-only variants.
     Connections {
         target: App
-        function onActiveModeChanged() { osdLayer.clear() }
+        function onActiveModeChanged() {
+            osdLayer.clear()
+            // Complementary to the catcher gate: if Turbo is already off
+            // (Web / M3U / Soft), chrome must be home in the same moment so
+            // an always-on-top overlay window cannot linger over Web.
+            if (!window.turboActive)
+                window.moveChromeHome()
+        }
     }
 
     Connections {
