@@ -319,7 +319,10 @@ def _restore_wndproc(window) -> None:
     window._turbo_wndproc = None
 
 
-_HOST_EXSTYLE_ATTR = "_halcyon_saved_exstyle"
+#: Saved ``GWL_EXSTYLE`` of the Halcyon shell, keyed by HWND. Stored here
+#: instead of as an attribute on the QML ``QQuickWindow`` — shiboken
+#: wrappers often reject arbitrary Python attributes.
+_HOST_EXSTYLES: dict[int, int] = {}
 
 
 def seal_host_window(qwindow) -> None:
@@ -345,8 +348,7 @@ def seal_host_window(qwindow) -> None:
     try:
         get_long, set_long = _win32_long_funcs()
         style = int(get_long(hwnd, _GWL_EXSTYLE) or 0)
-        if getattr(qwindow, _HOST_EXSTYLE_ATTR, None) is None:
-            setattr(qwindow, _HOST_EXSTYLE_ATTR, style)
+        _HOST_EXSTYLES.setdefault(hwnd, style)
         set_long(hwnd, _GWL_EXSTYLE, style & ~_WS_EX_LAYERED & ~_WS_EX_TRANSPARENT)
         import ctypes
 
@@ -365,28 +367,26 @@ def unseal_host_window(qwindow) -> None:
     """Restore the shell's pre-Turbo extended style (layered glass)."""
     if qwindow is None or sys.platform != "win32":
         return
-    prev = getattr(qwindow, _HOST_EXSTYLE_ATTR, None)
+    try:
+        hwnd = int(qwindow.winId())
+    except Exception:
+        return
+    prev = _HOST_EXSTYLES.pop(hwnd, None) if hwnd else None
     if prev is None:
         return
     try:
-        hwnd = int(qwindow.winId())
-        if hwnd:
-            _get_long, set_long = _win32_long_funcs()
-            set_long(hwnd, _GWL_EXSTYLE, int(prev))
-            import ctypes
+        _get_long, set_long = _win32_long_funcs()
+        set_long(hwnd, _GWL_EXSTYLE, int(prev))
+        import ctypes
 
-            user32 = ctypes.windll.user32
-            user32.SetWindowPos.restype = ctypes.c_int
-            user32.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
-            )
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.restype = ctypes.c_int
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+        )
     except Exception:
         log.debug("Turbo: could not unseal the host window", exc_info=True)
-    try:
-        delattr(qwindow, _HOST_EXSTYLE_ATTR)
-    except Exception:
-        setattr(qwindow, _HOST_EXSTYLE_ATTR, None)
 
 
 def fit_picture_rect(
@@ -569,12 +569,16 @@ class TurboSurface(QObject):
         # HWND so the gap is black, not File Explorer.
         window.setColor(QColor(0, 0, 0))
         window.setOpacity(1.0)
+        # Match the process-wide alpha buffer (main.py sets it to 8).
+        # Requesting 0 produced "Swapchain says surface has alpha but the
+        # window has no alphaBufferSize set". The hole is closed by sizing
+        # the HWND to the picture and sealing the host, not by this bit.
         try:
             fmt = window.format()
-            fmt.setAlphaBufferSize(0)
+            fmt.setAlphaBufferSize(8)
             window.setFormat(fmt)
         except Exception:
-            log.debug("Turbo: could not force an opaque surface format", exc_info=True)
+            log.debug("Turbo: could not set the child surface format", exc_info=True)
         # Never call show(). See the module docstring: an unparented visible
         # QWindow is exactly the "outside video window" §V.3 forbids.
         window.create()
