@@ -55,7 +55,7 @@ Shell {
     // A transparent (layered) window plus a native HWND punches through to the
     // desktop. Soft keeps the rounded-corner transparency; Turbo paints an
     // opaque base so the letterbox is the window, not File Explorer.
-    color: (turboActive && !miniModeActive) ? Theme.base : "transparent"
+    color: (turboActive && !miniModeActive) ? "#000000" : "transparent"
 
     // What the glass panels blur. Soft video is scene-graph pixels, so the
     // Stage is a real backdrop. Turbo's picture is a native child window that
@@ -655,7 +655,7 @@ Shell {
     // ======================================================================
     Rectangle {
         anchors.fill: parent
-        color: Theme.base
+        color: window.turboActive ? "#000000" : Theme.base
         radius: window.maximizedOrFull || window.miniModeActive ? 0 : Theme.radiusPanel
         visible: !window.miniModeActive
 

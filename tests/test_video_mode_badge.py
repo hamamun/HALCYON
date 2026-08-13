@@ -83,6 +83,8 @@ def test_every_soft_tooltip_says_why_it_is_soft():
         (dict(selected="turbo", effective="soft", has_video=False), "audio only"),
         (dict(selected="turbo", effective="soft", turbo_available=False),
          "not available on this system"),
+        (dict(selected="turbo", effective="soft", pending=True),
+         "applies when the next video starts"),
         (dict(selected="turbo", effective="soft"), "could not start"),
         (dict(selected="auto", effective="soft"), "not demanding"),
         (dict(selected="soft", effective="soft"), "selected in Settings"),

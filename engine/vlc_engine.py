@@ -236,6 +236,8 @@ class VlcEngine(QObject):
     _turbo_surface = None
     _media_options: tuple = ()
     _buffered = 0.0
+    _user_paused = False
+    _pending_turbo_play = False
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -281,6 +283,10 @@ class VlcEngine(QObject):
         #: consumed by the poll on the first Playing tick. Zero means "nothing
         #: pending", which is also what cancelling one leaves behind.
         self._pending_resume_ms = 0
+        #: True only after an explicit user pause, not Opening/Buffering.
+        self._user_paused = False
+        #: Play again once WindowContainer has adopted the Turbo HWND.
+        self._pending_turbo_play = False
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -593,6 +599,7 @@ class VlcEngine(QObject):
         # None mid-play. Use ``self._current_mrl`` instead.
         if self._player is None or not self._current_mrl:
             return
+        self._user_paused = False
         self._player.play()
         self._publish_state_now()
 
@@ -606,6 +613,7 @@ class VlcEngine(QObject):
         """
         if self._player is None:
             return
+        self._user_paused = True
         try:
             self._player.set_pause(1)
         except Exception:
@@ -670,6 +678,8 @@ class VlcEngine(QObject):
             self._media = None
         self._scrubbing = False
         self._pending_resume_ms = 0   # nothing to resume into any more
+        self._pending_turbo_play = False
+        self._user_paused = False
         self._current_mrl = ""
         # One-tuner rule (§V.4): a full stop — including the one
         # AppController performs when switching to a mode that does not use
@@ -758,7 +768,7 @@ class VlcEngine(QObject):
             log.info("Turbo is not available on this platform — staying on Soft")
             return False
 
-        resume_ms, was_playing = self._capture_playback()
+        resume_ms, was_paused = self._capture_playback()
         surface = TurboSurface(parent=self)
         try:
             # Order matters. Detach the vmem callbacks *before* handing libVLC
@@ -776,9 +786,13 @@ class VlcEngine(QObject):
             self._set_player_option("avcodec-hw", "d3d11va")
             self._turbo_surface = surface
             self._video_route = video_policy.TURBO
-            self._reopen_current(resume_ms, was_playing)
+            self._reopen_current(resume_ms, was_paused)
+            if not was_paused:
+                self._pending_turbo_play = True
+                QTimer.singleShot(80, self, self._turbo_play_if_pending)
         except Exception:
             log.warning("Turbo could not be started — falling back to Soft", exc_info=True)
+            self._pending_turbo_play = False
             try:
                 surface.stop(self._player)
             except Exception:
@@ -786,14 +800,15 @@ class VlcEngine(QObject):
             self._turbo_surface = None
             self._video_route = video_policy.SOFT
             self._restore_soft_output()
-            self._reopen_current(resume_ms, was_playing)
+            self._reopen_current(resume_ms, was_paused)
             self.videoRouteChanged.emit(self._video_route)
             return False
         return True
 
     def _leave_turbo(self) -> None:
         """Turbo -> Soft. Always succeeds: Soft is the resting state."""
-        resume_ms, was_playing = self._capture_playback()
+        self._pending_turbo_play = False
+        resume_ms, was_paused = self._capture_playback()
         try:
             self._player.stop()
         except Exception:
@@ -807,7 +822,34 @@ class VlcEngine(QObject):
                 log.debug("tearing down the Turbo surface failed", exc_info=True)
         self._video_route = video_policy.SOFT
         self._restore_soft_output()
-        self._reopen_current(resume_ms, was_playing)
+        self._reopen_current(resume_ms, was_paused)
+
+    def note_turbo_embedded(self) -> None:
+        """WindowContainer adopted the child. Seal the hole and start play."""
+        if self._video_route != video_policy.TURBO:
+            return
+        surface = self._turbo_surface
+        if surface is not None:
+            try:
+                surface.reharden_now()
+            except Exception:
+                log.debug("Turbo reharden after embed failed", exc_info=True)
+        self._turbo_play_if_pending()
+
+    def _turbo_play_if_pending(self) -> None:
+        if not self._pending_turbo_play:
+            return
+        if self._video_route != video_policy.TURBO:
+            self._pending_turbo_play = False
+            return
+        if self._user_paused or self._state == State.Paused:
+            self._pending_turbo_play = False
+            return
+        self._pending_turbo_play = False
+        try:
+            self.play()
+        except Exception:
+            log.debug("Turbo play-after-embed failed", exc_info=True)
 
     def turbo_failed(self, reason: str = "") -> None:
         """Called when Turbo broke *after* setup — embedding, resize, playback.
@@ -857,7 +899,7 @@ class VlcEngine(QObject):
             self._media_options.append(option)
 
     def _capture_playback(self) -> tuple[int, bool]:
-        """Where we are and whether we were playing, for a seamless re-open."""
+        """Where we are, and whether the user had paused (not merely Opening)."""
         position_ms = 0
         try:
             value = _qt_milliseconds(self._player.get_time())
@@ -866,22 +908,24 @@ class VlcEngine(QObject):
             position_ms = int(self._time or 0)
         if position_ms <= 0:
             position_ms = int(self._pending_resume_ms or 0)
-        return position_ms, self._state == State.Playing
+        was_paused = bool(getattr(self, "_user_paused", False) or self._state == State.Paused)
+        return position_ms, was_paused
 
-    def _reopen_current(self, resume_ms: int, was_playing: bool) -> None:
+    def _reopen_current(self, resume_ms: int, was_paused: bool) -> None:
         """Re-open the current MRL on the current route, at ``resume_ms``.
 
         Silent by design (``announce=False``): to everything above the engine
         this is the same media that never stopped, which is exactly what §V.4
         promises. Nothing to re-open (audio-only, stopped player) is a no-op.
+
+        Only an explicit user pause is restored. Opening / Buffering still
+        means the user wanted play.
         """
         mrl = self._current_mrl
         if not mrl:
             return
         self.open(mrl, max(0, int(resume_ms)), announce=False)
-        if not was_playing:
-            # The user was paused before the switch; do not start playing at
-            # them because they touched a Settings dropdown.
+        if was_paused:
             QTimer.singleShot(0, self.pause)
 
     def _publish_state_now(self) -> None:

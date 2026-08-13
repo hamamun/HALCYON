@@ -183,6 +183,7 @@ def describe(
     has_video: bool | None = None,
     mini_mode: bool = False,
     turbo_available: bool = True,
+    pending: bool = False,
 ) -> str:
     """The badge's hover tooltip: what is running, and *why*.
 
@@ -190,16 +191,26 @@ def describe(
     every Soft answer that the user did not directly ask for carries its
     reason. The order below is precedence, not preference: the first condition
     that forced the route is the one worth naming.
+
+    ``pending`` means Settings changed but the new choice has not been
+    applied yet: Soft / Auto / Turbo only take effect when the next video
+    starts, so a Turbo selection still playing on Soft is not a failed start.
     """
     mode = normalise(selected)
     route = normalise(effective, SOFT)
 
     if route == TURBO:
         if mode == AUTO:
-            return "Auto \u2192 Turbo \u2014 hardware (GPU) video output"
-        return "Turbo \u2014 hardware (GPU) video output"
+            text = "Auto \u2192 Turbo \u2014 hardware (GPU) video output"
+        else:
+            text = "Turbo \u2014 hardware (GPU) video output"
+        if pending and mode != TURBO:
+            return text + "; the new choice applies when the next video starts"
+        return text
 
     soft = "Soft \u2014 software (CPU) video output"
+    if pending and mode != route and not mini_mode:
+        return f"{soft}; the new choice applies when the next video starts"
     if mini_mode:
         return f"{soft}; Mini Mode always uses Soft"
     if not turbo_allowed:

@@ -94,6 +94,57 @@ def _win32_long_funcs():
     return get_long, set_long
 
 
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOZORDER = 0x0004
+_SWP_NOACTIVATE = 0x0010
+_SWP_FRAMECHANGED = 0x0020
+_GW_CHILD = 5
+_GW_HWNDNEXT = 2
+
+
+def _harden_hwnd_value(hwnd: int) -> None:
+    """Strip layered / click-through styles from one HWND and restyle it."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        import ctypes
+
+        get_long, set_long = _win32_long_funcs()
+        style = int(get_long(hwnd, _GWL_EXSTYLE) or 0)
+        set_long(hwnd, _GWL_EXSTYLE, style & ~_WS_EX_LAYERED & ~_WS_EX_TRANSPARENT)
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.restype = ctypes.c_int
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+        )
+    except Exception:
+        log.debug("Turbo: could not harden HWND %s", hwnd, exc_info=True)
+
+
+def _harden_hwnd_tree(hwnd: int) -> None:
+    """Harden this HWND and every VLC child it created."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    _harden_hwnd_value(hwnd)
+    _fill_hwnd_black(hwnd)
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindow.restype = wintypes.HWND
+        user32.GetWindow.argtypes = [wintypes.HWND, ctypes.c_uint]
+        child = user32.GetWindow(hwnd, _GW_CHILD)
+        while child:
+            _harden_hwnd_value(int(child))
+            _fill_hwnd_black(int(child))
+            child = user32.GetWindow(child, _GW_HWNDNEXT)
+    except Exception:
+        log.debug("Turbo: could not walk child HWNDs", exc_info=True)
+
+
 def _harden_hwnd(window) -> None:
     """Strip layered / click-through styles from *this* HWND only.
 
@@ -109,9 +160,7 @@ def _harden_hwnd(window) -> None:
         hwnd = int(window.winId())
         if not hwnd:
             return
-        get_long, set_long = _win32_long_funcs()
-        style = int(get_long(hwnd, _GWL_EXSTYLE) or 0)
-        set_long(hwnd, _GWL_EXSTYLE, style & ~_WS_EX_LAYERED & ~_WS_EX_TRANSPARENT)
+        _harden_hwnd_tree(hwnd)
     except Exception:
         log.debug("Turbo: could not harden the native child HWND", exc_info=True)
 
@@ -359,9 +408,13 @@ class TurboSurface(QObject):
         self._reharden_attempts = 0
         # Context-object overload: if this surface is destroyed mid-schedule,
         # Qt drops the pending timers instead of calling into a dead QObject.
+        # WindowContainer reparents after the first frame; later ticks catch
+        # VLC's own D3D child, which is what punches the desktop hole.
         QTimer.singleShot(16, self, self._reharden)
         QTimer.singleShot(48, self, self._reharden)
         QTimer.singleShot(120, self, self._reharden)
+        QTimer.singleShot(250, self, self._reharden)
+        QTimer.singleShot(500, self, self._reharden)
         log.info("Turbo: native child window ready (handle=%s)", handle)
         self.windowChanged.emit()
         return True
@@ -456,6 +509,14 @@ class TurboSurface(QObject):
         except Exception:
             log.warning("Turbo: set_hwnd failed", exc_info=True)
             return False
+        # Let clicks fall through to Halcyon's overlay, not VLC's HWND.
+        for name in ("video_set_mouse_input", "video_set_key_input"):
+            extra = getattr(player, name, None)
+            if callable(extra):
+                try:
+                    extra(False)
+                except Exception:
+                    log.debug("Turbo: %s failed", name, exc_info=True)
         return True
 
     # ------------------------------------------------------------ destroy ---
