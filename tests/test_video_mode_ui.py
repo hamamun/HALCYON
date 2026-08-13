@@ -265,6 +265,49 @@ def test_move_chrome_home_drops_the_catcher_before_reparenting():
     )
 
 
+def test_settings_is_seated_on_the_turbo_overlay_not_under_the_hwnd():
+    """A Dialog left on the shell Overlay paints under the native HWND (§V.3).
+
+    The chrome overlay already sits above that HWND. Settings must open
+    there while Turbo is live, and must come home before the overlay
+    Window is destroyed — otherwise the gear buries the dialog, or
+    leaving Turbo destroys an open Settings with the overlay.
+    """
+    main = _read(MAIN_QML)
+    assert "function settingsHostWindow()" in main
+    assert "function seatSettingsDialog()" in main
+    assert "objectName: \"settingsDialog\"" in main
+
+    # The gear path must seat first; opening on the shell is the bug.
+    window_show = None
+    for chunk in main.split("function showSettings()"):
+        if "seatSettingsDialog" in chunk and "settingsDialog.open()" in chunk:
+            window_show = chunk
+            break
+    assert window_show is not None, "window.showSettings() must seat then open"
+    assert window_show.index("seatSettingsDialog") < window_show.index(
+        "settingsDialog.open()"
+    )
+    assert "function showSettings()    { window.showSettings() }" in main, (
+        "the Actions gear must use the seating path, not open() directly"
+    )
+
+    to_overlay = main.split("function moveChromeToOverlay()", 1)[1].split(
+        "function ", 1
+    )[0]
+    assert "seatSettingsDialog()" in to_overlay, (
+        "Settings already open on the shell must move up with the chrome"
+    )
+
+    home = main.split("function moveChromeHome()", 1)[1].split("function ", 1)[0]
+    seat = home.index("seatSettingsDialog()")
+    reparent = home.index("chromeLayer.parent = body")
+    assert reparent < seat, (
+        "bring chrome home first, then seat Settings, while the overlay "
+        "Window still exists (Loader.onActiveChanged is before destroy)"
+    )
+
+
 def test_the_chrome_moves_into_a_transparent_overlay_window():
     """QML siblings cannot paint over a native child window (§V.3)."""
     chrome = _read(TURBO_CHROME_QML)
@@ -696,3 +739,74 @@ def test_a_missing_native_window_is_reported_not_silently_blank(turbo_window):
         "an un-embeddable Turbo must be reported so the engine can continue "
         "the media on Soft (§V.4), not leave a blank stage"
     )
+
+
+def _settings_dialog(root):
+    return _named(root, "settingsDialog")
+
+
+@gui_only
+def test_settings_on_soft_stays_on_the_main_window(turbo_window):
+    """Soft has no HWND. Settings must keep opening on the shell Overlay."""
+    from PySide6.QtCore import QMetaObject, Qt
+    from PySide6.QtTest import QTest
+
+    window, _stub = turbo_window
+    assert window.property("turboActive") is False
+    assert QMetaObject.invokeMethod(window, "showSettings", Qt.DirectConnection)
+    QTest.qWait(50)
+
+    dlg = _settings_dialog(window)
+    assert dlg is not None
+    assert dlg.property("visible") is True
+    assert dlg.window() is window
+
+
+@gui_only
+def test_settings_on_turbo_opens_in_the_chrome_overlay(turbo_window):
+    """The reported bug: gear during Turbo buried Settings under the video."""
+    from PySide6.QtCore import QMetaObject, Qt
+    from PySide6.QtTest import QTest
+
+    window, stub = turbo_window
+    stub.go("turbo")
+    QTest.qWait(300)
+
+    assert window.property("chromeInOverlay") is True
+    assert QMetaObject.invokeMethod(window, "showSettings", Qt.DirectConnection)
+    QTest.qWait(50)
+
+    dlg = _settings_dialog(window)
+    assert dlg is not None, "Settings vanished after seating on the overlay"
+    assert dlg.property("visible") is True
+    host = _named(window, "turboChromeHost")
+    assert host is not None
+    assert dlg.window() is host.window(), (
+        "Settings must open in the stay-on-top chrome overlay, not under "
+        "the native video HWND"
+    )
+    assert dlg.window() is not window
+
+
+@gui_only
+def test_settings_returns_home_when_turbo_ends(turbo_window):
+    """An open dialog must not be destroyed with the overlay Window."""
+    from PySide6.QtCore import QMetaObject, Qt
+    from PySide6.QtTest import QTest
+
+    window, stub = turbo_window
+    stub.go("turbo")
+    QTest.qWait(300)
+    assert QMetaObject.invokeMethod(window, "showSettings", Qt.DirectConnection)
+    QTest.qWait(50)
+    assert _settings_dialog(window).window() is not window
+
+    stub.go("soft")
+    QTest.qWait(300)
+
+    dlg = _settings_dialog(window)
+    assert dlg is not None, "leaving Turbo destroyed Settings with the overlay"
+    assert dlg.property("visible") is True, (
+        "an already-open Settings must come back with the chrome, not close"
+    )
+    assert dlg.window() is window
