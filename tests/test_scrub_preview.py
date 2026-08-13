@@ -552,3 +552,59 @@ def test_engine_shutdown_tears_down_the_preview_decoder() -> None:
     engine.shutdown()
 
     assert preview.shutdown_calls == 1, "the hidden decoder must not outlive the engine"
+
+
+def test_route_switch_reopen_keeps_the_preview_decoder_loaded(tmp_path) -> None:
+    """§V/§S — a Soft↔Turbo switch must not disturb the preview decoder.
+
+    Route switches are a *silent re-open of the same MRL* (``announce=False``,
+    §V.4): ``open()`` feeds the preview the same MRL, ``set_source`` is a
+    no-op on equality, and the decoder keeps its loaded media, its hidden
+    player, its ready state and a clean chain. If a route switch ever started
+    to stop or re-init the decoder, the hover preview would flicker (or
+    vanish) every time the user switches modes mid-playback.
+    """
+    from engine.scrub_preview import ScrubPreview
+
+    engine = _bare_engine()
+    preview = ScrubPreview()
+    instance = FakeInstance()
+    player = FakePlayer(has_vout=1)
+    preview._instance = instance
+    preview._player = player
+    preview._vlc = vlc
+    preview._tmp_dir = Path(__import__("tempfile").gettempdir()) / "halcyon-scrub-test"
+    engine._scrub_preview = preview
+
+    media_file = tmp_path / "clip.mp4"
+    media_file.write_bytes(b"")
+    mrl = media_file.resolve().as_uri()
+
+    engine.open(str(media_file))      # first load
+    preview._on_playing_gui()         # decoder reports ready
+    assert preview.ready is True
+
+    engine.open(str(media_file), start_ms=5000, announce=False)  # route switch
+
+    assert preview.ready is True, "a route switch must not reset the decoder"
+    assert preview._mrl == mrl, "the decoder still holds the same media"
+    assert preview._player is player, "no hidden re-init on route switch"
+    assert preview._chain_active is False and preview._pending_ms is None
+
+
+def test_the_scrub_decoder_always_decodes_soft_and_headless() -> None:
+    """§S/§V — the preview decoder's options are fixed, never route-dependent.
+
+    Turbo's hardware-decode option is applied per-media on the *main* player
+    only; the hidden decoder is a separate instance whose own options always
+    force software decode and a dummy vout. This is the guarantee that the
+    preview behaves identically in Soft and Turbo modes.
+    """
+    from engine.scrub_preview import SCRUB_VLC_ARGS
+
+    assert "--vout=dummy" in SCRUB_VLC_ARGS
+    assert "--no-audio" in SCRUB_VLC_ARGS
+    assert "--avcodec-hw=none" in SCRUB_VLC_ARGS
+    assert not any("d3d11" in arg for arg in SCRUB_VLC_ARGS), (
+        "the preview decoder must never use the Turbo hardware path"
+    )
