@@ -319,6 +319,102 @@ def _restore_wndproc(window) -> None:
     window._turbo_wndproc = None
 
 
+#: Saved ``GWL_EXSTYLE`` of the Halcyon shell, keyed by HWND. Stored here
+#: instead of as an attribute on the QML ``QQuickWindow`` — shiboken
+#: wrappers often reject arbitrary Python attributes.
+_HOST_EXSTYLES: dict[int, int] = {}
+
+
+def seal_host_window(qwindow) -> None:
+    """Make the Halcyon shell HWND opaque for the life of Turbo.
+
+    Soft needs a layered (alpha) shell for the rounded glass corners. A
+    layered parent plus a native child whose swapchain has alpha is the
+    desktop hole under the title bar: every pixel VLC does not paint
+    shows Outlook. Stripping ``WS_EX_LAYERED`` here means leftover
+    transparent pixels composite onto this window, not the desktop.
+    :func:`unseal_host_window` puts the original style back. Off Windows
+    this is a no-op.
+    """
+    if qwindow is None or sys.platform != "win32":
+        return
+    try:
+        hwnd = int(qwindow.winId())
+    except Exception:
+        log.debug("Turbo: host window has no HWND to seal", exc_info=True)
+        return
+    if not hwnd:
+        return
+    try:
+        get_long, set_long = _win32_long_funcs()
+        style = int(get_long(hwnd, _GWL_EXSTYLE) or 0)
+        _HOST_EXSTYLES.setdefault(hwnd, style)
+        set_long(hwnd, _GWL_EXSTYLE, style & ~_WS_EX_LAYERED & ~_WS_EX_TRANSPARENT)
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.restype = ctypes.c_int
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+        )
+        _fill_hwnd_black(hwnd)
+    except Exception:
+        log.debug("Turbo: could not seal the host window", exc_info=True)
+
+
+def unseal_host_window(qwindow) -> None:
+    """Restore the shell's pre-Turbo extended style (layered glass)."""
+    if qwindow is None or sys.platform != "win32":
+        return
+    try:
+        hwnd = int(qwindow.winId())
+    except Exception:
+        return
+    prev = _HOST_EXSTYLES.pop(hwnd, None) if hwnd else None
+    if prev is None:
+        return
+    try:
+        _get_long, set_long = _win32_long_funcs()
+        set_long(hwnd, _GWL_EXSTYLE, int(prev))
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.restype = ctypes.c_int
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+        )
+    except Exception:
+        log.debug("Turbo: could not unseal the host window", exc_info=True)
+
+
+def fit_picture_rect(
+    stage_w: float, stage_h: float, video_w: float, video_h: float
+) -> tuple[float, float, float, float]:
+    """PreserveAspectFit rectangle inside the stage. Returns ``(x, y, w, h)``.
+
+    Same rule as Soft's ``VideoSurface`` (``fillMode: PreserveAspectFit``).
+    Unknown video size fills the stage — the host seal covers that brief
+    moment — so a missing decoder size never leaves a zero-size HWND.
+    """
+    stage_w = float(stage_w or 0.0)
+    stage_h = float(stage_h or 0.0)
+    video_w = float(video_w or 0.0)
+    video_h = float(video_h or 0.0)
+    if stage_w <= 0.0 or stage_h <= 0.0:
+        return (0.0, 0.0, 0.0, 0.0)
+    if video_w <= 0.0 or video_h <= 0.0:
+        return (0.0, 0.0, stage_w, stage_h)
+    item_aspect = stage_w / stage_h
+    video_aspect = video_w / video_h
+    if video_aspect > item_aspect:
+        height = stage_w / video_aspect
+        return (0.0, (stage_h - height) / 2.0, stage_w, height)
+    width = stage_h * video_aspect
+    return ((stage_w - width) / 2.0, 0.0, width, stage_h)
+
+
 class TurboSurface(QObject):
     """One native child window, or none. Never two.
 
@@ -419,6 +515,15 @@ class TurboSurface(QObject):
         self.windowChanged.emit()
         return True
 
+    def reharden_now(self) -> None:
+        """Re-strip layered styles after WindowContainer reparents the child.
+
+        The engine calls this from ``note_turbo_embedded`` — that reparent is
+        what puts ``WS_EX_LAYERED`` back and what used to punch the desktop
+        hole under the title bar.
+        """
+        self._reharden()
+
     def _reharden(self) -> None:
         if self._window is None:
             return
@@ -464,12 +569,16 @@ class TurboSurface(QObject):
         # HWND so the gap is black, not File Explorer.
         window.setColor(QColor(0, 0, 0))
         window.setOpacity(1.0)
+        # Match the process-wide alpha buffer (main.py sets it to 8).
+        # Requesting 0 produced "Swapchain says surface has alpha but the
+        # window has no alphaBufferSize set". The hole is closed by sizing
+        # the HWND to the picture and sealing the host, not by this bit.
         try:
             fmt = window.format()
-            fmt.setAlphaBufferSize(0)
+            fmt.setAlphaBufferSize(8)
             window.setFormat(fmt)
         except Exception:
-            log.debug("Turbo: could not force an opaque surface format", exc_info=True)
+            log.debug("Turbo: could not set the child surface format", exc_info=True)
         # Never call show(). See the module docstring: an unparented visible
         # QWindow is exactly the "outside video window" §V.3 forbids.
         window.create()

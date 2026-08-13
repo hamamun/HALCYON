@@ -400,6 +400,26 @@ class AppController(QObject):
             except Exception:
                 log.debug("note_turbo_embedded failed", exc_info=True)
 
+    @Slot("QVariant")
+    def sealTurboHost(self, qwindow) -> None:  # noqa: N802 - QML-facing
+        """Make the Halcyon shell opaque for the life of windowed Turbo."""
+        from engine.turbo_surface import seal_host_window
+
+        try:
+            seal_host_window(qwindow)
+        except Exception:
+            log.debug("sealTurboHost failed", exc_info=True)
+
+    @Slot("QVariant")
+    def unsealTurboHost(self, qwindow) -> None:  # noqa: N802 - QML-facing
+        """Restore the glass/layered shell after Turbo ends."""
+        from engine.turbo_surface import unseal_host_window
+
+        try:
+            unseal_host_window(qwindow)
+        except Exception:
+            log.debug("unsealTurboHost failed", exc_info=True)
+
     @Slot(str)
     def reportTurboFailure(self, reason: str = "") -> None:  # noqa: N802 - QML-facing
         """QML's channel for a *late* Turbo failure — §V.4.

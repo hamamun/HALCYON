@@ -225,6 +225,9 @@ class VlcEngine(QObject):
     #: Emitted after every successful switch *and* after a Turbo failure has
     #: fallen back, so the UI never has to guess which route it is looking at.
     videoRouteChanged = Signal(str)
+    #: Decoded width × height of video track 0. Turbo's WindowContainer
+    #: sizes itself to this so the letterbox is QML black, not a hole.
+    videoSizeChanged = Signal()
 
     # Class-level defaults for the video-route state. ``__init__`` gives every
     # real engine its own values; these exist because the teardown tests build
@@ -238,6 +241,8 @@ class VlcEngine(QObject):
     _buffered = 0.0
     _user_paused = False
     _pending_turbo_play = False
+    _video_width = 0
+    _video_height = 0
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -287,6 +292,8 @@ class VlcEngine(QObject):
         self._user_paused = False
         #: Play again once WindowContainer has adopted the Turbo HWND.
         self._pending_turbo_play = False
+        self._video_width = 0
+        self._video_height = 0
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -445,6 +452,8 @@ class VlcEngine(QObject):
                 self._position = position
                 self.positionChanged.emit(position)
 
+        self._refresh_video_size()
+
     # ------------------------------------------------------------ playback ---
     @Slot(str)
     def open(self, path_or_url: str, start_ms: int = 0, announce: bool = True) -> None:
@@ -579,6 +588,10 @@ class VlcEngine(QObject):
             log.debug("media.release after set_media failed for %s", path_or_url, exc_info=True)
         self._current_mrl = mrl
         if announce:
+            # A new file: drop the previous picture size so Turbo does not
+            # keep the old aspect for a frame. A silent route-switch reopen
+            # (announce=False) keeps the size — same media, same picture.
+            self._set_video_size(0, 0)
             self.mediaChanged.emit(mrl)
         self._player.play()
 
@@ -681,6 +694,7 @@ class VlcEngine(QObject):
         self._pending_turbo_play = False
         self._user_paused = False
         self._current_mrl = ""
+        self._set_video_size(0, 0)
         # One-tuner rule (§V.4): a full stop — including the one
         # AppController performs when switching to a mode that does not use
         # the player — must not leave a native Turbo child alive. The next
@@ -1085,6 +1099,29 @@ class VlcEngine(QObject):
         except (TypeError, ValueError, IndexError):
             return (0, 0)
         return (max(0, width), max(0, height))
+
+    def _set_video_size(self, width: int, height: int) -> None:
+        width = max(0, int(width or 0))
+        height = max(0, int(height or 0))
+        if width == self._video_width and height == self._video_height:
+            return
+        self._video_width = width
+        self._video_height = height
+        self.videoSizeChanged.emit()
+
+    def _refresh_video_size(self) -> None:
+        width, height = self.video_size()
+        self._set_video_size(width, height)
+
+    @Property(int, notify=videoSizeChanged)
+    def videoWidth(self) -> int:  # noqa: N802 - QML-facing
+        """Decoded width of video track 0, or 0 until the decoder knows."""
+        return int(self._video_width or 0)
+
+    @Property(int, notify=videoSizeChanged)
+    def videoHeight(self) -> int:  # noqa: N802 - QML-facing
+        """Decoded height of video track 0, or 0 until the decoder knows."""
+        return int(self._video_height or 0)
 
     def video_fps(self) -> float:
         """Live frame rate from libVLC, or ``0.0`` if not yet known."""
