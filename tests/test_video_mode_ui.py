@@ -198,6 +198,12 @@ def test_turbo_is_embedded_with_a_window_container():
     assert "WindowContainer {" in source
     assert "container.window = w" in source
     assert "App.noteTurboEmbedded" in source
+    assert "readonly property rect pictureRect" in source, (
+        "the native HWND must cover only the picture so the letterbox is "
+        "QML black, not a hole through to the desktop"
+    )
+    assert "x: root.pictureRect.x" in source
+    assert "anchors.fill: parent" not in source.split("WindowContainer {", 1)[1]
 
 
 def test_the_turbo_host_reports_every_embedding_failure():
@@ -263,6 +269,14 @@ def test_the_chrome_moves_into_a_transparent_overlay_window():
         "a layered transparent window plus a native HWND punches through to "
         "the desktop — Turbo must make the shell opaque"
     )
+    assert "App.sealTurboHost" in main, (
+        "painting the window black is not enough — the Win32 layered style "
+        "must come off while Turbo is on"
+    )
+    assert "App.unsealTurboHost" in main, (
+        "Soft must get the glass/layered shell back when Turbo ends"
+    )
+    assert "videoWidth: window.turboVideoWidth" in main
 
 
 def test_there_is_still_exactly_one_transport_bar_and_one_osd():
@@ -532,6 +546,22 @@ def turbo_window(gui_app):
         def reportTurboFailure(self, reason):
             self.failures.append(reason)
 
+        @Property(int, constant=True)
+        def videoWidth(self):
+            return 1920
+
+        @Property(int, constant=True)
+        def videoHeight(self):
+            return 1080
+
+        @Slot("QVariant")
+        def sealTurboHost(self, _window):
+            self.sealed = getattr(self, "sealed", 0) + 1
+
+        @Slot("QVariant")
+        def unsealTurboHost(self, _window):
+            self.unsealed = getattr(self, "unsealed", 0) + 1
+
     qml_engine = QQmlApplicationEngine()
     qml_engine.addImportPath(str(ROOT))
     stub = _RouteApp()
@@ -602,6 +632,7 @@ def test_turbo_embeds_the_native_child_and_moves_the_chrome(turbo_window):
         "through to the desktop"
     )
     assert not stub.failures, f"unexpected Turbo failures: {stub.failures}"
+    assert getattr(stub, "sealed", 0) >= 1, "windowed Turbo must seal the host HWND"
 
 
 @gui_only
@@ -618,6 +649,7 @@ def test_returning_to_soft_brings_the_chrome_home_intact(turbo_window):
     QTest.qWait(300)
 
     assert window.property("turboActive") is False
+    assert getattr(stub, "unsealed", 0) >= 1, "leaving Turbo must restore the glass shell"
     assert chrome.parentItem() is home, (
         "the transport bar, docks and OSD must come back to the main window — "
         "leaving them in a destroyed overlay is a window with no controls"

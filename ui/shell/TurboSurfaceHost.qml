@@ -36,6 +36,32 @@ Item {
     // Reported failures go here; Main.qml routes them to App.reportTurboFailure.
     signal failed(string reason)
 
+    // Decoded picture size. The HWND must cover ONLY this rectangle —
+    // a full-stage native window leaves unpainted letterbox pixels that
+    // punch through Halcyon's glass shell to the desktop. Unknown size
+    // fills the stage; the host seal covers that brief moment.
+    property int videoWidth: 0
+    property int videoHeight: 0
+
+    readonly property rect pictureRect: {
+        var w = width;
+        var h = height;
+        var vw = videoWidth;
+        var vh = videoHeight;
+        if (w <= 0 || h <= 0)
+            return Qt.rect(0, 0, 0, 0);
+        if (vw <= 0 || vh <= 0)
+            return Qt.rect(0, 0, w, h);
+        var itemAspect = w / h;
+        var videoAspect = vw / vh;
+        if (videoAspect > itemAspect) {
+            var ch = w / videoAspect;
+            return Qt.rect(0, (h - ch) / 2, w, ch);
+        }
+        var cw = h * videoAspect;
+        return Qt.rect((w - cw) / 2, 0, cw, h);
+    }
+
     readonly property bool embedded: container.window !== null
 
     visible: turboActive
@@ -90,6 +116,9 @@ Item {
     WindowContainer {
         id: container
         objectName: "turboWindowContainer"
-        anchors.fill: parent
+        x: root.pictureRect.x
+        y: root.pictureRect.y
+        width: Math.max(1, root.pictureRect.width)
+        height: Math.max(1, root.pictureRect.height)
     }
 }

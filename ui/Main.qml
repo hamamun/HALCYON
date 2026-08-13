@@ -47,6 +47,22 @@ Shell {
         ? App.effectiveVideoMode : "soft"
     readonly property bool turboActive: effectiveVideoMode === "turbo"
 
+    // Picture size for the Turbo HWND. Soft does not read these.
+    // A non-number (test stubs, missing property) is treated as 0 so the
+    // container fills the stage until the decoder reports a real size.
+    readonly property int turboVideoWidth: {
+        if (typeof Player === "undefined" || !Player)
+            return 0;
+        var w = Player.videoWidth;
+        return (typeof w === "number" && w > 0) ? w : 0;
+    }
+    readonly property int turboVideoHeight: {
+        if (typeof Player === "undefined" || !Player)
+            return 0;
+        var h = Player.videoHeight;
+        return (typeof h === "number" && h > 0) ? h : 0;
+    }
+
     // True while chromeLayer lives in the Turbo overlay window. Kept as an
     // explicit flag (not inferred from parent) so blur can stay off for the
     // whole move — MultiEffect must not sample `stage` from a different window.
@@ -56,6 +72,20 @@ Shell {
     // desktop. Soft keeps the rounded-corner transparency; Turbo paints an
     // opaque base so the letterbox is the window, not File Explorer.
     color: (turboActive && !miniModeActive) ? "#000000" : "transparent"
+
+    // Backup for the letterbox hole: while Turbo is on, strip the
+    // layered/glass style from this HWND so leftover transparent pixels
+    // land on black, not Outlook. Soft puts the glass back.
+    onTurboActiveChanged: {
+        if (typeof App === "undefined" || !App)
+            return;
+        if (turboActive && !miniModeActive) {
+            if (App.sealTurboHost)
+                App.sealTurboHost(window);
+        } else if (App.unsealTurboHost) {
+            App.unsealTurboHost(window);
+        }
+    }
 
     // What the glass panels blur. Soft video is scene-graph pixels, so the
     // Stage is a real backdrop. Turbo's picture is a native child window that
@@ -726,7 +756,8 @@ Shell {
             // ----------------------------------------------------------------
             // TURBO — the native video surface, inside this window (§V.3).
             //
-            // Occupies exactly the Stage rectangle. Instantiated only while the
+            // Occupies the picture rectangle (letterbox is the black fill
+            // behind it). Instantiated only while the
             // engine reports it is genuinely on the native route, so a Soft
             // session (which is every session on a platform without the route)
             // never creates a WindowContainer at all. Any problem adopting the
@@ -748,6 +779,8 @@ Shell {
 
                 TurboSurfaceHost {
                     turboActive: window.turboActive
+                    videoWidth: window.turboVideoWidth
+                    videoHeight: window.turboVideoHeight
                     windowProvider: function() {
                         return (typeof App !== "undefined" && App && App.turboWindow)
                                ? App.turboWindow() : null;

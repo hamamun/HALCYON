@@ -289,6 +289,57 @@ def test_adopting_a_foreign_handle_is_guarded(qt_application):
     assert TurboSurface.adopt(0) is None
 
 
+def test_reharden_now_is_safe_before_and_after_start(qt_application, forced_turbo):
+    """The engine calls this after WindowContainer reparents; it must exist."""
+    player = FakePlayer()
+    surface = TurboSurface()
+    surface.reharden_now()  # never started — must not raise
+    assert surface.start(player) is True
+    try:
+        surface.reharden_now()
+        assert surface.active is True
+    finally:
+        surface.stop(player)
+    surface.reharden_now()  # already stopped — must not raise
+
+
+def test_the_child_requests_an_alpha_buffer_matching_the_shell(qt_application, forced_turbo):
+    """Requesting alpha 0 produced the Qt swapchain warning and the hole."""
+    player = FakePlayer()
+    surface = TurboSurface()
+    assert surface.start(player) is True
+    try:
+        fmt = surface.window.format()
+        assert fmt.alphaBufferSize() >= 8
+    finally:
+        surface.stop(player)
+
+
+def test_seal_and_unseal_are_safe_without_a_window():
+    turbo_surface.seal_host_window(None)
+    turbo_surface.unseal_host_window(None)
+
+
+def test_fit_picture_rect_letterboxes_a_wide_video_in_a_tall_stage():
+    x, y, w, h = turbo_surface.fit_picture_rect(1280, 800, 1920, 1080)
+    assert x == 0
+    assert w == 1280
+    assert abs(h - 720) < 0.5
+    assert abs(y - 40) < 0.5
+
+
+def test_fit_picture_rect_pillarboxes_a_tall_video_in_a_wide_stage():
+    x, y, w, h = turbo_surface.fit_picture_rect(1280, 720, 1080, 1920)
+    assert y == 0
+    assert h == 720
+    assert w < 1280
+    assert x > 0
+
+
+def test_fit_picture_rect_fills_when_size_is_unknown():
+    assert turbo_surface.fit_picture_rect(1280, 720, 0, 0) == (0.0, 0.0, 1280.0, 720.0)
+
+
 # ---------------------------------------------------------------------------
 # The engine's route switch
 # ---------------------------------------------------------------------------
@@ -304,6 +355,9 @@ def test_the_engine_reports_live_video_geometry():
     engine._player.get_fps = lambda: 59.94
     assert engine.video_size() == (3840, 2160)
     assert engine.video_fps() == pytest.approx(59.94)
+    engine._refresh_video_size()
+    assert engine.videoWidth == 3840
+    assert engine.videoHeight == 2160
     engine._player.video_get_size = lambda _num=0: (0, 0)
     engine._player.get_fps = lambda: 0.0
     assert engine.video_size() == (0, 0)
