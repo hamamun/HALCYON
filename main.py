@@ -336,8 +336,38 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log.info("mobile remote not started")
 
+    # --- taskbar live preview when minimized (Windows DWM) ------------------
+    # Soft and Turbo both show live thumb when window is open (DWM default).
+    # When minimized Qt pauses render loop, so thumb becomes still. This small
+    # Windows-only helper enables DWM iconic bitmaps and supplies a fresh frame
+    # from the main player on demand — no second player, no Turbo HWND risk.
+    taskbar_preview = None
+    try:
+        if sys.platform == "win32":
+            from core.taskbar_preview import TaskbarLivePreview, is_supported
+
+            if is_supported():
+                main_window = qml_engine.rootObjects()[0] if qml_engine.rootObjects() else None
+                if main_window is not None:
+                    taskbar_preview = TaskbarLivePreview(
+                        engine=player, window=main_window, parent=app
+                    )
+                    _KEEP_ALIVE.append(taskbar_preview)
+                    ctx.setContextProperty("TaskbarPreview", taskbar_preview)
+                    log.info("taskbar live preview initialized")
+    except Exception:
+        log.debug("taskbar preview init failed", exc_info=True)
+
     # --- shutdown, in the right order (§9) ---------------------------------
     def on_quit() -> None:
+        # Taskbar preview first: it touches the window handle, so it must go
+        # before Qt tears the window down.
+        try:
+            if taskbar_preview is not None:
+                taskbar_preview.shutdown()
+        except Exception:
+            log.debug("taskbar preview shutdown failed", exc_info=True)
+
         # The remote goes down first: it is the only component that accepts
         # input from outside the process, so once shutdown starts no new
         # command may be accepted (§R.4). Stop the bridge's status poller too
