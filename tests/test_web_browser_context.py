@@ -185,6 +185,34 @@ def test_external_tab_is_wired_to_a_host_and_native_viewport():
     assert host.back_calls == 1
 
 
+def test_qt_modal_hides_and_restores_active_native_page():
+    """Settings must not be painted underneath a visible WebView2 child HWND."""
+    hosts: list[FakeHost] = []
+
+    def make_host(parent=None):
+        host = FakeHost(parent)
+        hosts.append(host)
+        return host
+
+    browser = BrowserContext(
+        host_factory=make_host,
+        runtime_check=lambda: (True, "OK"),
+        environment_getter=lambda: object(),
+    )
+    browser.attachToWindow(FakeWindow())
+    browser.setStageActive(True)
+    browser.setViewport(10, 54, 900, 620)
+    browser.navigateActive("example.com")
+    host = hosts[0]
+    assert host.visible_values[-1] is True
+
+    browser.setChromeModalOpen(True)
+    assert host.visible_values[-1] is False
+
+    browser.setChromeModalOpen(False)
+    assert host.visible_values[-1] is True
+
+
 def test_reattach_same_hwnd_with_fresh_wrapper_keeps_controller():
     """Re-syncing the same native window must NOT release the WebView2 controller.
 

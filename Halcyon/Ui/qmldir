@@ -14,6 +14,7 @@ GlassField 1.0 ../../ui/components/GlassField.qml
 IconButton 1.0 ../../ui/components/IconButton.qml
 VideoModeBadge 1.0 ../../ui/components/VideoModeBadge.qml
 WindowButtons 1.0 ../../ui/components/WindowButtons.qml
+ModeChips 1.0 ../../ui/components/ModeChips.qml
 HSlider 1.0 ../../ui/components/HSlider.qml
 ListRow 1.0 ../../ui/components/ListRow.qml
 PanelToolbar 1.0 ../../ui/components/PanelToolbar.qml

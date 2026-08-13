@@ -127,6 +127,10 @@ class BrowserContext(QObject):
         self._parent_hwnd = 0
         self._attach_attempts = 0
         self._stage_active = False
+        # WebView2 is a native child HWND and therefore always composites above
+        # Qt Quick.  While a Qt modal (Settings) is open, hide the child so the
+        # modal can be seen and receive input; restore it on close.
+        self._chrome_modal_open = False
         # Physical pixels relative to the QQuickWindow client area.  QML passes
         # device-pixel-ratio-adjusted values, so WebView2 receives the same
         # coordinate system as Win32 Bounds.  During HTML fullscreen QML sends
@@ -297,6 +301,14 @@ class BrowserContext(QObject):
                     self.exitFullscreen()
                     self._set_content_fullscreen("")
                 self.pauseMedia()
+            self._sync_hosts()
+
+    @Slot(bool)
+    def setChromeModalOpen(self, open_: bool) -> None:  # noqa: N802 - QML API
+        """Temporarily remove WebView2 from the native z-order for a Qt modal."""
+        open_ = bool(open_)
+        if open_ != self._chrome_modal_open:
+            self._chrome_modal_open = open_
             self._sync_hosts()
 
     @Slot()
@@ -805,7 +817,9 @@ class BrowserContext(QObject):
             host = tab.host
             if host is None:
                 continue
-            should_show = bool(usable and tab is active and not tab.internal)
+            should_show = bool(
+                usable and tab is active and not tab.internal and not self._chrome_modal_open
+            )
             if should_show:
                 if not host.isReady and not getattr(host, "is_initializing", False):
                     self._init_host(tab)
