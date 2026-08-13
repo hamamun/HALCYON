@@ -678,6 +678,12 @@ Shell {
             });
         if ("solidChrome" in item)
             item.solidChrome = Qt.binding(function() { return window.turboActive });
+        // Scrub preview (§S) — Settings toggle, so toggling it while the bar
+        // is loaded takes effect immediately instead of next load.
+        if ("scrubPreviewEnabled" in item)
+            item.scrubPreviewEnabled = Qt.binding(function() {
+                return Settings.get("ui.scrubPreviewEnabled", true);
+            });
     }
 
     // ======================================================================

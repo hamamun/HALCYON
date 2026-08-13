@@ -1563,6 +1563,127 @@ The `UpdateChecker(QObject)` class is exposed to QML as the `UpdateChecker` cont
 
 ---
 
+# POST v1.0 — Scrub Preview · §S
+
+> **Design locked 13 Aug 2026 (owner decisions).** A still-frame preview that
+> follows the pointer over the seek bar in Local mode: hover anywhere on the
+> bar → a small floating window shows the video frame at that position; move
+> the mouse away → it disappears. **Still image only** — no moving clip
+> preview, nothing on pause. Owner decisions, locked 13 Aug 2026:
+> - Still image only (snapshot frame). No clip preview while paused.
+> - New Settings toggle **"Scrub preview"**, placed **directly below the
+>   "On-screen display" toggle** in Settings → General.
+> - Default **ON**.
+> - Must work in **fullscreen** too (the bar auto-hides; preview rides along
+>   whenever the bar is visible).
+> - Local mode only (video files). Live streams / radio have no past frame to
+>   preview; M3U and Web are untouched by design (§B.2).
+
+## S.1 What gets added / touched
+
+```
+engine/scrub_preview.py          # ★ NEW — hidden second decoder (libVLC), snapshot pipeline
+engine/vlc_engine.py             # ★ owns a ScrubPreview; feeds it on media change; shutdown
+core/settings.py                 # ★ new default: "ui.scrubPreviewEnabled": True
+ui/transport/SeekBar.qml         # ★ generic: exposes hoverFraction (-1..1) + hovering
+ui/overlay/ScrubPreview.qml      # ★ NEW — the floating popup (image + time, glass style)
+Halcyon/Overlay/qmldir           # ★ register ScrubPreview in the Halcyon.Overlay module
+modes/local/LocalTransport.qml   # ★ arrangement: popup above the bar, wires Player.preview
+ui/panels/SettingsDialog.qml     # ★ toggle row under "On-screen display"
+ui/Main.qml                      # ★ bindTransport(): scrubPreviewEnabled from Settings
+tools/check_isolation.py         # ★ PHASE_S_DISCLOSED for the frozen-path rule
+tests/test_scrub_preview.py      # ★ NEW — settings default, decoder fakes, engine wiring
+```
+
+Frozen Phase 1 paths touched (all disclosed in `PHASE_S_DISCLOSED`, same
+mechanism as every phase since 2): `core/settings.py` (one default),
+`engine/vlc_engine.py` (owns the helper + two call sites), `ui/transport/
+SeekBar.qml` (two generic read-only properties — no behaviour change for
+existing consumers: M3U does not use SeekBar, the tooltip is untouched).
+`engine/scrub_preview.py` is a new file under the frozen `engine/` tree, hence
+disclosed like `engine/turbo_surface.py` was. Everything else lives in
+non-frozen paths (`ui/overlay/`, `modes/local/`, `ui/panels/`, `Halcyon/`).
+
+## S.2 How it works
+
+**The hidden decoder.** `ScrubPreview(QObject)` owns a *second*, headless
+libVLC instance — `--vout=dummy` (frames are decoded but never drawn; libVLC's
+`video_take_snapshot` still captures them), `--no-audio`, `--avcodec-hw=none`.
+It is created eagerly with the engine but initialises libVLC **lazily** on the
+first local file, so a broken libVLC never takes the main player down with it.
+It is intentionally **not** a second `VlcEngine`: no vmem ring, no surface, no
+poll timer — just play → pause at the first frame → seek → snapshot.
+
+**Snapshot pipeline (all on the GUI thread, timer-driven):**
+
+1. `set_source(mrl)` — called from the engine whenever media changes. Non-`file://`
+   MRLs (live streams, network URLs) and audio-only files (no vout) mark the
+   decoder *unavailable* and the popup stays hidden.
+2. `request(ms)` — QML-facing slot called while the pointer is over the bar.
+   Requests are **coalesced**: rapid mouse moves only update the latest pending
+   position; one seek→settle→snapshot chain serves the newest value, so a fast
+   sweep cannot queue up behind itself.
+3. Seek the hidden player to `ms` → wait ~70 ms for the dummy vout to decode
+   the target frame → `video_take_snapshot(0, path, 320, 0)` (width 320,
+   height 0 = keep aspect). One retry if the first snapshot lands too early.
+4. `MediaPlayerSnapshotTaken` → emit `snapshotReady(file://...)` → the popup's
+   `Image` shows the frame. Snapshots rotate between two temp PNGs in
+   `%TEMP%\halcyon-scrub\` so QML's image cache always sees a fresh URL.
+   Temp files are removed at shutdown.
+
+**The popup (`ui/overlay/ScrubPreview.qml`).** 160×90 still, rounded glass
+border, mono time label at the bottom-right, opacity fade (`Theme.durFast`).
+Pure display — it knows nothing about the player. LocalTransport positions it
+above the bar, centred on the hover point and clamped to the window, and is
+the *only* place that talks to `Player.preview` (the arrangement rule, §B.4).
+
+**SeekBar stays generic.** It gains two read-only properties —
+`hoverFraction` (0..1 under the pointer, `-1` when the pointer is away) and
+`hovering` — driven by its existing hover/drag MouseAreas. The existing time
+tooltip and every other consumer are unchanged. M3U never instantiates
+SeekBar, so the feature is Local-only with zero mode knowledge in the shared
+part (the same reason the bar has no preview inside it at all).
+
+**Settings.** `ui.scrubPreviewEnabled` default `True`; toggle lives directly
+under "On-screen display" in Settings → General; LocalTransport reads it via
+the shell's `bindTransport()` (same binding pattern as every other bar flag).
+
+**Fullscreen.** The bar and popup live inside the transport Loader; when the
+chrome auto-hides in fullscreen, both fade out together and reappear on the
+next pointer move — the preview can never float over a hidden bar.
+
+## S.3 Risks & mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Second decoder is extra CPU while hovering | Decoder plays only long enough to reach Playing, then **pauses**; a hover chain is ~1 seek + 1 snapshot. Idle cost ≈ 0. |
+| Snapshot lags a fast sweep | Coalescing serves the newest position; intermediate frames are skipped, never queued. Best-effort by design — a stale frame for one frame-time is acceptable. |
+| libVLC instance failure (missing binary, weird file) | Lazy init + every step wrapped: any failure marks the decoder unavailable and the popup simply never appears. The main player is never affected. |
+| Two instances, one process | `vlc.Instance` objects are independent; `modes/local/playlist.py` already runs short-lived instances beside the main player. Teardown mirrors `VlcEngine.shutdown` (stop → settle → detach → release), §9 order. |
+| Temp PNGs accumulate | Two rotating files, removed on shutdown (best effort). |
+| Mini Mode / M3U / Web / Remote | Untouched. MiniBar has its own hairline seek (§M) and is out of scope; M3U/Web have no local seekable media; Remote mirrors the main transport's actions, which are unchanged. |
+
+## S.4 Acceptance — Scrub Preview
+
+- [ ] Hover over the Local seek bar → 160×90 still frame appears above the bar at the hovered position
+- [ ] Moving the pointer along the bar updates the frame to the new position
+- [ ] Moving the pointer away hides the popup
+- [ ] Works while dragging (scrubbing) too
+- [ ] Works in fullscreen whenever the bar is visible; never floats over a hidden bar
+- [ ] Works for video files; never appears for audio files or live streams
+- [ ] Playback of the main video is unaffected: no flicker, no jump, no stutter while hovering
+- [ ] Toggle "Scrub preview" sits directly below "On-screen display" and defaults to ON
+- [ ] Toggling OFF removes the preview immediately and hides the popup
+- [ ] Popup is clamped to the window (never clipped off-screen at the left/right edges)
+- [ ] All Theme tokens used — no hardcoded colours, radii, or durations
+- [ ] `engine/scrub_preview.py` compiles clean; no module-level `import vlc`
+- [ ] `tools/check_isolation.py` still passes with `PHASE_S_DISCLOSED` in place
+- [ ] No Phase 1-3 frozen files modified except the four disclosed paths
+
+**→ Tag `v1.4.0-scrub`**
+
+---
+
 ## 7. Visual Design *(applies to all phases — set in Phase 1)*
 
 **Aurora glass.** Deep charcoal base, slow-drifting aurora gradient, frosted panels floating above.
@@ -1595,7 +1716,7 @@ Deliberately excluded from all three phases to keep each shippable:
 | Feature | Why deferred |
 |---|---|
 | **Mobile remote + QR** | Was Phase-scoped in v2.0; it's a whole second UI with its own server, and it must mirror each mode's control set — which doesn't stabilise until Phase 3. Building it earlier means building it twice. **Own phase after v1.0 — full spec locked in §R (v4.2, 8 Aug 2026); implementation started 8 Aug 2026 by owner decision (see §R.6).** |
-| Seek-bar frame thumbnails | Needs a second decoder instance; nice-to-have |
+| **Seek-bar frame thumbnails** | ~~Needs a second decoder instance; nice-to-have~~ — **built and shipped as PHASE S (v1.4.0-scrub, 13 Aug 2026, §S)**. Still-image hover preview over the Local seek bar via a hidden second decoder; on by default, toggle under "On-screen display". |
 | Bookmark folders | v1 flat list is enough |
 | Tab favicons | v1 flat list is enough; WebView2 exposes favicons (`FaviconChanged`) — easy post-v1.0 if wanted |
 | "Play in Halcyon" from Web | Depends on per-site URL resolution |

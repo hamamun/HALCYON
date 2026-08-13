@@ -95,6 +95,16 @@ Dialog {
                     onToggled: function(on) { Settings.set("ui.osdEnabled", on) }
                 }
 
+                // Scrub preview (§S) — owner decision 2026-08-13: lives
+                // directly below the OSD toggle and defaults to ON.
+                SettingRow {
+                    width: parent.width
+                    label: "Scrub preview"
+                    description: "Hover over the seek bar to see a still frame of the video at that spot."
+                    checked: Settings.get("ui.scrubPreviewEnabled", true)
+                    onToggled: function(on) { Settings.set("ui.scrubPreviewEnabled", on) }
+                }
+
                 Rectangle { width: parent.width; height: 1; color: Theme.glassBorder }
 
                 // ------------------------------------------------ §V.1

@@ -34,6 +34,7 @@ from PySide6.QtCore import (
 
 from core import paths
 from core import video_mode as video_policy
+from engine.scrub_preview import ScrubPreview
 from engine.video_out import Chroma, VideoOutput
 
 log = logging.getLogger(__name__)
@@ -228,6 +229,11 @@ class VlcEngine(QObject):
     #: Decoded width × height of video track 0. Turbo's WindowContainer
     #: sizes itself to this so the letterbox is QML black, not a hole.
     videoSizeChanged = Signal()
+    #: The hidden second decoder (§S) — ``preview`` property, created once in
+    #: ``__init__`` and never replaced, so this signal is emitted exactly once
+    #: (after creation) and exists mainly to make the property a real binding
+    #: source rather than a one-shot read.
+    previewChanged = Signal()
 
     # Class-level defaults for the video-route state. ``__init__`` gives every
     # real engine its own values; these exist because the teardown tests build
@@ -307,6 +313,15 @@ class VlcEngine(QObject):
         self._poll.start()
 
         self.set_volume(self._volume)
+
+        # --- Scrub preview (§S) --------------------------------------------
+        # The hidden second decoder that snapshots frames for the seek-bar
+        # hover preview. Created eagerly but initialises its own libVLC
+        # instance *lazily* on the first local file, so a broken libVLC can
+        # never take the main player down with it. The engine feeds it the
+        # current MRL in open()/stop() and tears it down in shutdown().
+        self._scrub_preview = ScrubPreview(self)
+        self.previewChanged.emit()
 
     # -------------------------------------------------------------- events ---
     def _attach_events(self) -> None:
@@ -587,6 +602,16 @@ class VlcEngine(QObject):
         except Exception:
             log.debug("media.release after set_media failed for %s", path_or_url, exc_info=True)
         self._current_mrl = mrl
+        # Feed the hidden scrub-preview decoder (§S). Same MRL as before is a
+        # cheap no-op on its side (set_source guards on equality). Network
+        # URLs and audio-only media make the decoder unavailable — the popup
+        # simply stays hidden, exactly as designed.
+        preview = getattr(self, "_scrub_preview", None)
+        if preview is not None:
+            try:
+                preview.set_source(mrl)
+            except Exception:
+                log.debug("scrub preview set_source failed", exc_info=True)
         if announce:
             # A new file: drop the previous picture size so Turbo does not
             # keep the old aspect for a frame. A silent route-switch reopen
@@ -694,6 +719,15 @@ class VlcEngine(QObject):
         self._pending_turbo_play = False
         self._user_paused = False
         self._current_mrl = ""
+        # The scrub-preview decoder parks on the same media as the main
+        # player; a full stop must release it too (no hidden decoder left
+        # chewing on a file nobody is watching).
+        preview = getattr(self, "_scrub_preview", None)
+        if preview is not None:
+            try:
+                preview.set_source("")
+            except Exception:
+                log.debug("scrub preview reset failed", exc_info=True)
         self._set_video_size(0, 0)
         # One-tuner rule (§V.4): a full stop — including the one
         # AppController performs when switching to a mode that does not use
@@ -1244,6 +1278,16 @@ class VlcEngine(QObject):
             return
         self._releasing = True
         self._poll.stop()
+        # The scrub-preview decoder owns its own libVLC instance; release it
+        # before the main instance goes away — and unconditionally, so it can
+        # never outlive the engine even if the main player is already gone
+        # (§S.2).
+        preview = getattr(self, "_scrub_preview", None)
+        if preview is not None:
+            try:
+                preview.shutdown()
+            except Exception:
+                log.debug("scrub preview shutdown failed", exc_info=True)
         try:
             if self._player is not None:
                 # Stop first and wait for VLC's decoder/event threads. Detaching
@@ -1347,6 +1391,16 @@ class VlcEngine(QObject):
     @Property(str, notify=mediaChanged)
     def currentMedia(self) -> str:  # noqa: N802 - QML-facing
         return self._current_mrl
+
+    @Property(QObject, notify=previewChanged)
+    def preview(self) -> QObject:
+        """The hidden scrub-preview decoder (§S) — ``Player.preview`` in QML.
+
+        ``None`` only in the teardown tests that build an engine with
+        ``VlcEngine.__new__``; real engines always have one. QML callers
+        should treat it as optional and gate on ``available``/``ready``.
+        """
+        return getattr(self, "_scrub_preview", None)
 
     @property
     def raw_player(self):

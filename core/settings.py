@@ -56,6 +56,10 @@ DEFAULTS: dict[str, Any] = {
     "ui.mode": "local",
     "ui.timeDisplayRemaining": False,
     "ui.osdEnabled": True,
+    # Scrub preview (§S): still-frame hover preview over the Local seek bar.
+    # Default ON per owner decision 2026-08-13; toggle lives directly below
+    # "On-screen display" in Settings → General.
+    "ui.scrubPreviewEnabled": True,
     "ui.autoHideDelayMs": 2500,
     # appearance — "color" (animated Aurora, default) or "dark" (full black,
     # glossy glass, monochrome). See ui/Theme.qml.

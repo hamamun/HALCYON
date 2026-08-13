@@ -168,6 +168,28 @@ PHASE_T_DISCLOSED = [
     "Halcyon/Shell/qmldir",
 ]
 
+#: Disclosed Phase-S (v1.4) Scrub Preview additions — post-v1.0 §S, owner
+#: design lock 2026-08-13. A hidden second libVLC decoder snapshots still
+#: frames for a hover preview over the Local seek bar. Four frozen Phase 1
+#: paths are touched, each a *generic chassis capability*: `core/settings.py`
+#: gains one default (`ui.scrubPreviewEnabled`), `engine/vlc_engine.py` owns
+#: and feeds the new `engine/scrub_preview.py` helper (new file under the
+#: frozen engine/ tree, same class as turbo_surface.py in §V), and
+#: `ui/transport/SeekBar.qml` publishes two read-only hover properties that
+#: change nothing for existing consumers (M3U never instantiates SeekBar).
+#: Everything else — the popup, the arrangement, the Settings row, the tests —
+#: lives outside frozen paths. Covered by tests/test_scrub_preview.py (+ the
+#: GUI-gated QML test) and §S.4 acceptance.
+PHASE_S_DISCLOSED = [
+    "core/settings.py",
+    "engine/vlc_engine.py",
+    "engine/scrub_preview.py",
+    "ui/transport/SeekBar.qml",
+    # Registers ScrubPreview in Halcyon.Overlay; without it `import
+    # Halcyon.Overlay` cannot resolve the type (test_qml_modules enforces).
+    "Halcyon/Overlay/qmldir",
+]
+
 
 class Failure:
     def __init__(self, rule: str, where: str, detail: str) -> None:
@@ -332,7 +354,7 @@ def check_frozen_paths(base_ref: str) -> list[Failure]:
     """
     failures: list[Failure] = []
     for path in changed_files(base_ref):
-        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED or path in PHASE_T_DISCLOSED:
+        if path in FROZEN_EXCEPTIONS or path in PHASE2_DISCLOSED or path in PHASE3_DISCLOSED or path in PHASE4_DISCLOSED or path in PHASE_R_DISCLOSED or path in PHASE_U_DISCLOSED or path in PHASE_T_DISCLOSED or path in PHASE_S_DISCLOSED:
             continue
         for frozen in PHASE1_FROZEN:
             hit = path.startswith(frozen) if frozen.endswith("/") else path == frozen

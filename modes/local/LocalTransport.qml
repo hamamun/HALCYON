@@ -1,6 +1,7 @@
 import QtQuick
 import Halcyon.Ui
 import Halcyon.Transport
+import Halcyon.Overlay
 
 // Local's control bar — §B.4, §P1.5.
 //
@@ -33,6 +34,11 @@ Item {
     property int currentSubtitleId: -1
     property int subtitleDelayMs: 0
     property bool hasVideo: true
+    //: Scrub preview (§S) — Settings toggle, bound by the shell in Main.qml
+    //: (see bindTransport()). Default ON; the popup additionally gates on the
+    //: decoder's availability and on `hasVideo`, so the user's switch is the
+    //: only thing the Settings row controls.
+    property bool scrubPreviewEnabled: true
     //: Availability hints for the CC and Equalizer/Info button dots (§P1.6).
     //: Bound by the shell in Main.qml — see bindTransport().
     property bool subtitlesAvailable: false
@@ -218,6 +224,49 @@ Item {
                     onClicked: Actions.toggleFullscreen()
                 }
             }
+        }
+    }
+
+    // -------------------------------------------------- scrub preview (§S) --
+    // Floating still-frame preview above the seek bar. Pure display: this bar
+    // is the only place that talks to Player.preview — the shared SeekBar only
+    // publishes `hoverFraction`, and the popup itself knows nothing about the
+    // player (§B.4 arrangement rule).
+    ScrubPreview {
+        id: scrubPreview
+
+        // Above the bar, centred on the hover point, clamped to the window.
+        // seekBar sits at the column's left margin (Theme.spaceLg) inside
+        // root, so the bar's origin in root coordinates is that margin.
+        x: Math.max(0, Math.min(root.width - width,
+                                Theme.spaceLg + seekBar.hoverFraction * seekBar.width - width / 2))
+        y: seekBar.y - height - Theme.spaceSm
+
+        enabled: root.scrubPreviewEnabled && root.hasVideo
+                 && root.player && root.player.preview
+                 && root.player.preview.available && root.player.preview.ready
+        hovered: seekBar.hovering
+        fraction: seekBar.hoverFraction
+        duration: seekBar.duration
+    }
+
+    //: Frames arrive from the hidden decoder whenever a snapshot lands.
+    Connections {
+        target: root.player && root.player.preview ? root.player.preview : null
+        function onSnapshotReady(path) { scrubPreview.imageSource = path || "" }
+    }
+
+    //: Pointer moved on the bar → ask the decoder for that frame. Safe at
+    //: pointer-move rate: the decoder coalesces (§S.2). Runs even while the
+    //: decoder is still loading — the request parks and is served on ready.
+    Connections {
+        target: seekBar
+        function onHoverFractionChanged() {
+            var bar = root.player ? root.player.preview : null;
+            var f = seekBar.hoverFraction;
+            if (bar && root.scrubPreviewEnabled && root.hasVideo
+                    && f >= 0 && seekBar.duration > 0)
+                bar.request(Math.round(f * seekBar.duration));
         }
     }
 

@@ -20,6 +20,7 @@ See [`HALCYON_PLAN.md`](HALCYON_PLAN.md) for the architecture and
 | **3 — Web** | `v1.0.0` | ✅ complete / signed off — full Halcyon v1.0.0 release |
 | **4 — Mini v1.1** | `v1.1.0-mini` | ✅ built — compact 400×44 bar |
 | **R — Remote v1.2** | `v1.2.0-remote` | ✅ **complete / verified 2026-08-09** — phone remote, QR in Settings, real-time sync, Local/M3U/Web control, Power |
+| **S — Scrub Preview v1.4** | `v1.4.0-scrub` | ✅ **built 2026-08-13** — hover the Local seek bar for a still-frame preview; toggle under On-screen display, default on (§S) |
 
 Phase 2 & 3 guard: `python tools/check_isolation.py --phase 3` verifies that new
 modes touch nothing frozen without disclosure.

@@ -28,6 +28,16 @@ Item {
     readonly property real displayPosition:
         Math.max(0, Math.min(1, scrubbing ? scrubPosition : position))
 
+    // --------------------------------------------------- hover surface -----
+    // Where the pointer is on the bar, for consumers that want to preview
+    // that position (Local's scrub preview, §S). -1 while the pointer is
+    // away. Generic on purpose: the bar knows nothing about previews — it
+    // just publishes the number and the arranger decides what to do with it.
+    property real hoverFraction: -1
+
+    //: True while the pointer is anywhere over the bar (hover or drag).
+    readonly property bool hovering: hoverArea.containsMouse || dragArea.pressed
+
     signal seekRequested(real fraction)
     signal scrubStarted()
     signal scrubEnded()
@@ -107,8 +117,9 @@ Item {
     }
 
     // ------------------------------------------------------------ tooltip --
-    // Hover timestamp. Frame thumbnails are deferred to v1.1 (§8) — they need a
-    // second decoder instance.
+    // Hover timestamp. The still-frame preview is delivered by Local's
+    // ScrubPreview overlay (§S), which reads `hoverFraction` above — the bar
+    // itself only ever shows the time.
     Rectangle {
         id: tip
         visible: hoverArea.containsMouse && root.duration > 0
@@ -150,6 +161,13 @@ Item {
         anchors.bottomMargin: -6
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
+
+        // Publish the pointer position for the hover tooltip AND the scrub
+        // preview (§S). -1 when the pointer leaves the bar.
+        onPositionChanged: function(mouse) {
+            root.hoverFraction = Math.max(0, Math.min(1, mouse.x / Math.max(1, root.width)));
+        }
+        onExited: root.hoverFraction = -1
     }
 
     MouseArea {
@@ -171,12 +189,14 @@ Item {
         onPressed: function(mouse) {
             root.scrubPosition = fractionAt(mouse.x);
             root.seekRequested(root.scrubPosition);
+            root.hoverFraction = root.scrubPosition;   // preview follows (§S)
         }
         onPositionChanged: function(mouse) {
             if (!pressed)
                 return;
             root.scrubPosition = fractionAt(mouse.x);
             root.seekRequested(root.scrubPosition);
+            root.hoverFraction = root.scrubPosition;   // preview follows (§S)
         }
         onReleased: function(mouse) {
             root.scrubPosition = fractionAt(mouse.x);

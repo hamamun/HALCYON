@@ -51,7 +51,9 @@ So: the build is complete and now materially more correct than when this pass st
 
 ## Progress
 
-*One table. Counts are real — regenerated from the boxes below on 2026-08-12.
+*One table. Counts are real — regenerated from the boxes below on 2026-08-12,
+then extended 2026-08-13 with Phase S (Scrub Preview v1.4, §S — 19 build
+tasks, 11 owner verifications).
 Phase R (Mobile Remote v1.2) built 2026-08-08, verified by owner 2026-08-09.
 Build-task counts re-checked 2026-08-12 after removing the superseded Turbo checkbox task and verification; the new design addendum adds no build/verification boxes. `◻` counts unchanged — those are owner marks.*
 
@@ -64,7 +66,8 @@ Build-task counts re-checked 2026-08-12 after removing the superseded Turbo chec
 | 4 — Mini v1.1 | 1 / 1 built | 15 / 15 | 0 / 16 | `v1.1.0-mini` |
 | R — Mobile Remote v1.2 | 4 / 4 built | 23 / 23 | 10 / 10 ✅ | `v1.2.0-remote` *(built 2026-08-08, verified 2026-08-09 — complete)* |
 | U — Vendor Update tab | 1 / 1 built | 18 / 18 | 0 / 11 | — *(built 2026-08-10/11, awaiting your verification)* |
-| **Total** | **27 / 27 built** | **356 / 358** | **102 / 245** | |
+| S — Scrub Preview v1.4 | 1 / 1 built | 19 / 19 | 0 / 11 | — *(built 2026-08-13, awaiting your verification)* |
+| **Total** | **28 / 28 built** | **375 / 377** | **102 / 256** | |
 
 *Recounted from the boxes on 2026-08-12. Three corrections to the previous table remain: Phase U
 showed `0 / 11` build tasks when all 18 were in fact ticked; Phase 0 showed `0 / 8` when six
@@ -1134,16 +1137,73 @@ required. See HALCYON_PLAN.md §V.6.
 
 ---
 
+# PHASE S — Scrub Preview v1.4 · §S — DESIGN LOCKED (2026-08-13), **BUILT 2026-08-13**
+
+> **Owner decisions locked 13 Aug 2026.** Hover over the Local-mode seek bar → a small floating
+> window shows a **still frame** of the video at that position; mouse away → gone. Still image
+> only (no clip preview). New Settings toggle **"Scrub preview"** directly below
+> "On-screen display", **default ON**. Works in fullscreen (rides the bar's auto-hide). Local
+> video files only; audio-only files, live streams, M3U and Web are untouched by design (§B.2).
+
+## Milestone S.1 — Hidden decoder + popup · 1–2 d
+
+- [x] `engine/scrub_preview.py` — `ScrubPreview(QObject)`, **no module-level `import vlc`** · §S.2
+- [x] Second headless libVLC instance: `--vout=dummy`, `--no-audio`, `--avcodec-hw=none`, lazy init on first local file · §S.2
+- [x] `set_source(mrl)` — file:// only; network URLs and audio-only files (no vout) mark the decoder unavailable · §S.2
+- [x] `request(ms)` slot — seek → ~70 ms settle → `video_take_snapshot(0, path, 320, 0)`, one retry · §S.2
+- [x] Requests coalesced — a fast sweep serves the newest position, never queues up · §S.2
+- [x] `MediaPlayerSnapshotTaken` event → `snapshotReady(file://…)` signal; callback hard-referenced (§9) · §S.2
+- [x] Two rotating temp PNGs (`%TEMP%\halcyon-scrub\`) so QML's image cache always sees a fresh URL · §S.2
+- [x] `shutdown()` — stop → settle → detach events → release, §9 order; temp files removed best-effort · §S.3
+- [x] `engine/vlc_engine.py` — owns a `ScrubPreview`, calls `set_source(mrl)` in `open()`, `set_source("")` in `stop()`, `shutdown()` in `shutdown()`; exposes `@Property(QObject, notify=previewChanged)` · §S.1
+- [x] `core/settings.py` — new default `"ui.scrubPreviewEnabled": True` · §S.1
+- [x] `ui/transport/SeekBar.qml` — generic `hoverFraction` (-1 when away) + `hovering` from the existing hover/drag areas; tooltip and other consumers unchanged · §S.2
+- [x] `ui/overlay/ScrubPreview.qml` — 160×90 still, rounded glass border, mono time label, opacity fade; pure display, no player knowledge · §S.2
+- [x] `Halcyon/Overlay/qmldir` — registers `ScrubPreview` in `Halcyon.Overlay` · §S.1
+- [x] `modes/local/LocalTransport.qml` — popup above the bar, centred on hover point, clamped; the only place that talks to `Player.preview` · §S.2
+- [x] `ui/panels/SettingsDialog.qml` — "Scrub preview" toggle directly below "On-screen display" · §S.1
+- [x] `ui/Main.qml` — `bindTransport()` binds `scrubPreviewEnabled` from Settings · §S.1
+- [x] `tools/check_isolation.py` — `PHASE_S_DISCLOSED` (4 frozen paths) added to the frozen-path check · §S.1
+- [x] `tests/test_scrub_preview.py` — settings default ON; decoder fakes (reject non-file, coalesce, serve-on-ready, clear, shutdown order); engine wiring (open feeds preview, stop clears, shutdown tears down) · §S.1
+- [x] All Theme tokens used — no hardcoded colours, radii, or durations · §B.1
+
+> **Static verification 2026-08-13 (no Windows here — QML and libVLC paths verified by
+> inspection + the repo's own fake-object test patterns).** `engine/scrub_preview.py`
+> byte-compiles clean and imports nothing at module level; `tools/check_isolation.py`
+> passes with `PHASE_S_DISCLOSED`; the full pytest suite passes with the same
+> pre-existing environment skips/failures as before the change (turbo/remote need
+> Windows + aiohttp). The QML popup and mouse behaviour are covered by
+> `tests/test_scrub_preview_qml.py`, which skips where QtGui cannot run (this box)
+> and exercises the real SeekBar on Windows.
+
+### ◻ Verify — Scrub Preview (on Windows)
+
+- ◻ Hover over the Local seek bar → 160×90 still frame appears above the bar at the hovered position
+- ◻ Moving the pointer along the bar updates the frame to the new position
+- ◻ Moving the pointer away hides the popup
+- ◻ Works while dragging (scrubbing) too
+- ◻ Works in fullscreen whenever the bar is visible; never floats over a hidden bar
+- ◻ Video files only — no preview for audio files or live streams
+- ◻ Main video unaffected: no flicker, jump or stutter while hovering
+- ◻ "Scrub preview" toggle sits directly below "On-screen display", defaults to ON
+- ◻ Toggling OFF removes the preview immediately
+- ◻ Popup clamped to the window (never clipped at the left/right edges)
+- ◻ `python tools/check_isolation.py` passes
+
+**→ Tag `v1.4.0-scrub`**
+
+---
+
 # Deferred — post-v1.0 · §8
 
 Not in any phase above. Recorded so they aren't mistaken for oversights.
 
 - [x] **Mobile remote + QR** — ~~deferred~~ **built and signed off** as PHASE R (v1.2.0-remote, verified 2026-08-09). Ticked here only to stop it reading as outstanding; the live record is PHASE R above.
-> The five below are **deliberately open** — they are the post-v1.0 backlog, not unfinished
+- [x] **Seek-bar frame thumbnails** — ~~deferred~~ **built 2026-08-13** as PHASE S (v1.4.0-scrub, §S): still-image hover preview over the Local seek bar via a hidden second decoder; on by default, toggle under "On-screen display". Ticked here only to stop it reading as outstanding; the live record is PHASE S above.
+> The four below are **deliberately open** — they are the post-v1.0 backlog, not unfinished
 > work. They are left unticked on purpose: ticking them would claim shipped features that
-> do not exist. Nothing in the v1.3 scope depends on them.
+> do not exist. Nothing in the v1.4 scope depends on them.
 
-- [ ] Seek-bar frame thumbnails — needs a second decoder instance
 - [ ] Bookmark folders
 - [ ] "Play in Halcyon" — pipe a resolved web stream URL into libVLC
 - [ ] libVLC 4 GPU path — blocked on upstream release · §0.5
