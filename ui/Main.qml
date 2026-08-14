@@ -484,7 +484,7 @@ Shell {
                 osd("Subtitles: " + App.subtitleTracks[0].label, Glyphs.subtitles);
             }
         }
-        function loadSubtitleFile()   { subtitleDialog.open() }
+        function loadSubtitleFile()   { window.openNativeDialog(subtitleDialog) }
         function adjustSubtitleDelay(ms) {
             App.adjustSubtitleDelay(ms);
             var sign = ms > 0 ? "+" : "";
@@ -492,8 +492,8 @@ Shell {
         }
 
         // ---------------------------------------------------- playlist --
-        function addFiles()        { fileDialog.open() }
-        function addFolder()       { folderDialog.open() }
+        function addFiles()        { window.openNativeDialog(fileDialog) }
+        function addFolder()       { window.openNativeDialog(folderDialog) }
         function addPaths(paths)   { App.addPaths(paths) }
         function clearSelected() {
             App.clearSelected(localPanelSelection());
@@ -1198,6 +1198,23 @@ Shell {
         settingsDialog.open();
     }
 
+    // Native dialogs (Add files / Add folder / Load subtitle) are the same
+    // disease Settings had, one layer further out. Left alone, QtQuick.Dialogs
+    // resolves their owner to the main shell window — but in Turbo the chrome
+    // lives in a *topmost* overlay window (TurboChromeWindow), so Explorer
+    // opens UNDER the overlay and its WindowModal modality blocks the shell:
+    // a dialog that is visible somewhere yet cannot be clicked. Seating means
+    // handing the dialog the current chrome host as its owner window at open
+    // time — owned windows stack above their owner, and the modality then
+    // blocks the overlay's hierarchy instead of fighting it. Assigned per
+    // open, never as a binding, so a live native dialog is not re-seated
+    // mid-flight (the same rule seatSettingsDialog follows). In Soft the host
+    // is the main window and this is exactly the old behaviour.
+    function openNativeDialog(dialog) {
+        dialog.parentWindow = window.settingsHostWindow();
+        dialog.open();
+    }
+
     function moveChromeToOverlay() {
         if (!window.turboActive)
             return;
@@ -1220,6 +1237,14 @@ Shell {
         // fires before the item is destroyed) so an open dialog is not
         // destroyed with it.
         window.seatSettingsDialog();
+        // Native dialogs opened while Turbo was live were seated on the
+        // overlay Window (openNativeDialog). Point them home before that
+        // Window is destroyed so none is left owned by a dead handle —
+        // openNativeDialog re-seats on every open, this is only the
+        // mid-flight case (Turbo ends while Explorer is up).
+        fileDialog.parentWindow = window;
+        folderDialog.parentWindow = window;
+        subtitleDialog.parentWindow = window;
     }
 
     // ======================================================================

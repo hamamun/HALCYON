@@ -308,6 +308,57 @@ def test_settings_is_seated_on_the_turbo_overlay_not_under_the_hwnd():
     )
 
 
+def test_native_dialogs_are_seated_on_the_current_chrome_host():
+    """Explorer must open above the Turbo overlay, not under it (§V.3).
+
+    The chrome overlay is a *topmost* window. A QtQuick.Dialogs native
+    dialog left to resolve its own owner picks the main shell window, so
+    in Turbo, Explorer opens under the overlay while its WindowModal
+    modality blocks the shell — a dialog that is visible somewhere yet
+    cannot be clicked. Same disease Settings had, one layer further out:
+    every native dialog must be handed the current chrome host as its
+    owner window at open time.
+    """
+    main = _read(MAIN_QML)
+
+    assert "function openNativeDialog(dialog)" in main
+    opener = main.split("function openNativeDialog(dialog)", 1)[1].split(
+        "function ", 1
+    )[0]
+    assert "dialog.parentWindow = window.settingsHostWindow()" in opener, (
+        "the owner must be the current chrome host — the Turbo overlay "
+        "while Turbo is live, the main window otherwise"
+    )
+    assert opener.index("dialog.parentWindow") < opener.index("dialog.open()"), (
+        "seat first, then open — assigning per open (not a binding) so a "
+        "live native dialog is never re-seated mid-flight"
+    )
+
+    # Every native-dialog action must go through the seating path. A raw
+    # open() at a call site is how one of them regresses.
+    assert "function addFiles()        { window.openNativeDialog(fileDialog) }" in main
+    assert "function addFolder()       { window.openNativeDialog(folderDialog) }" in main
+    assert (
+        "function loadSubtitleFile()   { window.openNativeDialog(subtitleDialog) }"
+        in main
+    )
+    for raw in ("fileDialog.open()", "folderDialog.open()", "subtitleDialog.open()"):
+        assert raw not in main, (
+            f"{raw} bypasses the seating path — in Turbo that opens "
+            "Explorer under the topmost chrome overlay"
+        )
+
+    # Turbo ending while Explorer is up: the dialogs must be pointed home
+    # before the overlay Window is destroyed, or they are left owned by a
+    # dead handle.
+    home = main.split("function moveChromeHome()", 1)[1].split("function ", 1)[0]
+    for dialog in ("fileDialog", "folderDialog", "subtitleDialog"):
+        assert f"{dialog}.parentWindow = window" in home, (
+            f"moveChromeHome must re-home {dialog} while the overlay "
+            "Window still exists"
+        )
+
+
 def test_the_chrome_moves_into_a_transparent_overlay_window():
     """QML siblings cannot paint over a native child window (§V.3)."""
     chrome = _read(TURBO_CHROME_QML)
