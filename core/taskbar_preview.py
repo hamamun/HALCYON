@@ -7,9 +7,8 @@ taskbar thumbnail becomes a still image — the last cached bitmap.
 This module enables DWM's iconic bitmap mode and supplies a fresh frame on
 demand:
 
-* Enable DWMWA_HAS_ICONIC_BITMAP only while the window is minimized.
-  DWMWA_FORCE_ICONIC_REPRESENTATION is deliberately never enabled: it would
-  replace Windows' normal, live preview for a visible window.
+* Enable DWMWA_FORCE_ICONIC_REPRESENTATION and DWMWA_HAS_ICONIC_BITMAP only
+  while the window is minimized, returning to normal DWM composition on restore.
 * Native event filter for WM_DWMSENDICONICTHUMBNAIL / WM_DWMSENDICONICLIVE
 * On each request: convert the latest owned Soft/vmem decoded frame directly
   to a DIB-section HBITMAP. If no frame has arrived, return a valid neutral
@@ -65,9 +64,8 @@ else:
     WM_DWMSENDICONICLIVE = 0x0326
 
     # DWM attributes
+    DWMWA_FORCE_ICONIC_REPRESENTATION = 7
     DWMWA_HAS_ICONIC_BITMAP = 10
-    # Do not enable DWMWA_FORCE_ICONIC_REPRESENTATION (7).  It forces the
-    # iconic path for visible windows and breaks DWM's normal live preview.
 
     DWM_SIT_DISPLAYFRAME = 0x00000001
 
@@ -193,10 +191,11 @@ else:
 
                 msg_ptr = ctypes.cast(int(message), ctypes.POINTER(MSG))
                 msg = msg_ptr.contents
-                hwnd = int(msg.hwnd or 0)
+                hwnd = int(msg.hwnd or 0) & 0xFFFFFFFFFFFFFFFF
                 if hwnd == 0:
                     return False, 0
-                if hwnd != self._owner.hwnd:
+                owner_hwnd = self._owner.hwnd & 0xFFFFFFFFFFFFFFFF
+                if hwnd != owner_hwnd and (hwnd & 0xFFFFFFFF) != (owner_hwnd & 0xFFFFFFFF):
                     return False, 0
 
                 if msg.message == WM_DWMSENDICONICTHUMBNAIL:
@@ -211,7 +210,8 @@ else:
                         # DWM copies the bitmap during this call. Always reply
                         # while iconic mode is enabled; otherwise it displays
                         # the white pending-thumbnail spinner.
-                        dwmapi.DwmSetIconicThumbnail(msg.hwnd, hbm, 0)
+                        hr = dwmapi.DwmSetIconicThumbnail(msg.hwnd, hbm, 0)
+                        log.debug("DwmSetIconicThumbnail -> hr=%s", hr)
                     except Exception:
                         log.debug("DwmSetIconicThumbnail failed", exc_info=True)
                     finally:
@@ -227,7 +227,8 @@ else:
                         return False, 0
                     try:
                         pt = POINT(0, 0)
-                        dwmapi.DwmSetIconicLivePreviewBitmap(msg.hwnd, hbm, ctypes.byref(pt), DWM_SIT_DISPLAYFRAME)
+                        hr = dwmapi.DwmSetIconicLivePreviewBitmap(msg.hwnd, hbm, ctypes.byref(pt), DWM_SIT_DISPLAYFRAME)
+                        log.debug("DwmSetIconicLivePreviewBitmap -> hr=%s", hr)
                     except Exception:
                         log.debug("DwmSetIconicLivePreviewBitmap failed", exc_info=True)
                     finally:
@@ -271,7 +272,7 @@ else:
             return self._hwnd
 
         def _try_enable(self):
-            if self._enabled:
+            if self._hwnd != 0:
                 return
             try:
                 win = self._window
@@ -282,10 +283,15 @@ else:
                 if wid == 0:
                     QTimer.singleShot(250, self._try_enable)
                     return
-                self._hwnd = wid
+                self._hwnd = wid & 0xFFFFFFFFFFFFFFFF
                 self._install_filter()
                 try:
                     self._window.visibilityChanged.connect(self._on_visibility_changed)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self._window, "windowStateChanged"):
+                        self._window.windowStateChanged.connect(self._on_visibility_changed)
                 except Exception:
                     pass
                 # The timer itself is cheap; it only invalidates while the
@@ -293,7 +299,7 @@ else:
                 self._invalidate_timer.start()
                 # Do not claim iconic ownership while the window is visible.
                 # That is what previously replaced normal-mode live preview.
-                self._on_visibility_changed(win.visibility())
+                self._on_visibility_changed()
             except Exception:
                 log.debug("taskbar _try_enable failed", exc_info=True)
 
@@ -307,13 +313,19 @@ else:
                 return
             try:
                 value = ctypes.c_int(1 if enabled else 0)
-                hr = dwmapi.DwmSetWindowAttribute(
+                hr_force = dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(self._hwnd), DWMWA_FORCE_ICONIC_REPRESENTATION,
+                    ctypes.byref(value), ctypes.sizeof(value),
+                )
+                hr_has = dwmapi.DwmSetWindowAttribute(
                     wintypes.HWND(self._hwnd), DWMWA_HAS_ICONIC_BITMAP,
                     ctypes.byref(value), ctypes.sizeof(value),
                 )
-                self._enabled = (hr == 0 and enabled)
-                if hr != 0:
-                    log.info("DwmSetWindowAttribute(HAS_ICONIC_BITMAP) failed hr=%s", hr)
+                self._enabled = (hr_force == 0 and hr_has == 0 and enabled)
+                log.info(
+                    "DWM iconic mode set: enabled=%s (force_hr=%s, has_hr=%s)",
+                    enabled, hr_force, hr_has
+                )
             except Exception:
                 self._enabled = False
                 log.debug("taskbar _set_iconic_mode failed", exc_info=True)
@@ -330,10 +342,9 @@ else:
             except Exception:
                 log.debug("installing native filter failed", exc_info=True)
 
-        def _on_visibility_changed(self, vis):
+        def _on_visibility_changed(self, *args):
             try:
-                from PySide6.QtGui import QWindow
-                minimized = vis == QWindow.Visibility.Minimized
+                minimized = self._is_minimized()
                 # The engine only feeds this cache from its Soft/vmem callback
                 # path. Turbo intentionally yields None; do not capture a
                 # potentially stale native child HWND.
@@ -352,7 +363,11 @@ else:
                 if win is None:
                     return False
                 from PySide6.QtGui import QWindow
-                return win.visibility() == QWindow.Visibility.Minimized
+                from PySide6.QtCore import Qt
+                vis = win.visibility() if hasattr(win, "visibility") else None
+                state = win.windowState() if hasattr(win, "windowState") else None
+                return (vis == QWindow.Visibility.Minimized or
+                        state == Qt.WindowState.WindowMinimized)
             except Exception:
                 return False
 
@@ -418,11 +433,15 @@ else:
                 self._invalidate_timer.stop()
             except Exception:
                 pass
-            # Remove iconic attribute to restore default behavior
+            # Remove iconic attributes to restore default behavior
             try:
                 if self._hwnd and _WIN32_OK:
                     hwnd = wintypes.HWND(self._hwnd)
                     false_val = ctypes.c_int(0)
+                    dwmapi.DwmSetWindowAttribute(
+                        hwnd, DWMWA_FORCE_ICONIC_REPRESENTATION,
+                        ctypes.byref(false_val), ctypes.sizeof(false_val)
+                    )
                     dwmapi.DwmSetWindowAttribute(
                         hwnd, DWMWA_HAS_ICONIC_BITMAP,
                         ctypes.byref(false_val), ctypes.sizeof(false_val)
