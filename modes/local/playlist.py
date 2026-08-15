@@ -13,9 +13,12 @@ block the UI while it works out how long each one is (§P1.5).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import random
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 
@@ -28,19 +31,19 @@ from PySide6.QtCore import (
     QRunnable,
     Qt,
     QThreadPool,
+    QTimer,
     Signal,
     Slot,
 )
 
 from core import paths as path_utils
-from core.media_types import (
-    AUDIO_EXTENSIONS,
-    MEDIA_EXTENSIONS,
-    SUBTITLE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
-)
+from core.media_types import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS
 
 log = logging.getLogger(__name__)
+
+LOCAL_PLAYLIST_FILENAME = "local-playlist.json"
+PLAYLIST_FORMAT_VERSION = 1
+SAVE_DEBOUNCE_MS = 400
 
 
 class RepeatMode(IntEnum):
@@ -151,13 +154,23 @@ class PlaylistModel(QAbstractListModel):
     shuffleChanged = Signal()
     playRequested = Signal(str, int)  # path, index
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        storage_path: Path | None = None,
+    ) -> None:
         super().__init__(parent)
         self._tracks: list[Track] = []
         self._current = -1
         self._repeat = RepeatMode.Off
         self._shuffle = False
         self._shuffle_order: list[int] = []
+        self._storage_path = Path(storage_path) if storage_path is not None else None
+        self._save_dirty = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(SAVE_DEBOUNCE_MS)
+        self._save_timer.timeout.connect(self.save)
         # A pool of our own, not QThreadPool.globalInstance(). The global pool
         # is shared with the rest of Qt and cannot be drained without stalling
         # unrelated work, so shutdown() had no way to guarantee that every
@@ -170,6 +183,11 @@ class PlaylistModel(QAbstractListModel):
         self._probe_signals = _ProbeSignals()
         self._probe_signals.done.connect(self._on_probed)
         self._shut_down = False
+
+        # The Local queue is session-persistent, just like M3U remembers its
+        # last saved source. Loading only rebuilds the list and current marker;
+        # it deliberately never emits playRequested, so startup stays silent.
+        self._load_saved_playlist()
 
     # ------------------------------------------------------ model plumbing ---
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt override
@@ -199,6 +217,169 @@ class PlaylistModel(QAbstractListModel):
             self.IsCurrentRole: QByteArray(b"isCurrent"),
             self.IsAudioRole: QByteArray(b"isAudio"),
         }
+
+    # --------------------------------------------------------- persistence ---
+    def _load_saved_playlist(self) -> None:
+        """Restore valid local files in their saved order without playing.
+
+        A missing or unreadable store is just an empty first run. Files can
+        disappear between sessions (renamed, deleted, or on an unplugged
+        drive), so each unavailable row is skipped rather than making startup
+        fail. The stored file is not rewritten merely because a drive is
+        temporarily absent; reconnecting it before a later launch can bring
+        those rows back.
+        """
+        path = self._storage_path
+        if path is None or not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError):
+            log.warning("local playlist store is corrupt (%s) — starting empty", path)
+            self._backup_corrupt_store()
+            return
+        except OSError as exc:
+            log.warning("could not read local playlist store %s: %s", path, exc)
+            return
+
+        if not isinstance(raw, dict) or not isinstance(raw.get("tracks"), list):
+            log.warning(
+                "local playlist store has an invalid format (%s) — starting empty", path
+            )
+            self._backup_corrupt_store()
+            return
+
+        try:
+            saved_current = int(raw.get("currentIndex", -1))
+        except (TypeError, ValueError, OverflowError):
+            saved_current = -1
+        saved_current_path = path_utils.normalise_path(raw.get("currentPath", ""))
+
+        restored: list[Track] = []
+        restored_current = -1
+        skipped = 0
+        for original_index, item in enumerate(raw["tracks"]):
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            text = path_utils.normalise_path(item.get("path", ""))
+            if not text:
+                skipped += 1
+                continue
+            candidate = Path(text).expanduser()
+            try:
+                usable = (
+                    candidate.is_file() and candidate.suffix.lower() in MEDIA_EXTENSIONS
+                )
+            except OSError:
+                usable = False
+            if not usable:
+                skipped += 1
+                continue
+            try:
+                duration = max(0, int(item.get("duration", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                duration = 0
+            title = str(item.get("title", "") or candidate.stem)
+            restored.append(Track(str(candidate), title, duration, True))
+            if original_index == saved_current:
+                restored_current = len(restored) - 1
+
+        # currentPath makes the selection resilient to an older store without
+        # currentIndex and to harmless row-format changes. currentIndex remains
+        # authoritative for duplicate file entries.
+        if restored_current < 0 and saved_current_path:
+            for row, track in enumerate(restored):
+                if path_utils.normalise_path(track.path) == saved_current_path:
+                    restored_current = row
+                    break
+
+        self._tracks = restored
+        self._current = restored_current
+        self._rebuild_shuffle()
+        if restored:
+            log.info("restored %d Local playlist item(s)", len(restored))
+        if skipped:
+            log.info("skipped %d unavailable Local playlist item(s)", skipped)
+
+    def _backup_corrupt_store(self) -> None:
+        """Keep a broken store for diagnosis instead of overwriting it."""
+        path = self._storage_path
+        if path is None or not path.exists():
+            return
+        base = path.with_suffix(".corrupt.json")
+        backup = base
+        number = 2
+        while backup.exists():
+            backup = base.with_name(f"{base.stem}-{number}{base.suffix}")
+            number += 1
+        try:
+            path.replace(backup)
+        except OSError:
+            log.debug("could not back up corrupt local playlist store", exc_info=True)
+
+    @staticmethod
+    def _saved_path(raw: str) -> str:
+        """Persist an absolute spelling so launch working-directory changes do
+        not break files that originally arrived as relative command-line paths."""
+        try:
+            return str(Path(raw).expanduser().resolve(strict=False))
+        except (OSError, RuntimeError, ValueError):
+            return str(raw)
+
+    def _schedule_save(self) -> None:
+        if self._storage_path is None or self._shut_down:
+            return
+        self._save_dirty = True
+        self._save_timer.start()
+
+    @Slot()
+    def save(self) -> None:
+        """Atomically write the queue if it changed since the last save."""
+        self._save_timer.stop()
+        path = self._storage_path
+        if path is None or not self._save_dirty:
+            return
+
+        current_path = ""
+        if 0 <= self._current < len(self._tracks):
+            current_path = self._saved_path(self._tracks[self._current].path)
+        payload = {
+            "version": PLAYLIST_FORMAT_VERSION,
+            "currentIndex": self._current,
+            "currentPath": current_path,
+            "tracks": [
+                {
+                    "path": self._saved_path(track.path),
+                    "title": track.title,
+                    "duration": track.duration_ms,
+                }
+                for track in self._tracks
+            ],
+        }
+
+        temp_name = ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, path)
+            self._save_dirty = False
+        except (OSError, TypeError, ValueError):
+            # TypeError/ValueError are defensive: normal app rows contain only
+            # JSON-safe values, but restore() is also a public Python API. One
+            # bad caller must not let a timer callback bring down the app.
+            log.warning("could not save Local playlist %s", path, exc_info=True)
+            if temp_name:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
 
     # -------------------------------------------------------------- adding ---
     @Slot(list)
@@ -251,6 +432,7 @@ class PlaylistModel(QAbstractListModel):
         self._rebuild_shuffle()
         for track in incoming:
             self._pool.start(_ProbeTask(track.path, self._probe_signals))
+        self._schedule_save()
         return len(incoming)
 
     def _scan_folder(self, folder: Path) -> list[Track]:
@@ -271,6 +453,7 @@ class PlaylistModel(QAbstractListModel):
                 track.probed = True
                 idx = self.index(row, 0)
                 self.dataChanged.emit(idx, idx, [self.DurationRole])
+                self._schedule_save()
                 break
 
     # ------------------------------------------------------------ removing ---
@@ -282,10 +465,12 @@ class PlaylistModel(QAbstractListModel):
         Returns True if the currently playing track was among the removed rows.
         """
         playing_removed = False
+        changed = False
         playing_row = self._current
         wanted = sorted({int(r) for r in rows}, reverse=True)
         for row in wanted:
             if 0 <= row < len(self._tracks):
+                changed = True
                 if row == playing_row:
                     playing_removed = True
                 self.beginRemoveRows(QModelIndex(), row, row)
@@ -299,6 +484,8 @@ class PlaylistModel(QAbstractListModel):
 
         self.countChanged.emit()
         self._rebuild_shuffle()
+        if changed:
+            self._schedule_save()
         return playing_removed
 
     @Slot()
@@ -310,6 +497,7 @@ class PlaylistModel(QAbstractListModel):
         self.countChanged.emit()
         self.currentIndexChanged.emit(-1)
         self._rebuild_shuffle()
+        self._schedule_save()
 
     @Slot(int, int)
     def move_row(self, source: int, target: int) -> None:
@@ -318,7 +506,10 @@ class PlaylistModel(QAbstractListModel):
         if not (0 <= source < n) or not (0 <= target < n) or source == target:
             return
         self.beginMoveRows(
-            QModelIndex(), source, source, QModelIndex(),
+            QModelIndex(),
+            source,
+            source,
+            QModelIndex(),
             target + 1 if target > source else target,
         )
         track = self._tracks.pop(source)
@@ -330,6 +521,7 @@ class PlaylistModel(QAbstractListModel):
             self._set_current(self._current - 1)
         elif target <= self._current < source:
             self._set_current(self._current + 1)
+        self._schedule_save()
 
     # ----------------------------------------------------------- playback ---
     @Slot(int)
@@ -440,6 +632,7 @@ class PlaylistModel(QAbstractListModel):
                 idx = self.index(changed, 0)
                 self.dataChanged.emit(idx, idx, [self.IsCurrentRole])
         self.currentIndexChanged.emit(row)
+        self._schedule_save()
 
     @Slot(str)
     def set_current_by_path(self, path: str) -> None:
@@ -520,6 +713,7 @@ class PlaylistModel(QAbstractListModel):
         if self._shut_down:
             return
         self._shut_down = True
+        self._save_timer.stop()
         self._probe_signals.cancelled = True
         try:
             # Drop probes that have not started; they cannot be waited on.
@@ -535,6 +729,9 @@ class PlaylistModel(QAbstractListModel):
             self._probe_signals.done.disconnect(self._on_probed)
         except (RuntimeError, TypeError):
             pass  # already disconnected, or the receiver is gone
+        # Normal app exit always flushes the latest queue, even if the 400 ms
+        # debounce has not elapsed yet.
+        self.save()
 
     def to_list(self) -> list[dict]:
         return [
@@ -543,13 +740,22 @@ class PlaylistModel(QAbstractListModel):
         ]
 
     def restore(self, items: list[dict]) -> None:
+        previous = self._current
         self.beginResetModel()
         self._tracks = [
-            Track(i["path"], i.get("title", Path(i["path"]).stem), i.get("duration", 0), True)
+            Track(
+                i["path"],
+                i.get("title", Path(i["path"]).stem),
+                i.get("duration", 0),
+                True,
+            )
             for i in items
             if i.get("path")
         ]
         self._current = -1
         self.endResetModel()
         self.countChanged.emit()
+        if previous != -1:
+            self.currentIndexChanged.emit(-1)
         self._rebuild_shuffle()
+        self._schedule_save()

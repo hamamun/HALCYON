@@ -520,9 +520,11 @@ def _build_mode_context(spec, player, controller, settings):
         return spec.setup(engine=player, controller=controller, settings=settings)
 
     if spec.id == "local":
-        from modes.local.playlist import PlaylistModel
+        from modes.local.playlist import LOCAL_PLAYLIST_FILENAME, PlaylistModel
 
-        playlist = PlaylistModel()
+        playlist = PlaylistModel(
+            storage_path=settings.path.parent / LOCAL_PLAYLIST_FILENAME
+        )
         playlist.playRequested.connect(lambda path, _row: controller.openPath(path))
 
         # Restore what the user left set, and — the half that was missing —
