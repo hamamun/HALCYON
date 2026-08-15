@@ -48,6 +48,13 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
     if vlc_plugins.exists():
         args.append(f"--include-data-dir={vlc_plugins}=vendor/vlc/plugins")
 
+    # libVLC's binauralizer resolves its HRTF relative to the directory holding
+    # libvlccore.dll, so the frozen build must keep hrtfs/ next to it or 5.1
+    # content loses spatial audio with only a stderr line to show for it.
+    vlc_hrtfs = ROOT / "vendor" / "vlc" / "hrtfs"
+    if vlc_hrtfs.exists():
+        args.append(f"--include-data-dir={vlc_hrtfs}=vendor/vlc/hrtfs")
+
     webview2_vendor = ROOT / "vendor" / "webview2"
     if webview2_vendor.exists():
         args.append(f"--include-data-dir={webview2_vendor}=vendor/webview2")

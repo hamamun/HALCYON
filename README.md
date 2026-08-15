@@ -67,8 +67,20 @@ Old files `requirements-phase1.txt`, `requirements-dev.txt`, `requirements-dev-f
    vendor/vlc/
    ├── libvlc.dll
    ├── libvlccore.dll
-   └── plugins/          ← the whole directory
+   ├── plugins/          ← the whole directory
+   └── hrtfs/            ← the whole directory (spatial audio, see below)
    ```
+
+   `hrtfs/` holds `dodeca_and_7channel_3DSL_HRTF.sofa`, which libVLC's
+   binauralizer uses to render multichannel audio for headphones. It resolves
+   that path relative to the directory containing `libvlccore.dll`, so the
+   folder name **must** be `hrtfs`. Without it, playing a 5.1 track prints
+   `Could not load the SOFA HRTF` to stderr — bypassing Halcyon's logging,
+   since it happens inside libVLC — and the audio falls back to a plain
+   downmix. Playback is otherwise unaffected, so it is easy to miss.
+
+   A `.sofa` left loose in `vendor/vlc/` is also picked up: Halcyon then passes
+   `--hrtf-file` explicitly at startup and logs `using bundled HRTF at …`.
 
 3. Verify:
 

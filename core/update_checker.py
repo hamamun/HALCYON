@@ -46,10 +46,12 @@ VLC_FILES = [
     ("libvlc.dll",        "root of extracted folder"),
     ("libvlccore.dll",    "root of extracted folder"),
     ("plugins/ (folder)", "root of extracted folder"),
+    ("hrtfs/ (folder)",   "root of extracted folder"),
 ]
 VLC_PLACE_PATHS = [
     ("vendor\\vlc",            "libvlc.dll, libvlccore.dll"),
     ("vendor\\vlc\\plugins",   "contents of the plugins/ folder"),
+    ("vendor\\vlc\\hrtfs",     "the .sofa HRTF (spatial audio for 5.1 on headphones)"),
 ]
 
 WEBVIEW2_EXTRACTION_GUIDE = (
@@ -514,3 +516,39 @@ class UpdateChecker(QObject):
     def appRootPath(self) -> str:  # noqa: N802
         """Absolute path of the application root (for display in the UI)."""
         return str(paths.ROOT)
+
+    # ──────────────────────────────────────────────────── optional extras ──
+
+    @Property(bool, constant=True)
+    def vlcHrtfPresent(self) -> bool:  # noqa: N802
+        """Is a bundled ``.sofa`` HRTF installed where libVLC can use it?
+
+        Surfaced to the Update tab because its absence is otherwise invisible:
+        libVLC prints "Could not load the SOFA HRTF" straight to stderr and
+        then downmixes anyway, so 5.1-on-headphones quietly loses binaural
+        spatialisation with nothing in the app log to explain it.
+        """
+        try:
+            from engine.vlc_engine import find_bundled_hrtf
+
+            found, _ = find_bundled_hrtf(paths.VENDOR_VLC)
+            return found is not None
+        except Exception:
+            log.debug("HRTF presence check failed", exc_info=True)
+            return False
+
+    @Property(str, constant=True)
+    def vlcHrtfStatus(self) -> str:  # noqa: N802
+        """Human-readable HRTF state for the Update tab."""
+        try:
+            from engine.vlc_engine import find_bundled_hrtf
+
+            found, needs_option = find_bundled_hrtf(paths.VENDOR_VLC)
+        except Exception:
+            log.debug("HRTF status check failed", exc_info=True)
+            return "Unknown"
+        if found is None:
+            return "Not installed — 5.1 on headphones uses a plain downmix"
+        if needs_option:
+            return f"Installed ({found.name}) — loaded via --hrtf-file"
+        return f"Installed ({found.name})"
