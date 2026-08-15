@@ -91,6 +91,12 @@ class AppController(QObject):
     tracksChanged = Signal()
     resumePrompted = Signal(str, int)
     mediaNameChanged = Signal()
+    #: A playlist mutation removed the active media and left no replacement
+    #: playing.  This is deliberately separate from engine.mediaChanged:
+    #: stop() clears the engine without opening another media, so no media
+    #: change is announced.  Shared UI such as the OSD uses this lifecycle
+    #: signal to retire controls that would otherwise still target that media.
+    playlistPlaybackCleared = Signal()
     #: The selected video mode (auto/soft/turbo) or the effective route
     #: (soft/turbo) changed — §V.2. The Settings dropdown and the Turbo stage
     #: both bind to this rather than polling the engine.
@@ -768,6 +774,10 @@ class AppController(QObject):
                 self._metadata.load("")
                 self._lyrics.load("")
                 self._reset_track_state()
+                # stop() does not emit engine.mediaChanged: there is no new
+                # media to announce.  Publish the missing lifecycle edge so a
+                # Resume / Start Over toast cannot outlive the removed item.
+                self.playlistPlaybackCleared.emit()
             else:
                 target_idx = cur - removed_before
                 if target_idx < new_count:
@@ -793,6 +803,10 @@ class AppController(QObject):
         self._metadata.load("")
         self._lyrics.load("")
         self._reset_track_state()
+        # As above, an empty player has no following mediaChanged event.  Keep
+        # this on the controller action (rather than the Local panel) so the
+        # toolbar, Delete key and mobile remote all retire shared playback UI.
+        self.playlistPlaybackCleared.emit()
 
     def _current_path(self) -> str:
         """Filesystem path of whatever the engine currently has open."""

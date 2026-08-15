@@ -47,6 +47,8 @@ def test_clear_playlist_resets_engine_and_metadata(qt_app, playlist_with_tracks)
 
     controller = AppController(engine, settings, library, metadata, lyrics, equalizer)
     controller.register_context("local", model)
+    playback_cleared = []
+    controller.playlistPlaybackCleared.connect(lambda: playback_cleared.append(True))
 
     controller.clearPlaylist()
 
@@ -55,6 +57,7 @@ def test_clear_playlist_resets_engine_and_metadata(qt_app, playlist_with_tracks)
     engine.stop.assert_called_once()
     metadata.load.assert_called_with("")
     lyrics.load.assert_called_with("")
+    assert playback_cleared == [True]
 
 
 def test_play_pause_when_playlist_empty_does_not_play(qt_app):
@@ -127,7 +130,9 @@ def test_clear_selected_playing_track_autostarts_next_track(qt_app, playlist_wit
     controller.register_context("local", model)
 
     requested = []
+    playback_cleared = []
     model.playRequested.connect(lambda p, i: requested.append((p, i)))
+    controller.playlistPlaybackCleared.connect(lambda: playback_cleared.append(True))
 
     # Clear selected track 1 (the currently playing track)
     controller.clearSelected([1])
@@ -137,6 +142,9 @@ def test_clear_selected_playing_track_autostarts_next_track(qt_app, playlist_wit
     assert model.current_index() == 1
     assert len(requested) == 1
     assert requested[0][0] == paths[2]
+    # A replacement is opening; its mediaChanged event owns cleanup. Emitting
+    # the empty-player signal here would erase a valid resume toast for it.
+    assert playback_cleared == []
 
 
 def test_clear_selected_last_track_autostarts_previous_track(qt_app, playlist_with_tracks):
@@ -184,6 +192,8 @@ def test_clear_selected_only_track_stops_playback(qt_app, tmp_path):
 
     controller = AppController(engine, settings, library, metadata, lyrics, equalizer)
     controller.register_context("local", model)
+    playback_cleared = []
+    controller.playlistPlaybackCleared.connect(lambda: playback_cleared.append(True))
 
     controller.clearSelected([0])
 
@@ -191,6 +201,7 @@ def test_clear_selected_only_track_stops_playback(qt_app, tmp_path):
     assert model.current_index() == -1
     engine.stop.assert_called_once()
     metadata.load.assert_called_with("")
+    assert playback_cleared == [True]
 
 
 def test_clear_selected_non_playing_track_keeps_playing_track(qt_app, playlist_with_tracks):
@@ -207,6 +218,8 @@ def test_clear_selected_non_playing_track_keeps_playing_track(qt_app, playlist_w
 
     controller = AppController(engine, settings, library, metadata, lyrics, equalizer)
     controller.register_context("local", model)
+    playback_cleared = []
+    controller.playlistPlaybackCleared.connect(lambda: playback_cleared.append(True))
 
     # Remove track 0 (index 0)
     controller.clearSelected([0])
@@ -216,6 +229,7 @@ def test_clear_selected_non_playing_track_keeps_playing_track(qt_app, playlist_w
     assert model.current_index() == 1
     assert model.path_at(1) == paths[2]
     engine.stop.assert_not_called()
+    assert playback_cleared == []
 
 
 # ---------------------------------------------------- Shuffle and Repeat Logic ---
