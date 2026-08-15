@@ -220,3 +220,36 @@ def test_new_toasts_work_after_a_mode_switch(window, gui_app):
     assert _pill_containing(osd, "Start Over").property("visible") is True
     assert osd.property("resumePath") == "/tmp/new.mkv"
 
+
+def test_playlist_playback_clear_retires_start_over_toast(window, gui_app):
+    """Removing the current/last item has no following mediaChanged event.
+
+    Drive the controller's dedicated lifecycle edge and verify the real OSD
+    immediately removes both the visible prompt and its stored click target.
+    Its stopped timers must not resurrect the prompt afterwards.
+    """
+    from PySide6.QtTest import QTest
+
+    osd = _find(window, "osdLayer")
+    stub = window._refs[1]
+
+    # Begin from a clean OSD even if this module-scoped window was left with a
+    # toast by the preceding test.
+    osd.clear()
+    osd.showResume("/tmp/deleted.mkv", 867_000)
+    resume_pill = _pill_containing(osd, "Start Over")
+    assert resume_pill.property("visible") is True
+    assert osd.property("resumePath") == "/tmp/deleted.mkv"
+
+    stub.playlistPlaybackCleared.emit()
+
+    # visible:false removes the toast and button immediately.  Opacity still
+    # completes its declared Behavior animation while the item is off-scene.
+    assert resume_pill.property("visible") is False
+    assert osd.property("resumePath") == ""
+
+    QTest.qWait(400)
+    assert resume_pill.property("visible") is False
+    assert resume_pill.property("opacity") == 0.0
+    assert osd.property("resumePath") == ""
+

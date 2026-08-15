@@ -66,6 +66,7 @@ class _Stub(QObject):
     subtitleDelayChanged = Signal()
     activeModeChanged = Signal()
     resumePrompted = Signal(str, int)
+    playlistPlaybackCleared = Signal()
 
     def __init__(self) -> None:
         super().__init__()

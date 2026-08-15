@@ -1428,6 +1428,18 @@ Shell {
         }
     }
 
+    // Removing the active playlist item normally opens its replacement, and
+    // the Player.mediaChanged cleanup below retires the old Resume toast.  The
+    // last-item / Clear Playlist case only stops the player, however, so there
+    // is no new mediaChanged event.  The controller publishes that missing
+    // lifecycle edge from the shared action path (desktop and mobile alike).
+    // Reuse the same complete cleanup as a mode switch: it also stops every
+    // timer and forgets resumePath, leaving no stale Start Over click target.
+    Connections {
+        target: App
+        function onPlaylistPlaybackCleared() { osdLayer.clear() }
+    }
+
     // ======================================================================
     // NOW-PLAYING TOAST — one hook for every media change. The core emits
     // mediaNameChanged from the single media-open path (app.py), so
