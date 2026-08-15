@@ -409,10 +409,17 @@ class ChannelModel(QAbstractListModel):
 
 class _LoadSignals(QObject):
     """Bridge for the worker thread → GUI thread hand-off. A QRunnable cannot
-    carry signals, so they live on this small long-referenced object."""
+    carry signals, so they live on this small long-referenced object. Carries
+    a ``cancelled`` flag so in-flight loads stop talking to it once the context
+    is going away (same rule as Local's ``_ProbeSignals``).
+    """
 
     succeeded = Signal(str, str)   # source id, playlist text
     failed = Signal(str, str)      # source id, human message
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.cancelled = False
 
 
 class _LoadWorker(QRunnable):
@@ -444,10 +451,17 @@ class _LoadWorker(QRunnable):
             log.exception("playlist load failed for %s", self._source.location)
             error = "could not load the playlist"
 
-        if error is not None:
-            self._signals.failed.emit(self._source.id, error)
-        else:
-            self._signals.succeeded.emit(self._source.id, text)
+        # Re-check: the context may have been torn down during the fetch above,
+        # and emitting into a deleted QObject raises out of a pool thread.
+        try:
+            if self._signals.cancelled:
+                return
+            if error is not None:
+                self._signals.failed.emit(self._source.id, error)
+            else:
+                self._signals.succeeded.emit(self._source.id, text)
+        except (RuntimeError, Exception):
+            pass  # receiver already gone; nothing to report to
 
 
 class M3UContext(QObject):
@@ -490,6 +504,16 @@ class M3UContext(QObject):
         self._last_attempted_id = ""
         self._pending_source_id = ""
         self._inflight: dict[str, _LoadSignals] = {}
+        # A pool of our own, not QThreadPool.globalInstance(). The global pool
+        # is shared with the rest of Qt and cannot be drained without stalling
+        # unrelated work, so shutdown() had no way to guarantee that every
+        # in-flight playlist load had finished (modes/local/playlist.py keeps
+        # the same rule for its probes, §9). A load still inside
+        # `signals.succeeded.emit(...)` while Python collected the signals
+        # QObject tears the process down mid-interpreter-exit — owning the pool
+        # lets shutdown() wait, exactly like Local.
+        self._pool = QThreadPool(self)
+        self._shut_down = False
 
         self._previous_mode = controller.activeMode
         self._restored_last_source = False
@@ -632,7 +656,7 @@ class M3UContext(QObject):
         signals.succeeded.connect(self._on_load_succeeded)
         signals.failed.connect(self._on_load_failed)
         self._inflight[source_id] = signals
-        QThreadPool.globalInstance().start(_LoadWorker(source, signals))
+        self._pool.start(_LoadWorker(source, signals))
 
     @Slot()
     def retry(self) -> None:  # noqa: N802
@@ -800,6 +824,41 @@ class M3UContext(QObject):
         self._current_channel_name = ""
         self.infoChanged.emit()
         self._set_status("", is_error=False)
+
+    # ---------------------------------------------------------- shutdown ---
+    def shutdown(self) -> None:
+        """Stop accepting load results and wait for in-flight loads to exit.
+
+        Mirrors modes/local/playlist.py: setting the ``cancelled`` flag is not
+        enough on its own — a load that has already passed the check may be
+        inside ``succeeded.emit()`` when this object is collected, which
+        crashes the interpreter rather than raising (§9). Clearing the private
+        pool's queue and then *waiting* for the running loads is what makes
+        teardown deterministic. Idempotent — teardown paths may call it more
+        than once.
+        """
+        if self._shut_down:
+            return
+        self._shut_down = True
+        for signals in self._inflight.values():
+            signals.cancelled = True
+        try:
+            # Drop loads that have not started; they cannot be waited on.
+            self._pool.clear()
+            # Bounded wait: a load is a fetch + parse, a few seconds at worst
+            # over a slow link. The timeout means a wedged load can never hang
+            # application exit.
+            self._pool.waitForDone(5000)
+        except RuntimeError:
+            # Pool already destroyed by a previous shutdown() — nothing to do.
+            pass
+        for signals in self._inflight.values():
+            try:
+                signals.succeeded.disconnect(self._on_load_succeeded)
+                signals.failed.disconnect(self._on_load_failed)
+            except (RuntimeError, TypeError):
+                pass  # already disconnected, or the receiver is gone
+        self._inflight.clear()
 
     # ------------------------------------------------------------ internals --
     def _remember_unsaved_source(self, name: str, kind: str, location: str) -> None:
