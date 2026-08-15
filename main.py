@@ -57,6 +57,23 @@ def debug_enabled(argv: list[str]) -> bool:
     return os.environ.get("HALCYON_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def shutdown_trace_enabled(argv: list[str]) -> bool:
+    """``--trace-shutdown`` on the command line, or the env equivalent.
+
+    Arms a watchdog that dumps every thread's stack if the process is still
+    alive a few seconds after ``aboutToQuit``. Used to pin down the exact
+    location of a shutdown hang; inert on every normal run.
+    """
+    if "--trace-shutdown" in argv[1:]:
+        return True
+    return os.environ.get("HALCYON_TRACE_SHUTDOWN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def configure_logging(debug: bool = False) -> None:
     """Set up logging, and in debug mode route *Qt's* messages here too.
 
@@ -118,6 +135,17 @@ def main(argv: list[str] | None = None) -> int:
     log = logging.getLogger("halcyon")
     if debug:
         log.debug("debug mode on — Qt/QML messages are routed through logging")
+
+    # Opt-in shutdown hang tracer. Starts an idle daemon thread that only does
+    # something if the process is still alive a few seconds after aboutToQuit.
+    # No effect at all unless --trace-shutdown (or HALCYON_TRACE_SHUTDOWN=1) is
+    # passed. Never touches playback, VLC, or QML.
+    shutdown_tracer = None
+    if shutdown_trace_enabled(argv):
+        from core.shutdown_trace import ShutdownTracer
+
+        shutdown_tracer = ShutdownTracer(ROOT / "shutdown-trace.log")
+        shutdown_tracer.start()
 
     # WebView2 uses COM on the GUI thread.  Initialise pythonnet's bridge before
     # Qt creates any view; failure is deliberately non-fatal because Local/M3U
@@ -368,6 +396,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- shutdown, in the right order (§9) ---------------------------------
     def on_quit() -> None:
+        # Start the watchdog's grace countdown *before* any cleanup, so a hang
+        # inside cleanup itself is captured too.
+        if shutdown_tracer is not None:
+            shutdown_tracer.arm()
+
         # Taskbar preview first: it touches the window handle, so it must go
         # before Qt tears the window down.
         try:
@@ -433,7 +466,15 @@ def main(argv: list[str] | None = None) -> int:
     if media_args:
         controller.addPaths(media_args)
 
-    return app.exec()
+    exit_code = app.exec()
+    # If we got here, the Qt event loop returned. The QML engine and QObjects
+    # are then destroyed as main() unwinds and locals are released. A hang here
+    # (engine shut down logged, but the process never exits) happens inside
+    # that destruction; the tracer catches it. Cancel it only if we finish
+    # tearing down promptly.
+    if shutdown_tracer is not None:
+        shutdown_tracer.cancel()
+    return exit_code
 
 
 def _resolve_backend(requested: str, paths, log) -> str:
