@@ -18,8 +18,10 @@ work; they emit a queued Qt signal and return immediately.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
+import time
 from enum import IntEnum
 from pathlib import Path
 
@@ -79,6 +81,21 @@ _SETTLED_STATES = (0, 5, 6, 7)
 # Never let such a value cross the Python/Qt boundary: shiboken raises an
 # OverflowError and QML retains its previous (often end-of-file) seek state.
 _QT_INT_MAX = 2_147_483_647
+
+# libVLC's public time and position values are samples from the demuxer, not a
+# continuously advancing presentation clock. Some files update them sparsely;
+# malformed files can leave one value at zero or -1 until the first seek. The
+# UI clock therefore advances between trustworthy samples. A fresh sample may
+# lead the current UI value by the time since the previous poll plus this small
+# allowance; anything farther away is treated as a broken/stale sample rather
+# than making every clock and seek bar jump.
+_TIMELINE_SAMPLE_SLOP_MS = 2_000
+# A normal poll gap is 200 ms. If the process wakes after system sleep, libVLC
+# can still say Playing while its unchanged samples correctly show that no media
+# time elapsed. Never turn that ambiguous wall-clock gap into a jump to the end;
+# backend samples may account for the full gap, but interpolation does not guess
+# across an unexplained delay longer than five seconds.
+_TIMELINE_MAX_FALLBACK_GAP_MS = 5_000
 
 
 def _qt_milliseconds(value) -> int | None:
@@ -243,6 +260,11 @@ class VlcEngine(QObject):
     _pending_turbo_play = False
     _video_width = 0
     _video_height = 0
+    # Defaults keep the timeline helpers safe in focused tests that construct
+    # VlcEngine with __new__ instead of starting a native libVLC instance.
+    _timeline_tick = None
+    _last_vlc_time = None
+    _last_vlc_position = None
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -278,6 +300,11 @@ class VlcEngine(QObject):
         self._position = 0.0
         self._time = 0
         self._buffered = 0.0
+        # Wall-clock anchor used only to keep the *displayed* timeline moving
+        # between libVLC samples. It never drives decoding or A/V sync.
+        self._timeline_tick = time.monotonic()
+        self._last_vlc_time: int | None = None
+        self._last_vlc_position: float | None = None
         self._volume = 80
         self._muted = False
         self._rate = 1.0
@@ -389,18 +416,51 @@ class VlcEngine(QObject):
         self.tracksChanged.emit()
 
     # ---------------------------------------------------------------- poll ---
-    def _poll_state(self) -> None:
-        """Publish engine state on the GUI thread, 5x a second.
+    def _plausible_timeline_sample(
+        self, candidate_ms: int, expected_advance_ms: float, state: State
+    ) -> int | None:
+        """Validate one libVLC timeline sample against the displayed clock.
 
-        Every reading is fetched independently. A single ``try`` around the
-        whole body meant one unlucky call — and ``get_state()`` was an
-        unlucky call on *every* tick, see :func:`_enum_int` — silently killed
-        the time, duration and position updates that follow it.
+        During ordinary playback the timeline is monotonic. User seeks already
+        update ``self._time`` before the next poll, so a stale pre-seek sample
+        is either behind that value or implausibly far ahead and is rejected.
+        This is also what keeps a malformed ``get_position() == 1.0`` from
+        throwing a newly opened file straight to its end.
+        """
+        candidate = max(0, int(candidate_ms))
+        if self._duration > 0:
+            candidate = min(candidate, self._duration)
+        if state != State.Playing:
+            return candidate
+        if candidate <= self._time:
+            # A stale/equal sample must not both move the clock backwards *or*
+            # consume this poll tick. Returning None lets the monotonic fallback
+            # advance normally; explicit backward seeks have already moved
+            # _time before polling resumes.
+            return None
+        allowed_lead = max(0.0, expected_advance_ms) + _TIMELINE_SAMPLE_SLOP_MS
+        if candidate - self._time > allowed_lead:
+            return None
+        return candidate
+
+    def _poll_state(self) -> None:
+        """Publish engine state and a resilient UI timeline, 5x a second.
+
+        libVLC's time/position properties are demuxer samples. Their update
+        frequency is not guaranteed, and a damaged timestamp can leave one at
+        zero or -1 until a seek. We still prefer every sane libVLC sample, then
+        its separately reported position sample, and finally advance the *displayed*
+        clock from ``time.monotonic`` while the player says it is Playing.
+        Decoding and A/V sync remain entirely owned by libVLC.
+
+        Every backend reading is fetched independently, so one unlucky call can
+        never prevent state, duration, timeline, or video-size updates.
         """
         if self._releasing or self._player is None:
             return
 
         player = self._player
+        previous_state = self._state
 
         try:
             state = _VLC_STATE_MAP.get(_enum_int(player.get_state()), State.Idle)
@@ -410,6 +470,24 @@ class VlcEngine(QObject):
             self._state = state
             self.stateChanged.emit(int(state))
 
+        now = time.monotonic()
+        last_tick = getattr(self, "_timeline_tick", None)
+        self._timeline_tick = now
+        elapsed_ms = max(0.0, (now - last_tick) * 1000.0) if last_tick is not None else 0.0
+        # Do not charge Opening/Buffering/Paused time to playback merely because
+        # the transition to Playing happened between two 200 ms poll ticks.
+        playing_interval = state == State.Playing and previous_state == State.Playing
+        rate = max(0.0, float(self._rate))
+        # Full elapsed time validates a backend sample after a delayed GUI tick.
+        # The self-generated fallback is capped separately so suspend/resume
+        # cannot manufacture minutes of media time from an unchanged VLC clock.
+        expected_advance_ms = elapsed_ms * rate if playing_interval else 0.0
+        fallback_advance_ms = (
+            elapsed_ms * rate
+            if playing_interval and elapsed_ms <= _TIMELINE_MAX_FALLBACK_GAP_MS
+            else 0.0
+        )
+
         # Apply a queued resume as soon as the media is genuinely playing.
         # Cleared before the seek, not after: if seek() raises we must not
         # retry on every one of the next five ticks a second.
@@ -418,12 +496,15 @@ class VlcEngine(QObject):
             self._pending_resume_ms = 0
             log.debug("applying resume seek to %d ms", resume_ms)
             self.seek(resume_ms)
+            # seek() anchors the clock at the instant of the request.
+            expected_advance_ms = 0.0
+            fallback_advance_ms = 0.0
 
         try:
             duration = _qt_milliseconds(player.get_length())
         except Exception:
             duration = None
-        # -1 means that VLC has not discovered the length yet.  Do not turn an
+        # -1 means that VLC has not discovered the length yet. Do not turn an
         # unsigned sentinel into a huge duration or emit it through Signal(int).
         if duration is not None and duration != self._duration:
             self._duration = duration
@@ -431,21 +512,79 @@ class VlcEngine(QObject):
 
         # While the user is dragging the seek bar the UI is authoritative:
         # publishing VLC's pre-seek time here would yank the knob backwards
-        # between the drag and the seek landing.
+        # between the drag and the seek landing. The monotonic anchor above is
+        # still refreshed, so releasing a long drag never creates a time jump.
         if not self._scrubbing:
             try:
-                time_ms = _qt_milliseconds(player.get_time())
+                raw_time = _qt_milliseconds(player.get_time())
             except Exception:
-                time_ms = None
-            if time_ms is not None and time_ms != self._time:
-                self._time = time_ms
-                self.timeChanged.emit(time_ms)
+                raw_time = None
+            previous_raw_time = getattr(self, "_last_vlc_time", None)
+            raw_time_changed = raw_time is not None and raw_time != previous_raw_time
+            if raw_time is not None:
+                self._last_vlc_time = raw_time
 
-            # VLC's native position is derived from the same timestamps, but
-            # for malformed MKV timestamps it can be 1.0 while get_time()
-            # returns an unsigned error sentinel.  Derive it only from values
-            # that passed the Qt range check, keeping the clock and seek knob
-            # coherent and preventing a false end-of-file position.
+            # Position is a fallback, never an unchecked source of truth. It is
+            # particularly valuable when get_time() is -1 or stuck, but old MKV
+            # demuxers can report a false 1.0 for malformed timestamps.
+            raw_position = None
+            getter = getattr(player, "get_position", None)
+            if callable(getter):
+                try:
+                    value = float(getter())
+                    if math.isfinite(value) and 0.0 <= value <= 1.0:
+                        raw_position = value
+                except (TypeError, ValueError, OverflowError):
+                    pass
+                except Exception:
+                    pass
+            previous_raw_position = getattr(self, "_last_vlc_position", None)
+            raw_position_changed = (
+                raw_position is not None
+                and (
+                    previous_raw_position is None
+                    or abs(raw_position - previous_raw_position) > 1e-7
+                )
+            )
+            if raw_position is not None:
+                self._last_vlc_position = raw_position
+
+            candidate = None
+            if raw_time_changed:
+                candidate = self._plausible_timeline_sample(
+                    raw_time, expected_advance_ms, state
+                )
+
+            if candidate is None and raw_position_changed and self._duration > 0:
+                # A lone 100% sample near the beginning is the known malformed
+                # MKV failure. A genuinely ending file has already brought the
+                # effective clock close to its duration, or reached Ended.
+                false_end = (
+                    raw_position >= 0.999
+                    and state != State.Ended
+                    and self._time < int(self._duration * 0.95)
+                )
+                if not false_end:
+                    position_time = int(round(raw_position * self._duration))
+                    candidate = self._plausible_timeline_sample(
+                        position_time, expected_advance_ms, state
+                    )
+
+            if candidate is None and state == State.Playing:
+                # Last resort for sparse, frozen, or invalid backend samples.
+                # This changes presentation only; no seek or decoder operation
+                # is performed, so ordinary playback cannot be disturbed.
+                candidate = self._time + int(round(fallback_advance_ms))
+                if self._duration > 0:
+                    candidate = min(candidate, self._duration)
+
+            if candidate is not None and candidate != self._time:
+                self._time = candidate
+                self.timeChanged.emit(candidate)
+
+            # Publish one coherent timeline. Remaining time in QML is duration
+            # minus this value, so elapsed, remaining, and the seek knob can no
+            # longer disagree when one libVLC property is temporarily bad.
             position = self._time / self._duration if self._duration > 0 else 0.0
             position = max(0.0, min(1.0, position))
             if abs(position - self._position) > 1e-5:
@@ -655,6 +794,9 @@ class VlcEngine(QObject):
 
     def _reset_timeline(self) -> None:
         """Clear published timeline values without relying on VLC callbacks."""
+        self._timeline_tick = time.monotonic()
+        self._last_vlc_time = None
+        self._last_vlc_position = None
         if self._time != 0:
             self._time = 0
             self.timeChanged.emit(0)
@@ -1006,6 +1148,7 @@ class VlcEngine(QObject):
             log.exception("seek failed")
             return
         self._time = ms
+        self._timeline_tick = time.monotonic()
         self.timeChanged.emit(self._time)
         if self._duration > 0:
             position = max(0.0, min(1.0, ms / self._duration))
@@ -1028,6 +1171,7 @@ class VlcEngine(QObject):
             log.exception("set_position failed")
             return
         self._position = fraction
+        self._timeline_tick = time.monotonic()
         self.positionChanged.emit(fraction)
         if self._duration > 0:
             time_ms = int(fraction * self._duration)
