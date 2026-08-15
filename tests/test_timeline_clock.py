@@ -45,6 +45,9 @@ class FakePlayer:
     def get_position(self):
         return self.position
 
+    def set_position(self, value):
+        self.position = float(value)
+
 
 class FakeVideoOutput:
     pass
@@ -199,6 +202,54 @@ def test_interpolation_honours_playback_rate(monkeypatch):
     engine._poll_state()
 
     assert engine.time == 1_500
+
+
+def test_a_long_suspend_gap_cannot_jump_a_stale_clock_to_the_end(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(vlc_engine.time, "monotonic", clock)
+    engine, player = _engine(clock)
+    player.time = -1
+    player.position = -1.0
+
+    _seed(engine)
+    clock.advance(60 * 60)  # system sleep / suspended GUI event loop
+    engine._poll_state()
+
+    assert engine.time == 0
+    assert engine.position == 0.0
+
+
+def test_backend_sample_can_account_for_a_long_delayed_gui_tick(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(vlc_engine.time, "monotonic", clock)
+    engine, player = _engine(clock)
+
+    _seed(engine)
+    clock.advance(60.0)
+    player.time = 60_000
+    player.position = 0.6
+    engine._poll_state()
+
+    assert engine.time == 60_000
+    assert engine.position == 0.6
+
+
+def test_position_seek_reanchors_interpolation_at_the_click(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(vlc_engine.time, "monotonic", clock)
+    engine, player = _engine(clock)
+
+    clock.advance(0.15)
+    engine.set_position(0.5)
+    assert engine.time == 50_000
+    assert engine._timeline_tick == clock()
+
+    # VLC may briefly return its pre-seek time. Only time after the click is
+    # interpolated; the 150 ms before it must not be counted a second time.
+    player.time = 0
+    clock.advance(0.2)
+    engine._poll_state()
+    assert engine.time == 50_200
 
 
 def test_reset_discards_old_samples_and_wall_clock_gap(monkeypatch):

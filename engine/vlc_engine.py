@@ -90,6 +90,12 @@ _QT_INT_MAX = 2_147_483_647
 # allowance; anything farther away is treated as a broken/stale sample rather
 # than making every clock and seek bar jump.
 _TIMELINE_SAMPLE_SLOP_MS = 2_000
+# A normal poll gap is 200 ms. If the process wakes after system sleep, libVLC
+# can still say Playing while its unchanged samples correctly show that no media
+# time elapsed. Never turn that ambiguous wall-clock gap into a jump to the end;
+# backend samples may account for the full gap, but interpolation does not guess
+# across an unexplained delay longer than five seconds.
+_TIMELINE_MAX_FALLBACK_GAP_MS = 5_000
 
 
 def _qt_milliseconds(value) -> int | None:
@@ -470,9 +476,15 @@ class VlcEngine(QObject):
         elapsed_ms = max(0.0, (now - last_tick) * 1000.0) if last_tick is not None else 0.0
         # Do not charge Opening/Buffering/Paused time to playback merely because
         # the transition to Playing happened between two 200 ms poll ticks.
-        expected_advance_ms = (
-            elapsed_ms * max(0.0, float(self._rate))
-            if state == State.Playing and previous_state == State.Playing
+        playing_interval = state == State.Playing and previous_state == State.Playing
+        rate = max(0.0, float(self._rate))
+        # Full elapsed time validates a backend sample after a delayed GUI tick.
+        # The self-generated fallback is capped separately so suspend/resume
+        # cannot manufacture minutes of media time from an unchanged VLC clock.
+        expected_advance_ms = elapsed_ms * rate if playing_interval else 0.0
+        fallback_advance_ms = (
+            elapsed_ms * rate
+            if playing_interval and elapsed_ms <= _TIMELINE_MAX_FALLBACK_GAP_MS
             else 0.0
         )
 
@@ -486,6 +498,7 @@ class VlcEngine(QObject):
             self.seek(resume_ms)
             # seek() anchors the clock at the instant of the request.
             expected_advance_ms = 0.0
+            fallback_advance_ms = 0.0
 
         try:
             duration = _qt_milliseconds(player.get_length())
@@ -561,7 +574,7 @@ class VlcEngine(QObject):
                 # Last resort for sparse, frozen, or invalid backend samples.
                 # This changes presentation only; no seek or decoder operation
                 # is performed, so ordinary playback cannot be disturbed.
-                candidate = self._time + int(round(expected_advance_ms))
+                candidate = self._time + int(round(fallback_advance_ms))
                 if self._duration > 0:
                     candidate = min(candidate, self._duration)
 
@@ -1158,6 +1171,7 @@ class VlcEngine(QObject):
             log.exception("set_position failed")
             return
         self._position = fraction
+        self._timeline_tick = time.monotonic()
         self.positionChanged.emit(fraction)
         if self._duration > 0:
             time_ms = int(fraction * self._duration)
