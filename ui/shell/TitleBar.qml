@@ -21,6 +21,12 @@ Item {
     property var meta: typeof Metadata !== "undefined" ? Metadata : null
     property var player: typeof Player !== "undefined" ? Player : null
 
+    // The app's icon mark (transparent "glass pane" glyph). Injected by main.py
+    // as a URL; falls back to the old gradient diamond when absent so this file
+    // still loads standalone (qmlscene, tests).
+    property url appIcon: typeof AppIcon !== "undefined" ? AppIcon : ""
+    readonly property real markWidth: appIcon.toString() !== "" ? 16 : 10
+
     // What is on air, as one line: "Artist — Title", or just the title when
     // there is no artist tag. Empty when nothing is loaded, which is what makes
     // the bar fall back to the plain "Halcyon" wordmark instead of showing an
@@ -86,10 +92,22 @@ Item {
             width: parent.width
             spacing: Theme.spaceSm
 
+            Image {
+                id: markImage
+                anchors.verticalCenter: parent.verticalCenter
+                width: 16; height: 16
+                source: root.appIcon
+                sourceSize: Qt.size(16, 16)
+                smooth: true
+                mipmap: true
+                visible: root.appIcon.toString() !== ""
+            }
             Rectangle {
+                id: markDiamond
                 width: 10; height: 10; radius: 2
                 anchors.verticalCenter: parent.verticalCenter
                 rotation: 45
+                visible: root.appIcon.toString() === ""
                 gradient: Gradient {
                     GradientStop { position: 0.0; color: Theme.accent }
                     GradientStop { position: 1.0; color: Theme.accentAlt }
@@ -121,10 +139,10 @@ Item {
                 visible: root.mediaTitle !== ""
                 text: root.mediaTitle
                 elide: Text.ElideRight
-                // Whatever is left after the diamond, the wordmark, the rule
+                // Whatever is left after the mark, the wordmark, the rule
                 // and the three gaps. Clamped at zero so a very narrow window
                 // simply shows nothing rather than a negative width warning.
-                width: Math.max(0, parent.width - wordmark.width - 10 - 1
+                width: Math.max(0, parent.width - wordmark.width - root.markWidth - 1
                                    - Theme.spaceSm * 3)
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeBody
