@@ -74,6 +74,26 @@ def shutdown_trace_enabled(argv: list[str]) -> bool:
     )
 
 
+def pythonnet_disabled(argv: list[str]) -> bool:
+    """``--no-pythonnet`` on the command line, or ``HALCYON_DISABLE_PYTHONNET=1``.
+
+    Diagnostic switch for the shutdown-hang hunt: skips the pythonnet/CLR
+    bootstrap entirely, so ``clr.dll``/``mscorlib`` never load into the
+    process. If the app then exits cleanly, the .NET-runtime-shutdown race is
+    the culprit (suspect #1); if it still hangs, the CLR is exonerated without
+    touching the code. Inert on every normal run — Web mode simply reports its
+    runtime as unavailable, exactly as if the bootstrap had failed.
+    """
+    if "--no-pythonnet" in argv[1:]:
+        return True
+    return os.environ.get("HALCYON_DISABLE_PYTHONNET", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def configure_logging(debug: bool = False) -> None:
     """Set up logging, and in debug mode route *Qt's* messages here too.
 
@@ -150,7 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     # WebView2 uses COM on the GUI thread.  Initialise pythonnet's bridge before
     # Qt creates any view; failure is deliberately non-fatal because Local/M3U
     # remain usable and WebStage presents the precise unavailable state later.
-    if sys.platform == "win32":
+    # `--no-pythonnet`/HALCYON_DISABLE_PYTHONNET (pythonnet_disabled) is the
+    # shutdown-hang isolation switch: with it, the CLR never loads and we learn
+    # whether the exit hang is a .NET-vs-Python teardown race.
+    if sys.platform == "win32" and not pythonnet_disabled(argv):
         try:
             from modes.web.webview2_runtime import init_pythonnet_com
 
