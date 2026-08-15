@@ -180,6 +180,52 @@ BASE_VLC_ARGS = [
     "--avcodec-hw=none",
 ]
 
+#: Where libVLC's binauralizer looks for its head-related transfer function.
+#:
+#: ``spatialaudio.cpp`` builds the default path as
+#: ``config_GetDataDir() + "/hrtfs/dodeca_and_7channel_3DSL_HRTF.sofa"``, and on
+#: Windows ``config_GetDataDir()`` is ``VLC_DATA_PATH`` when set, otherwise the
+#: directory containing ``libvlccore.dll`` (``src/win32/dirs.c``). Our bundled
+#: layout puts ``libvlccore.dll`` in ``vendor/vlc``, so a file at
+#: ``vendor/vlc/hrtfs/<name>.sofa`` is found with no configuration at all.
+#:
+#: Without it, playing a 5.1 track through a stereo device prints
+#: "Could not load the SOFA HRTF" straight to stderr — bypassing our logging,
+#: because it happens inside libVLC — and binaural spatialisation silently
+#: degrades to a plain downmix. Audio still plays, which is why it is easy to
+#: miss.
+HRTF_DIR_NAME = "hrtfs"
+DEFAULT_HRTF_NAME = "dodeca_and_7channel_3DSL_HRTF.sofa"
+
+
+def find_bundled_hrtf(base: Path | None) -> tuple[Path | None, bool]:
+    """Locate a bundled ``.sofa`` HRTF under ``base``.
+
+    Returns ``(path, needs_option)``. ``needs_option`` is True when the file is
+    present but somewhere libVLC will not look by itself, so the caller has to
+    pass ``--hrtf-file`` explicitly.
+
+    Both layouts are accepted deliberately. ``hrtfs/`` is the canonical one —
+    it mirrors how VLC ships and costs no libVLC options — but a ``.sofa``
+    dropped straight into ``vendor/vlc/`` is the obvious mistake to make, and
+    rescuing it is one line here versus a silent loss of spatial audio.
+    """
+    if base is None:
+        return None, False
+    canonical = base / HRTF_DIR_NAME / DEFAULT_HRTF_NAME
+    if canonical.is_file():
+        return canonical, False
+    # A differently named .sofa still has to be pointed at explicitly: libVLC
+    # only auto-loads the one canonical filename. Then the loose-in-vendor/vlc
+    # case, which libVLC cannot find at all without being told.
+    search_dirs = [base / HRTF_DIR_NAME, base]
+    for directory in search_dirs:
+        if not directory.is_dir():
+            continue
+        for candidate in sorted(directory.glob("*.sofa")):
+            return candidate, True
+    return None, False
+
 
 def _resolve_bundled_vlc() -> Path | None:
     """Point ctypes at ``vendor/vlc`` if it is populated.
@@ -217,6 +263,35 @@ def _resolve_bundled_vlc() -> Path | None:
             return base
     log.info("vendor/vlc not populated — falling back to system libVLC")
     return None
+
+
+def _instance_args(vlc_base: Path | None) -> list[str]:
+    """:data:`BASE_VLC_ARGS` plus an explicit ``--hrtf-file`` when needed.
+
+    Kept separate from the constructor so the argument list stays testable
+    without a native libVLC instance.
+    """
+    args = list(BASE_VLC_ARGS)
+    try:
+        hrtf, needs_option = find_bundled_hrtf(vlc_base)
+    except Exception:  # never let a missing optional file stop playback
+        log.debug("HRTF lookup failed", exc_info=True)
+        return args
+    if hrtf is None:
+        # Not an error: VLC downmixes multichannel audio perfectly well
+        # without it. Logged at debug so the absence is diagnosable when
+        # somebody asks why binaural mode is quiet.
+        log.debug(
+            "no bundled HRTF under %s — binaural spatialisation unavailable",
+            vlc_base,
+        )
+        return args
+    if needs_option:
+        args.append(f"--hrtf-file={hrtf}")
+        log.info("using bundled HRTF at %s (explicit --hrtf-file)", hrtf)
+    else:
+        log.info("using bundled HRTF at %s", hrtf)
+    return args
 
 
 class VlcEngine(QObject):
@@ -268,11 +343,11 @@ class VlcEngine(QObject):
 
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
-        _resolve_bundled_vlc()
+        vlc_base = _resolve_bundled_vlc()
         import vlc  # noqa: PLC0415 - deliberately after the path fix-up
 
         self._vlc = vlc
-        self._instance = vlc.Instance(BASE_VLC_ARGS)
+        self._instance = vlc.Instance(_instance_args(vlc_base))
         if self._instance is None:
             raise RuntimeError(
                 "libVLC failed to initialise — check vendor/vlc/ (see README)"
