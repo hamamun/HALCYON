@@ -974,11 +974,19 @@ Shell {
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: Theme.spaceSm
 
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 16; height: 16
+                                source: typeof AppIcon !== "undefined" ? AppIcon : ""
+                                sourceSize: Qt.size(16, 16)
+                                smooth: true
+                                mipmap: true
+                                visible: source.toString() !== ""
+                            }
+
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                // A plain-text move glyph (four-way arrows) in
-                                // the regular font — no icon-font dependency.
-                                text: "\u2725  Drag to move"
+                                text: "Drag to move"
                                 font.family: Theme.fontFamily
                                 font.pixelSize: Theme.fontSizeTiny
                                 color: Theme.textMuted

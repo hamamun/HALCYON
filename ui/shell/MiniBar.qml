@@ -167,10 +167,10 @@ Item {
         anchors.verticalCenterOffset: 2 // account for 3px seek bar on top — visually center in remaining 41px
         spacing: 2
 
-        // Grip — only draggable via this — 24px
+        // Grip — only draggable via this — 20px (the app mark sits beside it)
         Item {
             id: grip
-            width: 24
+            width: 20
             height: Theme.titleBarHeight - 4
             anchors.verticalCenter: parent.verticalCenter
 
@@ -205,6 +205,18 @@ Item {
             }
         }
 
+        // App mark — beside the grip, so Mini Mode stays recognisably Halcyon
+        // without stealing pixels from the controls.
+        Image {
+            anchors.verticalCenter: parent.verticalCenter
+            width: 16; height: 16
+            source: typeof AppIcon !== "undefined" ? AppIcon : ""
+            sourceSize: Qt.size(16, 16)
+            smooth: true
+            mipmap: true
+            visible: source.toString() !== ""
+        }
+
         // Prev track
         IconButton {
             glyph: Glyphs.previous
@@ -222,7 +234,7 @@ Item {
         // Play/Pause with circular progress ring
         Item {
             id: playWrapper
-            width: 44
+            width: 42
             height: 44
             anchors.verticalCenter: parent.verticalCenter
 
@@ -320,7 +332,7 @@ Item {
         // Innovative horizontal volume capsule — inline right of mute button
         Item {
             id: volCapsule
-            width: 74
+            width: 68
             height: 24
             anchors.verticalCenter: parent.verticalCenter
 

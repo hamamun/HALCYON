@@ -273,6 +273,14 @@ def main(argv: list[str] | None = None) -> int:
     ctx.setContextProperty("VideoAdjust", video_adjust)
     ctx.setContextProperty("UpdateChecker", update_checker)
 
+    # In-app icon mark (the "glass pane" glyph, transparent background). Used by
+    # the title bar, the borderless drag strip and Mini Mode. Exposed as a URL
+    # so those components stay loadable standalone in qmlscene/tests — each one
+    # guards on `typeof AppIcon !== "undefined"`.
+    ctx.setContextProperty(
+        "AppIcon", QUrl.fromLocalFile(str(ROOT / "assets" / "halcyon-glyph.png"))
+    )
+
     # --- per-mode contexts -------------------------------------------------
     # Each mode gets to publish one object. The shell never names a mode; it
     # iterates the registry (§A.2), so Phases 2 and 3 need no change here.
