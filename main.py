@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -43,6 +44,54 @@ if str(ROOT) not in sys.path:
 #: collection is exactly the failure that produces null context properties, and
 #: belt-and-braces costs one list.
 _KEEP_ALIVE: list = []
+
+#: Bound on every network request made from QML itself (the ArtworkURL cover
+#: images in NowPlayingCard/InfoTab, the mobile-remote QR image in
+#: SettingsDialog). Without one, a dead server parks Qt's background
+#: pixmap-reader thread forever, and process teardown then deadlocks inside
+#: QQuickPixmap's destructor waiting for that thread — the exact hang
+#: captured in shutdown-trace.dmp (main thread: QThread::wait under
+#: ~QQuickPixmap, observed 2026-08-15).
+QML_NET_TIMEOUT_MS = 8_000
+
+#: How long post-``exec()`` teardown may take before the process is force-
+#: ended. Everything worth persisting is flushed in ``on_quit`` before this
+#: watchdog is even armed, so a forced exit loses nothing — and "window
+#: closed but python.exe lingers in Task Manager" becomes impossible by
+#: construction, whatever native teardown decides to do next time.
+EXIT_WATCHDOG_SECONDS = 10.0
+
+
+def _arm_exit_watchdog(exit_code: int, seconds: float = EXIT_WATCHDOG_SECONDS) -> None:
+    """Last-resort guarantee that closing the window also ends the process.
+
+    All legitimately-slow cleanup lives in ``on_quit`` and runs *before*
+    ``exec()`` returns; what happens afterwards — explicit QML engine
+    destruction, PySide's exit-time cleanup of the application object, and
+    interpreter finalization — has a real history of wedging in a native
+    wait while holding the GIL, where no Python-side observer can exist
+    (see core/shutdown_trace.py). The watchdog is a daemon timer thread: on
+    a healthy exit the process is gone long before the deadline and the
+    timer dies with it; on a wedged exit, ``os._exit`` ends the process with
+    the intended exit code. Binding ``os._exit`` now means the timer needs
+    nothing that interpreter finalization might already have torn down.
+    """
+    _exit = os._exit
+
+    def _force(code: int) -> None:
+        try:
+            _exit(code)
+        except Exception:
+            pass
+
+    try:
+        timer = threading.Timer(seconds, _force, args=[exit_code])
+        timer.daemon = True
+        timer.name = "halcyon-exit-watchdog"
+        timer.start()
+    except Exception:
+        # A watchdog that can break shutdown is worse than none at all.
+        pass
 
 
 def debug_enabled(argv: list[str]) -> bool:
@@ -235,6 +284,37 @@ def main(argv: list[str] | None = None) -> int:
     # nothing — a directory only provides a module if its *path* spells the URI.
     qml_engine.addImportPath(str(ROOT))
     _KEEP_ALIVE.append(qml_engine)
+
+    # --- network timeouts for QML (root cause of the exit hang) -------------
+    # QML Image items (the ArtworkURL covers in NowPlayingCard/InfoTab, the
+    # mobile-remote QR image in SettingsDialog) load over the network on Qt's
+    # background pixmap-reader thread. A request to a dead or silently-
+    # unresponsive server never completes, that thread never exits — and
+    # QQuickPixmap's destructor then waits on it forever during PySide's
+    # exit-time cleanup: precisely the stack in shutdown-trace.dmp, and the
+    # reason the hang was intermittent (it needs an image load airborne at
+    # close). A transfer timeout on the engine's QNetworkAccessManager makes
+    # every QML-side network load bounded: a stuck request errors out, the
+    # reader thread always unwinds, and teardown can always complete. The
+    # engine does NOT own the factory, hence _KEEP_ALIVE below.
+    from PySide6.QtNetwork import QNetworkAccessManager
+    from PySide6.QtQml import QQmlNetworkAccessManagerFactory
+
+    class _TimeoutNetworkAccessManager(QNetworkAccessManager):
+        def createRequest(self, op, request, outgoing_data=None):
+            try:
+                request.setTransferTimeout(QML_NET_TIMEOUT_MS)  # Qt >= 6.5
+            except AttributeError:  # pragma: no cover — older Qt: default stays
+                pass
+            return super().createRequest(op, request, outgoing_data)
+
+    class _TimeoutNamFactory(QQmlNetworkAccessManagerFactory):
+        def create(self, parent):
+            return _TimeoutNetworkAccessManager(parent)
+
+    _nam_factory = _TimeoutNamFactory()
+    qml_engine.setNetworkAccessManagerFactory(_nam_factory)
+    _KEEP_ALIVE.append(_nam_factory)
 
     # --- shared services ---------------------------------------------------
     # NOTE the import style: `from engine.xxx import Yyy`, never a bare
@@ -490,11 +570,31 @@ def main(argv: list[str] | None = None) -> int:
         controller.addPaths(media_args)
 
     exit_code = app.exec()
-    # If we got here, the Qt event loop returned. The QML engine and QObjects
-    # are then destroyed as main() unwinds and locals are released. A hang here
-    # (engine shut down logged, but the process never exits) happens inside
-    # that destruction; the tracer catches it. Cancel it only if we finish
-    # tearing down promptly.
+
+    # --- teardown: explicit, observable, and hard-bounded -------------------
+    # If we got here, the Qt event loop returned and every bounded cleanup in
+    # on_quit has already run. Two things remain: destroying the QML engine,
+    # and PySide's exit-time cleanup of the application object. That latter
+    # stage is exactly where shutdown-trace.dmp wedged — main thread parked
+    # in QThread::wait under ~QQuickPixmap, blind (no logging) and unbounded.
+    #
+    # So: arm the exit watchdog FIRST, meaning any wedge anywhere below can
+    # only ever delay the process by EXIT_WATCHDOG_SECONDS; then destroy the
+    # QML engine explicitly — now, while Python is fully alive and logging
+    # still works — instead of leaving the same destruction to interpreter-
+    # exit cleanup, where the hang used to be invisible and unkillable.
+    _arm_exit_watchdog(exit_code)
+
+    try:
+        from shiboken6 import Shiboken
+
+        Shiboken.delete(qml_engine)
+        log.info("QML engine destroyed")
+    except Exception:
+        # The engine then dies as it used to, during interpreter exit — the
+        # watchdog above caps the damage either way.
+        log.debug("explicit QML engine destruction failed", exc_info=True)
+
     if shutdown_tracer is not None:
         shutdown_tracer.cancel()
     return exit_code
