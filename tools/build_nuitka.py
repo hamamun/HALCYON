@@ -30,30 +30,41 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "--include-package=ui",
         "--include-package=core",
         "--include-package=engine",
+        "--include-package=remote",
         # WebView2 is reached through pythonnet at runtime, so Nuitka cannot
         # infer these lazy imports from static analysis alone.
         "--include-module=clr",
         "--include-package=pythonnet",
+        "--output-filename=Halcyon.exe",
+        "--product-name=Halcyon",
+        "--file-description=Halcyon media player",
+        "--company-name=Halcyon",
         f"--output-dir={output_dir}",
     ]
 
     if onefile:
         args.append("--onefile")
 
+    if sys.platform == "win32":
+        args.append("--windows-console-mode=disable")
+
     icon_path = ROOT / "assets" / "halcyon.ico"
     if icon_path.exists():
         args.append(f"--windows-icon-from-ico={icon_path}")
 
-    vlc_plugins = ROOT / "vendor" / "vlc" / "plugins"
-    if vlc_plugins.exists():
-        args.append(f"--include-data-dir={vlc_plugins}=vendor/vlc/plugins")
+    vlc_root = ROOT / "vendor" / "vlc"
+    if vlc_root.exists():
+        # Copy the whole *prepared* VLC runtime.  The packaging workflow prunes
+        # plugins before this step, so this includes root DLL dependencies,
+        # plugins/plugins.dat and the hrtfs folder without shipping VLC's own UI.
+        args.append(f"--include-data-dir={vlc_root}=vendor/vlc")
 
     # libVLC's binauralizer resolves its HRTF relative to the directory holding
     # libvlccore.dll, so the frozen build must keep hrtfs/ next to it or 5.1
     # content loses spatial audio with only a stderr line to show for it.
+    # The root copy above already includes vendor/vlc/hrtfs; keep this explicit
+    # path here so packaging checks cannot accidentally forget the requirement.
     vlc_hrtfs = ROOT / "vendor" / "vlc" / "hrtfs"
-    if vlc_hrtfs.exists():
-        args.append(f"--include-data-dir={vlc_hrtfs}=vendor/vlc/hrtfs")
 
     webview2_vendor = ROOT / "vendor" / "webview2"
     if webview2_vendor.exists():
@@ -63,9 +74,17 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
     # checkout and from the same relative tree in a frozen build.  Include both
     # the mode QML and the Halcyon URI/qmldir bridge explicitly; otherwise the
     # Web chip can exist while WebStage.qml is absent from the distribution.
-    for directory in (ROOT / "modes", ROOT / "ui", ROOT / "Halcyon"):
+    for directory in (
+        ROOT / "modes",
+        ROOT / "ui",
+        ROOT / "Halcyon",
+        ROOT / "assets",
+        ROOT / "remote" / "static",
+        ROOT / "config",
+    ):
         if directory.exists():
-            args.append(f"--include-data-dir={directory}={directory.name}")
+            dest = "remote/static" if directory.name == "static" and directory.parent.name == "remote" else directory.name
+            args.append(f"--include-data-dir={directory}={dest}")
 
     args.append(str(ROOT / "main.py"))
     return args

@@ -12,6 +12,8 @@ from modes.m3u.parser import (
     decode_playlist,
     looks_like_playlist_ref,
     parse_m3u,
+    parse_playlist_text,
+    parse_pls,
 )
 
 
@@ -248,3 +250,42 @@ def test_language_empty_when_nothing_matches() -> None:
     text = '#EXTM3U\n#EXTINF:-1 group-title="Music",Random Stream\nhttp://x/1\n'
     result = parse_m3u(text)
     assert result.channels[0].language == ""
+
+
+def test_parse_pls_entries_with_titles_and_relative_paths() -> None:
+    text = """\
+[playlist]
+NumberOfEntries=2
+File1=streams/news.mp3
+Title1=Morning News
+Length1=123
+File2=https://example.com/live/channel.aac
+Version=2
+"""
+
+    result = parse_pls(text, base_dir=Path("/lists"))
+
+    assert result.skipped == 0
+    assert [c.name for c in result.channels] == ["Morning News", "channel"]
+    assert result.channels[0].url == str(Path("/lists/streams/news.mp3"))
+    assert result.channels[0].duration == 123
+    assert result.channels[1].url == "https://example.com/live/channel.aac"
+
+
+def test_parse_playlist_text_selects_pls_by_location_suffix() -> None:
+    result = parse_playlist_text(
+        "File1=song.flac\nTitle1=Song\n",
+        base_dir=Path("/music"),
+        location="mix.pls",
+    )
+
+    assert len(result.channels) == 1
+    assert result.channels[0].name == "Song"
+    assert result.channels[0].url == str(Path("/music/song.flac"))
+
+
+def test_local_pls_reference_is_treated_as_nested_playlist() -> None:
+    result = parse_m3u("#EXTM3U\nother.pls\n", base_dir=Path("/lists"))
+
+    assert result.channels == []
+    assert result.skipped == 1
