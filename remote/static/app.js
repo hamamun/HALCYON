@@ -42,7 +42,8 @@ let SUBL = new Set();    // subtitle language selection
 let WEBM = null;         // last web media status
 let WM_VOLUME_PENDING = null;
 let WM_VOLUME_FRAME = null;
-let EQOPEN = true;       // equalizer accordion
+// NOTE: the collapsible Local sections keep their own open/closed state inside
+// makeCollapser() below, so snapshots can never re-open or close them.
 let M3U_EXPANDED = null; // remembered expanded groups (null = auto first time)
 let M3U_LAST_HTML = "";  // cached html to avoid DOM churn + innerHTML normalization mismatch
 let M3U_LAST_COUNT = -1;
@@ -151,6 +152,9 @@ $("clearPlBtn").addEventListener("click", () => {
 
 function renderPlaylist(pl) {
   const box = $("playlist");
+  // track count stays visible on the header while the list is collapsed
+  const plc = $("plCount");
+  if (plc) plc.textContent = pl.rows.length ? String(pl.rows.length) : "";
   if (!pl.rows.length) {
     if (box.innerHTML !== '<div class="status">Playlist is empty</div>') {
       box.innerHTML = '<div class="status">Playlist is empty</div>';
@@ -185,7 +189,7 @@ function renderPlaylist(pl) {
   // own scrolling on every 500 ms snapshot push.
   if (pl.currentIndex >= 0 && pl.currentIndex !== PL_LAST_CUR) {
     const el = box.querySelector(".row.current");
-    if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   PL_LAST_CUR = pl.currentIndex >= 0 ? pl.currentIndex : -1;
   $("shuffleBtn").classList.toggle("on", pl.shuffle);
@@ -333,12 +337,39 @@ function renderSubs(subs) {
   }
 }
 
+/* ------------------------- collapsible sections -------------------------
+   Snapshots stream in ~3x/second and re-render these cards, so open/closed
+   state lives in JS (never re-derived from the snapshot) and the body is
+   only shown/hidden — a section can never snap shut under the user's finger. */
+function makeCollapser(headId, bodyId, arrowId, open) {
+  const head = $(headId), body = $(bodyId), arrow = $(arrowId);
+  if (!head || !body) return { get open() { return false; }, set: () => {} };
+  const state = { open: !!open };
+  const apply = () => {
+    body.hidden = !state.open;
+    head.classList.toggle("open", state.open);
+    head.setAttribute("aria-expanded", state.open ? "true" : "false");
+    if (arrow) arrow.textContent = state.open ? "▾" : "▸";
+  };
+  const toggle = () => { state.open = !state.open; apply(); };
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+  });
+  apply();
+  return state;
+}
+
+/* Tracks & Subtitles — collapsed by default */
+const TRK = makeCollapser("trkHead", "trkBody", "trkArrow", false);
+
+/* Playlist — starts expanded; shuffle/repeat/clear stay live while collapsed */
+const PLC = makeCollapser("plHead", "playlist", "plArrow", true);
+
 /* ----------------------------- equalizer ----------------------------- */
-$("eqToggle").addEventListener("click", () => {
-  EQOPEN = !EQOPEN;
-  $("eqBody").hidden = !EQOPEN;
-  $("eqToggle").textContent = "Equalizer " + (EQOPEN ? "▾" : "▸");
-});
+/* Equalizer — collapsed by default; bands are a nested section, also closed */
+const EQC = makeCollapser("eqToggle", "eqBody", "eqArrow", false);
+const EQB = makeCollapser("eqBandsHead", "eqBands", "eqBandsArrow", false);
 
 $("eqPreset").addEventListener("change", (e) => cmd("eq.preset", { index: Number(e.target.value) }));
 $("eqPreamp").addEventListener("input", (e) => { $("eqPreampVal").textContent = e.target.value + " dB"; });
@@ -359,10 +390,15 @@ function renderEq(eq) {
   let html = "";
   (eq.bands || []).forEach((label, i) => {
     const val = (eq.amps && eq.amps[i]) || 0;
-    html += `<label class="lbl">${esc(label)}
-      <input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">
-      <span class="val">${val} dB</span></label>`;
+    // fixed-width label/value columns keep every slider on the same left and
+    // right edge, so a flat EQ reads as a straight line (§ band alignment)
+    html += `<div class="eqband-row"><span class="eqlabel">${esc(label)}</span>` +
+      `<input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">` +
+      `<span class="val">${val} dB</span></div>`;
   });
+  const bandCount = (eq.bands || []).length;
+  const bc = $("eqBandsCount");
+  if (bc) bc.textContent = bandCount ? String(bandCount) : "";
   // Only update bands if none of the sliders are being dragged and content changed
   const bandsBox = $("eqBands");
   const anyBandDragging = Array.from(bandsBox.querySelectorAll(".eqband")).some(isDragging);
