@@ -461,3 +461,53 @@ class _Settings:
 
     def set_mode(self, _mode: str, _key: str, _value) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# The same "now playing" readout on the M3U transport bar
+# ---------------------------------------------------------------------------
+# M3UTransport.qml shows the playing channel on the left of its one 52px row,
+# so it is readable without opening the playlist. It binds to exactly the same
+# model properties as the panel's pinned strip — `hasCurrent`, `currentName`,
+# `currentGroup` — which is what guarantees the two readouts can never
+# disagree. Those bindings are covered by the strip tests above; what is worth
+# pinning separately is the shared-source contract itself, since a future
+# change that gave the bar its own copy of this state would be a silent
+# regression.
+#
+# The bar's own geometry (label width measured against the button cluster,
+# ellipsis, hiding on a narrow window) is QML and cannot run here; it is held
+# by review and qmllint, and was verified by rendering the real component.
+def test_bar_and_panel_strip_read_the_same_selection() -> None:
+    """One source of truth for both readouts."""
+    model = _model(GROUPING_CATEGORY)
+
+    # Idle: both show nothing. The bar hides entirely on this flag; the panel
+    # strip swaps in its muted placeholder.
+    assert model.hasCurrent is False
+
+    model.play_index(0)
+    first = (model.hasCurrent, model.currentName, model.currentGroup)
+    assert first[0] is True and first[1] and first[2]
+
+    # Whatever the panel would show, the bar shows: same properties, one read.
+    assert (model.hasCurrent, model.currentName, model.currentGroup) == first
+
+
+def test_bar_readout_is_unaffected_by_panel_only_view_state() -> None:
+    """The transport bar has no filter box and no grouping selector, so its
+    readout must not move when the panel's do."""
+    model = _model(GROUPING_CATEGORY)
+    model.play_index(0)
+    expected = (model.currentName, model.currentGroup)
+
+    model.setFilter("zzzz-nothing-matches")
+    assert model.count == 0
+    assert model.hasCurrent is True
+    assert (model.currentName, model.currentGroup) == expected
+
+    model.setGrouping(GROUPING_NONE)
+    assert (model.currentName, model.currentGroup) == expected
+
+    model.setFavouritesOnly(True)
+    assert (model.currentName, model.currentGroup) == expected

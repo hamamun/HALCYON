@@ -20,6 +20,13 @@ Item {
 
     property var player: null
 
+    //: The M3U mode context, reached exactly as M3UPanel.qml reaches it —
+    //: exposed by main.py as <id-capitalised>Playlist. Read directly rather
+    //: than pushed in by the shell's bindTransport(): the shell's
+    //: `modeContext` is Local's queue, and teaching it about M3U would put an
+    //: M3U-only concern in a shared file for no gain (§A.1, §A.3).
+    property var ctx: typeof M3uPlaylist !== "undefined" ? M3uPlaylist : null
+
     // Buffering progress from VLC (0–100). -1 = idle; the hairline only shows
     // while a stream is genuinely filling its cache.
     property real bufferingPercent: -1
@@ -69,8 +76,96 @@ Item {
         }
     }
 
+    // ------------------------------------------------ now playing, left --
+    // The channel you are watching, readable without opening the playlist.
+    // Same information and same visual language as the pinned strip at the
+    // foot of M3UPanel.qml, and driven by the same model properties, so the
+    // two can never disagree.
+    //
+    // Three rules keep it out of the way of the controls:
+    //
+    //   1. it sits on the SAME row, in the empty space left of the centred
+    //      cluster — this bar is deliberately one row of ~52px, not Local's
+    //      two-row bar (§B.2), and a label stacked above the buttons would
+    //      quietly make it two;
+    //   2. its width is whatever is actually free between the panel edge and
+    //      the buttons, never a fixed guess. The controls are interactive and
+    //      always win the space; the label ellipsises, then drops its group
+    //      line, then hides entirely as the window narrows;
+    //   3. it shows nothing at all until a channel has been chosen — an idle
+    //      grey placeholder floating over the picture is noise, which is why
+    //      this differs from the panel strip (a solid surface, where an empty
+    //      row would look broken instead).
+    Item {
+        id: nowPlaying
+
+        // The gap to the left edge of the button cluster, less a breathing
+        // margin. `controls.x` is live, so this re-measures on every resize.
+        readonly property real available:
+            controls.x - Theme.spaceMd - Theme.spaceLg
+
+        // Below this there is not enough room to say anything useful, so the
+        // label stands down rather than crowding the controls.
+        readonly property bool roomy: available >= 96
+
+        anchors.left: parent.left
+        anchors.leftMargin: Theme.spaceMd
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.max(0, Math.min(260, available))
+        height: 34
+        visible: roomy && root.ctx !== null && root.ctx.channels.hasCurrent
+
+        Row {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            spacing: Theme.spaceSm
+
+            // Not the channel logo: this is a status marker, and it must not
+            // pull a picture over a slow link just to sit on the video. The
+            // panel's strip carries the artwork.
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: Glyphs.play
+                font.family: Theme.fontFamilyIcons
+                font.pixelSize: 11
+                color: Theme.accent
+            }
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - 11 - Theme.spaceSm
+                spacing: 0
+
+                Text {
+                    width: parent.width
+                    text: root.ctx ? root.ctx.channels.currentName : ""
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Theme.weightMedium
+                    color: Theme.accent
+                }
+                Text {
+                    width: parent.width
+                    // The second line is the first thing to go when space runs
+                    // short — the channel name matters more than its group.
+                    visible: nowPlaying.available >= 150
+                             && root.ctx && root.ctx.channels.currentGroup.length > 0
+                    text: root.ctx ? root.ctx.channels.currentGroup : ""
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeTiny
+                    color: Theme.textFaint
+                }
+            }
+        }
+    }
+
     // ---------------------------------------------------- the seven, centred --
     Row {
+        id: controls
         anchors.centerIn: parent
         spacing: Theme.spaceSm
 
