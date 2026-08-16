@@ -165,6 +165,36 @@ select { cursor: pointer; }
 .gbody { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .gbody[hidden] { display: none !important; }
 
+/* ---------- collapsible card title (bookmarks) ---------- */
+.card-title.collapser { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  user-select: none; -webkit-user-select: none; margin-bottom: 0; padding: 2px 0; }
+.card-title.collapser.open { margin-bottom: 8px; }
+.card-title.collapser:active { color: var(--accent2); }
+.card-title.collapser .garrow { min-width: 12px; text-align: center; }
+.card-title.collapser .gcount { margin-left: auto; color: var(--dim); font-weight: 600;
+  letter-spacing: 0; text-transform: none; font-size: 0.72rem; }
+#bmBody[hidden] { display: none !important; }
+/* more than 3 bookmarks -> scrolls inside a 3-row window */
+.bmlist { max-height: calc(3 * 48px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---------- web tab list ---------- */
+.subhead { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.subhead-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--accent1); flex: 1; }
+.subhead .mini { flex: 0 0 auto; padding: 7px 10px; font-size: 0.72rem; }
+.subhead .mini:disabled { opacity: 0.45; cursor: default; }
+/* more than 4 tabs -> scrolls inside a 4-row window (15 tabs max on PC) */
+.tablist { margin-top: 8px; display: flex; flex-direction: column; gap: 4px;
+  max-height: calc(4 * 48px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.tablist .row { min-height: 44px; cursor: pointer; }
+.tablist .row.current { border-color: rgba(94,234,212,0.6); background: rgba(94,234,212,0.08); }
+.tablist .row.current .rname { color: var(--accent1); font-weight: 600; }
+.tablist .tnum { color: var(--dim); font-size: 0.72rem; min-width: 18px; text-align: center;
+  font-variant-numeric: tabular-nums; }
+.tablist .tclose { border: 0; background: transparent; color: var(--dim); font-size: 1rem;
+  cursor: pointer; padding: 6px 8px; }
+.tablist .tclose:active { color: var(--danger); }
+
 /* ---------- playlist (pinned bottom, max 7 rows, autoscroll) ---------- */
 #playlistWrap { margin-top: auto; }
 #playlistHead { display: flex; align-items: center; gap: 8px; }

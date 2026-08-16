@@ -190,27 +190,38 @@
             <button class="mini" id="webFwdBtn" title="Forward">Forward ▶</button>
             <button class="mini" id="webReloadBtn" title="Reload">↻ Reload</button>
           </div>
+          <div class="subhead">
+            <span class="subhead-label">Open tabs</span>
+            <button class="mini" id="webNewTabBtn" title="Open a new tab">＋ New tab</button>
+          </div>
+          <div id="webTabs" class="tablist"></div>
         </div>
 
         <div class="card">
-          <div class="card-title">Bookmarks</div>
-          <button class="wide" id="addBmBtn">⭐ Add current page</button>
-          <div id="webBookmarks" class="chanlist"></div>
+          <div class="card-title collapser" id="bmHead" role="button" tabindex="0"
+               aria-expanded="false" aria-controls="bmBody">
+            <span class="garrow" id="bmArrow">▸</span> Bookmarks
+            <span class="gcount" id="bmCount"></span>
+          </div>
+          <div id="bmBody" hidden>
+            <button class="wide" id="addBmBtn">⭐ Add current page</button>
+            <div id="webBookmarks" class="chanlist bmlist"></div>
+          </div>
         </div>
 
         <div class="card" id="webMediaCard">
           <div class="card-title">Media on page <span id="webMediaType" class="t-mini" style="float:right;letter-spacing:0;color:var(--dim)"></span></div>
           <div id="webMediaNone" class="status">No media on this page</div>
           <div id="webMediaBody" hidden>
+            <div class="seekrow seekrow-top">
+              <span class="t-mini" id="wmCur">0:00</span>
+              <input type="range" id="wmSeek" min="0" max="1000" value="0">
+              <span class="t-mini" id="wmDur">0:00</span>
+            </div>
             <div class="transport">
               <button class="tbtn" id="wmBack" title="Back 10s">◀10</button>
               <button class="tbtn big" id="wmPlay" title="Play/Pause">▶</button>
               <button class="tbtn" id="wmFwd" title="Forward 15s">15▶</button>
-            </div>
-            <div class="seekrow">
-              <span class="t-mini" id="wmCur">0:00</span>
-              <input type="range" id="wmSeek" min="0" max="1000" value="0">
-              <span class="t-mini" id="wmDur">0:00</span>
             </div>
             <div class="volrow" style="gap:6px">
               <span id="wmVolIcon" title="Toggle mute" style="cursor:pointer;min-width:22px;text-align:center">🔊</span>

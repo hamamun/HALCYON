@@ -615,6 +615,36 @@ function bindChannelActions(box, count) {
 /* ----------------------------- Web ----------------------------- */
 let WEB_BM_LAST_HTML = "";
 let WEB_BM_LAST_SIG = "";
+let WEB_BM_OPEN = false;      // bookmarks accordion — collapsed by default
+let WEB_TABS_LAST_HTML = "";  // cached tab rows to avoid DOM churn every snapshot
+let WEB_TABS_LAST_ACTIVE = "";
+
+/* Bookmarks accordion: collapsed on load, tap the title to expand. */
+function setBookmarksOpen(open) {
+  WEB_BM_OPEN = !!open;
+  const head = $("bmHead"), body = $("bmBody"), arrow = $("bmArrow");
+  if (!head || !body) return;
+  body.hidden = !WEB_BM_OPEN;
+  head.classList.toggle("open", WEB_BM_OPEN);
+  head.setAttribute("aria-expanded", WEB_BM_OPEN ? "true" : "false");
+  if (arrow) arrow.textContent = WEB_BM_OPEN ? "▾" : "▸";
+}
+
+if ($("bmHead")) {
+  $("bmHead").addEventListener("click", () => setBookmarksOpen(!WEB_BM_OPEN));
+  $("bmHead").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setBookmarksOpen(!WEB_BM_OPEN); }
+  });
+  setBookmarksOpen(false);
+}
+
+if ($("webNewTabBtn")) {
+  $("webNewTabBtn").addEventListener("click", () => {
+    cmd("switchMode", { id: "web" });
+    setChip("web");
+    cmd("web.newTab", {});
+  });
+}
 
 $("addBmBtn").addEventListener("click", () => {
   if (SNAP && SNAP.web.activeTab && SNAP.web.activeTab.url) {
@@ -634,16 +664,81 @@ function renderWeb(web) {
   const url = tab.url || "—";
   $("webTitle").textContent = title;
   $("webUrl").textContent = url;
+  const tabs = Array.isArray(web.tabs) ? web.tabs : [];
+  const activeIdx = (typeof web.activeTabIndex === "number" && web.activeTabIndex >= 0)
+    ? web.activeTabIndex
+    : (tab.id ? tabs.findIndex((t) => t && t.id === tab.id) : -1);
   const tc = $("webTabCount");
   if (tc) {
-    const count = web.tabCount || 0;
-    const idx = (web.tabs && tab.id) ? (web.tabs.findIndex(t=>t.id===tab.id)+1) : 0;
+    const count = web.tabCount || tabs.length || 0;
+    const idx = activeIdx >= 0 ? activeIdx + 1 : 0;
     tc.textContent = count ? (idx ? `Tab ${idx}/${count}` : `${count} tabs`) : "";
+  }
+
+  // --- Open tabs: tap to switch, ✕ to close (cached to avoid DOM churn) ---
+  const tl = $("webTabs");
+  if (tl) {
+    const activeId = (activeIdx >= 0 && tabs[activeIdx]) ? (tabs[activeIdx].id || "") : "";
+    let tabsHtml = "";
+    if (tabs.length) {
+      tabsHtml = tabs.map((t, i) => {
+        const cur = i === activeIdx ? " current" : "";
+        const name = (t && (t.title || t.url)) || "New Tab";
+        const sub = ((t && t.url) || "").replace(/^https?:\/\//, "");
+        return `<div class="row${cur}" data-tab-sel="${i}" data-tab-id="${esc((t && t.id) || "")}">` +
+          `<span class="tnum">${i + 1}</span>` +
+          `<div class="rname">${esc(name)}</div>` +
+          (sub ? `<div class="rsub" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>` : "") +
+          `<button class="tclose" data-tab-close="${i}" title="Close tab">✕</button></div>`;
+      }).join("");
+    } else {
+      tabsHtml = '<div class="status">No open tabs</div>';
+    }
+    if (tabsHtml !== WEB_TABS_LAST_HTML) {
+      tl.innerHTML = tabsHtml;
+      WEB_TABS_LAST_HTML = tabsHtml;
+      tl.querySelectorAll("[data-tab-sel]").forEach((row) => {
+        row.addEventListener("click", (e) => {
+          if (e.target.closest("[data-tab-close]")) return;   // ✕ handled below
+          const id = row.dataset.tabId || "";
+          const index = Number(row.dataset.tabSel);
+          // Optimistic highlight; the next snapshot confirms.
+          tl.querySelectorAll(".row").forEach((r) => r.classList.remove("current"));
+          row.classList.add("current");
+          cmd("switchMode", { id: "web" });
+          setChip("web");
+          cmd("web.selectTab", id ? { id, index } : { index });
+        });
+      });
+      tl.querySelectorAll("[data-tab-close]").forEach((b) => {
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const row = b.closest("[data-tab-sel]");
+          const id = (row && row.dataset.tabId) || "";
+          const index = Number(b.dataset.tabClose);
+          b.disabled = true;
+          cmd("web.closeTab", id ? { id, index } : { index });
+        });
+      });
+    }
+    // keep the active tab visible in the 4-row window, without fighting scrolling
+    if (activeId !== WEB_TABS_LAST_ACTIVE) {
+      const cur = tl.querySelector(".row.current");
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+      WEB_TABS_LAST_ACTIVE = activeId;
+    }
+  }
+  const ntb = $("webNewTabBtn");
+  if (ntb) {
+    ntb.disabled = !!web.atMaxTabs;
+    ntb.title = web.atMaxTabs ? "Maximum 15 tabs reached" : "Open a new tab";
   }
 
   // --- Bookmarks with caching for perf ---
   const bm = $("webBookmarks");
   const list = web.bookmarks || [];
+  const bmc = $("bmCount");
+  if (bmc) bmc.textContent = list.length ? String(list.length) : "";
   const sig = list.length + "|" + (list[0]?.url||"") + "|" + list.filter(b=>b.title).length + "|" + (list.map(b=>b.url).join(",").slice(0,200));
   let bmHtml = "";
   if (list.length) {
