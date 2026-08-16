@@ -172,13 +172,14 @@ select { cursor: pointer; }
    flat and the dB readouts line up. */
 .eqbands { margin-top: 4px; }
 .eqbands[hidden] { display: none !important; }
-.eqband-row { display: grid; grid-template-columns: 34px 1fr 52px;
+.eqband-row { display: grid; grid-template-columns: 34px 1fr 56px;
   align-items: center; gap: 8px; margin-top: 8px; }
 .eqband-row .eqlabel { font-size: 0.75rem; color: var(--dim); text-align: right;
-  font-variant-numeric: tabular-nums; }
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
 .eqband-row input[type="range"] { width: 100%; min-width: 0; margin: 0; }
+/* widest readout is "-14.5 dB"; nowrap keeps it on one line if it ever grows */
 .eqband-row .val { margin-left: 0; text-align: right; font-size: 0.7rem;
-  font-variant-numeric: tabular-nums; }
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ---------- collapsible card title (bookmarks) ---------- */
 .card-title.collapser { display: flex; align-items: center; gap: 8px; cursor: pointer;

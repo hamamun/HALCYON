@@ -371,8 +371,17 @@ const PLC = makeCollapser("plHead", "playlist", "plArrow", true);
 const EQC = makeCollapser("eqToggle", "eqBody", "eqArrow", false);
 const EQB = makeCollapser("eqBandsHead", "eqBands", "eqBandsArrow", false);
 
+/* VLC hands back raw floats (a preset band is 4.800000190734863), which would
+   overflow the fixed-width dB column and wrap the row. Round to 1 decimal and
+   drop a trailing ".0" so the readout is never wider than "-12.5 dB". */
+function fmtDb(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return "0";
+  return String(Math.round(n * 10) / 10);
+}
+
 $("eqPreset").addEventListener("change", (e) => cmd("eq.preset", { index: Number(e.target.value) }));
-$("eqPreamp").addEventListener("input", (e) => { $("eqPreampVal").textContent = e.target.value + " dB"; });
+$("eqPreamp").addEventListener("input", (e) => { $("eqPreampVal").textContent = fmtDb(e.target.value) + " dB"; });
 $("eqPreamp").addEventListener("change", (e) => cmd("eq.preamp", { value: Number(e.target.value) }));
 $("eqReset").addEventListener("click", () => cmd("eq.reset", {}));
 
@@ -385,7 +394,7 @@ function renderEq(eq) {
 
   if (!isDragging($("eqPreamp"))) {
     $("eqPreamp").value = eq.preamp;
-    $("eqPreampVal").textContent = eq.preamp + " dB";
+    $("eqPreampVal").textContent = fmtDb(eq.preamp) + " dB";
   }
   let html = "";
   (eq.bands || []).forEach((label, i) => {
@@ -394,7 +403,7 @@ function renderEq(eq) {
     // right edge, so a flat EQ reads as a straight line (§ band alignment)
     html += `<div class="eqband-row"><span class="eqlabel">${esc(label)}</span>` +
       `<input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">` +
-      `<span class="val">${val} dB</span></div>`;
+      `<span class="val">${fmtDb(val)} dB</span></div>`;
   });
   const bandCount = (eq.bands || []).length;
   const bc = $("eqBandsCount");
@@ -406,7 +415,7 @@ function renderEq(eq) {
     bandsBox.innerHTML = html;
     bandsBox.querySelectorAll(".eqband").forEach((s) => {
       s.addEventListener("input", () => {
-        s.nextElementSibling.textContent = s.value + " dB";
+        s.nextElementSibling.textContent = fmtDb(s.value) + " dB";
       });
       s.addEventListener("change", () => {
         cmd("eq.band", { band: Number(s.dataset.band), value: Number(s.value) });

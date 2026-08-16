@@ -172,7 +172,7 @@ def test_equalizer_band_row_uses_a_three_column_grid():
     assert match, "missing .eqband-row rule"
     rule = match.group(0)
     assert "display: grid" in rule
-    assert re.search(r"grid-template-columns:\s*34px\s+1fr\s+52px", rule), (
+    assert re.search(r"grid-template-columns:\s*34px\s+1fr\s+56px", rule), (
         "label and dB columns must be fixed width so sliders line up"
     )
 
@@ -249,3 +249,26 @@ def test_tracks_card_keeps_its_controls():
         "subsFileBtn",
     ):
         assert f'id="{control}"' in body, f"#{control} vanished from Tracks & Subtitles"
+
+
+def test_db_readouts_are_rounded_for_the_fixed_width_column():
+    """VLC returns raw floats (4.800000190734863); unrounded they overflow.
+
+    The dB column is a fixed 56px, so every readout must go through fmtDb()
+    or a preset load would wrap the row and undo the alignment fix.
+    """
+    source = _js()
+
+    assert "function fmtDb(" in source
+    assert "Math.round(n * 10) / 10" in source
+
+    # every place a dB string is built must use the formatter
+    assert '`<span class="val">${fmtDb(val)} dB</span></div>`' in source
+    assert 'textContent = fmtDb(s.value) + " dB"' in source
+    assert 'textContent = fmtDb(eq.preamp) + " dB"' in source
+    assert 'textContent = fmtDb(e.target.value) + " dB"' in source
+
+    # ...and no raw value is concatenated straight into a dB label
+    assert '${val} dB' not in source
+    assert 'eq.preamp + " dB"' not in source
+    assert 's.value + " dB"' not in source
