@@ -291,7 +291,9 @@ Item {
         anchors.top: statusStrip.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: parent.bottom
+        // The list now ends above the pinned "now playing" strip instead of at
+        // the panel's own bottom edge. Nothing else about the layout moves.
+        anchors.bottom: nowPlayingStrip.top
         anchors.margins: Theme.spaceSm
         anchors.topMargin: Theme.spaceSm
         clip: true
@@ -302,77 +304,106 @@ Item {
 
         // Grouped view: sections come from the model's groupKey role; the
         // selector above turns them off entirely with "No group".
+        //
+        // Clearing `section.property` alone is NOT enough, and that was the
+        // "Unknown"/"Ungrouped" header bug. The binding does re-evaluate — the
+        // property really does go empty — but with no property to read, every
+        // row's section string is the *same* empty string, which ListView
+        // treats as one single section spanning the whole list rather than as
+        // "no sections". It then instantiates the section delegate once for
+        // it, and `labelPositioning: CurrentLabelAtStart` pins that one header
+        // to the top of the viewport, where it renders with the delegate's
+        // placeholder text for an empty section name. (The model is not at
+        // fault: `_group_key()` correctly returns "" for every channel in
+        // GROUPING_NONE, and the strays only appear when the list is scrolled
+        // off the top, which is exactly the sticky-label behaviour.)
+        //
+        // Taking the *delegate* away in flat mode is what actually removes the
+        // header: with no component there is nothing to instantiate, whatever
+        // the section string is. `section.property` is still cleared so the
+        // view stops computing section strings it cannot use.
         section.property: root.ctx && root.ctx.channels.grouping !== "none" ? "groupKey" : ""
         section.criteria: ViewSection.FullString
         section.labelPositioning: ViewSection.CurrentLabelAtStart | ViewSection.InlineLabels
-        section.delegate: Rectangle {
-            id: sectionHeader
-            width: list.width
-            height: 28
-            color: headerArea.containsMouse ? Theme.glassFillHover : Theme.glassFill
-            radius: Theme.radiusSmall
-
-            readonly property bool isExpanded: root.ctx && root.ctx.channels.expandedGroup === section
-            readonly property string displayName: section.length > 0 ? section
-                  : (root.ctx && (root.ctx.channels.grouping === "country"
-                                  || root.ctx.channels.grouping === "language")
-                     ? "Unknown" : "Ungrouped")
-            readonly property int count: root.ctx ? root.ctx.channels.groupCount(section) : 0
-
-            Row {
-                anchors.left: parent.left
-                anchors.leftMargin: Theme.spaceSm
-                anchors.right: parent.right
-                anchors.rightMargin: Theme.spaceSm
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.spaceSm
-
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: sectionHeader.isExpanded ? Glyphs.chevronDown : "\u203A"
-                    font.family: sectionHeader.isExpanded ? Theme.fontFamilyIcons : Theme.fontFamily
-                    font.pixelSize: sectionHeader.isExpanded ? 12 : 16
-                    font.weight: Font.Bold
-                    color: sectionHeader.isExpanded ? Theme.accent : Theme.textMuted
-                }
-
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: sectionHeader.count > 0
-                          ? sectionHeader.displayName + " (" + sectionHeader.count + ")"
-                          : sectionHeader.displayName
-                    elide: Text.ElideRight
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeTiny
-                    font.weight: Theme.weightBold
-                    color: sectionHeader.isExpanded ? Theme.text : Theme.textMuted
-                }
-            }
-
-            // 1px bottom separator so headers stay visually distinct when
-            // collapsed (no ListView.spacing to do it for us).
-            Rectangle {
-                anchors.bottom: parent.bottom
-                anchors.left: parent.left
-                anchors.leftMargin: Theme.spaceSm
-                anchors.right: parent.right
-                anchors.rightMargin: Theme.spaceSm
-                height: 1
-                color: Theme.glassBorder
-            }
-
-            MouseArea {
-                id: headerArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (root.ctx) root.ctx.channels.toggleGroup(section)
-            }
-        }
+        section.delegate: (root.ctx && root.ctx.channels.grouping !== "none")
+                          ? sectionHeaderComponent : null
 
         ScrollBar.vertical: ScrollBar {
             policy: ScrollBar.AsNeeded
             width: 6
+        }
+
+        // The accordion header, unchanged apart from now living in a named
+        // Component so the binding above can hand back `null` in flat mode.
+        Component {
+            id: sectionHeaderComponent
+
+            Rectangle {
+                id: sectionHeader
+                required property string section
+
+                width: list.width
+                height: 28
+                color: headerArea.containsMouse ? Theme.glassFillHover : Theme.glassFill
+                radius: Theme.radiusSmall
+
+                readonly property bool isExpanded: root.ctx && root.ctx.channels.expandedGroup === section
+                readonly property string displayName: section.length > 0 ? section
+                      : (root.ctx && (root.ctx.channels.grouping === "country"
+                                      || root.ctx.channels.grouping === "language")
+                         ? "Unknown" : "Ungrouped")
+                readonly property int count: root.ctx ? root.ctx.channels.groupCount(section) : 0
+
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spaceSm
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spaceSm
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spaceSm
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sectionHeader.isExpanded ? Glyphs.chevronDown : "\u203A"
+                        font.family: sectionHeader.isExpanded ? Theme.fontFamilyIcons : Theme.fontFamily
+                        font.pixelSize: sectionHeader.isExpanded ? 12 : 16
+                        font.weight: Font.Bold
+                        color: sectionHeader.isExpanded ? Theme.accent : Theme.textMuted
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sectionHeader.count > 0
+                              ? sectionHeader.displayName + " (" + sectionHeader.count + ")"
+                              : sectionHeader.displayName
+                        elide: Text.ElideRight
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeTiny
+                        font.weight: Theme.weightBold
+                        color: sectionHeader.isExpanded ? Theme.text : Theme.textMuted
+                    }
+                }
+
+                // 1px bottom separator so headers stay visually distinct when
+                // collapsed (no ListView.spacing to do it for us).
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spaceSm
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spaceSm
+                    height: 1
+                    color: Theme.glassBorder
+                }
+
+                MouseArea {
+                    id: headerArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: if (root.ctx) root.ctx.channels.toggleGroup(sectionHeader.section)
+                }
+            }
         }
 
         delegate: ListRow {
@@ -494,6 +525,137 @@ Item {
                             root.showSaveFavouritePrompt();
                     }
                 }
+            }
+        }
+    }
+
+    // ------------------------------------------------ now playing strip --
+    // A fixed row at the foot of the panel, OUTSIDE the ListView, showing the
+    // channel that is currently selected for playback.
+    //
+    // Three properties of it are deliberate:
+    //
+    //   * it is not part of the list, so grouping, filter text and scroll
+    //     position cannot take it away — that is the whole point;
+    //   * it reflects the *selection*, never the decoder. A dead or offline
+    //     channel keeps its name here after the stream error toast has come
+    //     and gone, because the question it answers is "what did I put on?".
+    //     It reads `channels.currentName`, which the model updates only when
+    //     another channel is played, not `currentIndex`, which goes to -1 the
+    //     moment a filter hides the playing row;
+    //   * its logo does NOT go through `logoQueue` (PR #176). That queue
+    //     rations requests across up to fifteen thousand list rows; this is
+    //     one permanently visible image, and putting it behind a backlog of
+    //     collapsed-group rows would be the one place the delay is noticed.
+    //     The model has already applied the same "can this URL ever load /
+    //     has it failed before" filter through `display_logo`.
+    Rectangle {
+        id: nowPlayingStrip
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: Theme.listRowHeight + Theme.spaceSm * 2
+        color: nowPlayingArea.containsMouse && root.ctx && root.ctx.channels.hasCurrent
+               ? Theme.glassFillHover : Theme.glassFill
+
+        // Top hairline: the strip is a different surface from the list above.
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            color: Theme.glassBorder
+        }
+
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: Theme.spaceMd
+            anchors.rightMargin: Theme.spaceMd
+            anchors.topMargin: Theme.spaceSm
+            anchors.bottomMargin: Theme.spaceSm
+            spacing: Theme.spaceSm
+
+            Item {
+                id: nowPlayingLogo
+                width: 34
+                height: 22
+                anchors.verticalCenter: parent.verticalCenter
+                visible: root.ctx && root.ctx.channels.hasCurrent
+
+                Image {
+                    id: nowPlayingImage
+                    anchors.fill: parent
+                    source: root.ctx ? root.ctx.channels.currentLogo : ""
+                    asynchronous: true
+                    cache: true
+                    fillMode: Image.PreserveAspectFit
+                    visible: status === Image.Ready
+                    onStatusChanged: {
+                        // Same session-wide memory the rows keep, so a dead
+                        // logo is not re-requested from the list either.
+                        if (status === Image.Error && root.ctx
+                                && nowPlayingImage.source.toString().length > 0)
+                            root.ctx.noteLogoFailed(nowPlayingImage.source.toString());
+                    }
+                }
+                Text {
+                    anchors.centerIn: parent
+                    visible: nowPlayingImage.status !== Image.Ready
+                    text: Glyphs.play
+                    font.family: Theme.fontFamilyIcons
+                    font.pixelSize: 12
+                    color: Theme.accent
+                }
+            }
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - (nowPlayingLogo.visible ? 34 + Theme.spaceSm : 0)
+                spacing: 1
+
+                Text {
+                    width: parent.width
+                    // The muted placeholder for "nothing chosen yet".
+                    text: root.ctx && root.ctx.channels.hasCurrent
+                          ? root.ctx.channels.currentName : "Nothing playing"
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Theme.weightMedium
+                    color: root.ctx && root.ctx.channels.hasCurrent
+                           ? Theme.accent : Theme.textFaint
+                }
+                Text {
+                    width: parent.width
+                    visible: root.ctx && root.ctx.channels.hasCurrent
+                             && root.ctx.channels.currentGroup.length > 0
+                    text: root.ctx ? root.ctx.channels.currentGroup : ""
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeTiny
+                    color: Theme.textFaint
+                }
+            }
+        }
+
+        MouseArea {
+            id: nowPlayingArea
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: root.ctx !== null && root.ctx.channels.hasCurrent
+            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            // Scroll the list to the playing channel, opening its group first
+            // if the accordion has it shut. `revealCurrent()` does the
+            // expanding and hands back the row — or -1 when the channel is not
+            // in this view at all (filtered out), in which case there is
+            // nothing to scroll to and we leave the list where it is. It never
+            // re-plays: the channel is already the selected one.
+            onClicked: {
+                if (!root.ctx)
+                    return;
+                var targetRow = root.ctx.channels.revealCurrent();
+                if (targetRow >= 0)
+                    list.positionViewAtIndex(targetRow, ListView.Contain);
             }
         }
     }
