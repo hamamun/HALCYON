@@ -345,3 +345,38 @@ def test_full_shutdown_order_leaves_nothing(bridge):
     assert not _remote_threads()
     assert client.join(5.0)
     assert not bridge._timer.isActive()
+
+
+# ------------------------------------------------- the grace period itself ---
+# SHUTDOWN_TIMEOUT reverting to aiohttp's 60 s default would restore the
+# original bug silently — cleanup would once again outlast the join. The
+# argument also *moved* between aiohttp releases (TCPSite up to 3.11,
+# BaseRunner from 3.12) while requirements.txt still allows >=3.9, so passing
+# it to the wrong object is a real way to lose it without any error.
+
+def test_shutdown_timeout_is_far_below_the_join_timeout():
+    from remote.server import SHUTDOWN_TIMEOUT
+
+    assert SHUTDOWN_TIMEOUT < STOP_JOIN_TIMEOUT, (
+        "cleanup must finish well inside the join, or stop() abandons the thread"
+    )
+
+
+def test_shutdown_timeout_is_actually_applied_not_aiohttps_default():
+    from aiohttp import web
+
+    from remote.server import SHUTDOWN_TIMEOUT, _make_runner
+
+    runner, site_kwargs = _make_runner(web.Application())
+    applied = getattr(runner, "shutdown_timeout", None)
+    if applied is None:
+        applied = getattr(runner, "_shutdown_timeout", None)
+
+    if site_kwargs:
+        # Older aiohttp: the site carries it instead.
+        assert site_kwargs == {"shutdown_timeout": SHUTDOWN_TIMEOUT}
+    else:
+        assert applied == SHUTDOWN_TIMEOUT, (
+            f"shutdown_timeout is {applied}, not {SHUTDOWN_TIMEOUT} — "
+            "it silently reverted to aiohttp's default"
+        )

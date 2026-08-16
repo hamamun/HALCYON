@@ -29,9 +29,10 @@ load-bearing:
 * ``shutdown_timeout`` cut to :data:`SHUTDOWN_TIMEOUT`, so aiohttp can never
   sit on a straggler for a minute;
 * a single close path that runs *on the server thread*: cancel leftover tasks,
-  drain async generators and the default executor, then close the loop — the
-  executor threads are non-daemon, and a live one blocks interpreter exit long
-  after the window is gone.
+  drain async generators and the default executor, then close the loop.
+  ``concurrent.futures`` registers an atexit hook that ``join()``s every
+  executor worker — daemon status does not exempt them — so a worker still
+  busy at close delays interpreter exit for as long as its job runs.
 """
 
 from __future__ import annotations
@@ -390,10 +391,17 @@ class RemoteServer:
 
         ``run_forever`` returning is not the end of a loop's resources. Tasks
         may still be pending, async generators unfinalized, and — the one that
-        actually keeps a process alive — the loop's default ``ThreadPoolExecutor``
-        may hold *non-daemon* worker threads (aiohttp's static-file responses
-        use it). Interpreter exit joins those threads, so skipping this is a
-        hang with no Python frame to blame it on.
+        actually keeps a process alive — the loop's default
+        ``ThreadPoolExecutor`` may still hold busy workers (aiohttp's
+        static-file responses use it).
+
+        Those workers are daemon threads, which is exactly why this is easy to
+        get wrong: daemon status does *not* exempt them. ``concurrent.futures``
+        registers an atexit hook that ``join()``s every worker it ever handed
+        out, so interpreter exit blocks until each in-flight job finishes,
+        with no Python frame to blame it on. Draining the executor here, on the
+        way out and while we can still bound it, is what keeps that off the
+        exit path.
         """
         try:
             pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
@@ -410,8 +418,8 @@ class RemoteServer:
         except Exception:
             log.debug("remote loop asyncgen shutdown failed", exc_info=True)
         try:
-            # Python 3.9+. This is the step that joins the executor's
-            # non-daemon threads while we can still bound it.
+            # Python 3.9+. Drains the executor here rather than leaving its
+            # workers to be joined by concurrent.futures' atexit hook.
             loop.run_until_complete(loop.shutdown_default_executor())
         except Exception:
             log.debug("remote loop executor shutdown failed", exc_info=True)
