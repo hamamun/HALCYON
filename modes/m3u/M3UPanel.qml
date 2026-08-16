@@ -227,6 +227,8 @@ Item {
             // while a row is being built. Without the early-outs the second
             // call would abort the request the first one just started — the
             // very churn this queue exists to remove.
+            if (!slot)
+                return;
             if (slot.wanted.length === 0) {
                 withdraw(slot);
                 return;
@@ -244,7 +246,7 @@ Item {
         }
 
         function grant(slot) {
-            if (slot.holdsSlot)
+            if (!slot || slot.holdsSlot)
                 return;                       // never count one row twice
             activeCount += 1;
             slot.holdsSlot = true;
@@ -253,7 +255,7 @@ Item {
 
         // The request finished (either way). Free the slot, keep the picture.
         function done(slot) {
-            if (!slot.holdsSlot)
+            if (!slot || !slot.holdsSlot)
                 return;
             slot.holdsSlot = false;
             activeCount = Math.max(0, activeCount - 1);
@@ -263,6 +265,8 @@ Item {
         // The row no longer wants what it asked for — recycled by the view,
         // scrolled out, or its group collapsed.
         function withdraw(slot) {
+            if (!slot)
+                return;
             var i = pending.indexOf(slot);
             if (i !== -1)
                 pending.splice(i, 1);
@@ -416,7 +420,10 @@ Item {
 
                     onWantedChanged: logoQueue.restart(logoCell)
                     Component.onCompleted: logoQueue.restart(logoCell)
-                    Component.onDestruction: logoQueue.withdraw(logoCell)
+                    // Guarded: on a mode switch the whole panel is torn down,
+                    // and a delegate outliving the queue by one destruction
+                    // step would otherwise log a TypeError on every switch.
+                    Component.onDestruction: if (logoQueue) logoQueue.withdraw(logoCell)
 
                     Image {
                         id: logoImage

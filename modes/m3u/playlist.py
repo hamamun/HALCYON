@@ -91,6 +91,10 @@ class ChannelModel(QAbstractListModel):
         #: testable head-less and knows nothing about where the answer is
         #: stored.
         self._logo_is_dead = None
+        #: Memo for the *static* half of the logo decision (see
+        #: :meth:`display_logo`). Dropped whenever the channel list is
+        #: replaced, so it cannot outgrow the playlist it describes.
+        self._logo_loadable: dict[str, bool] = {}
 
     # ------------------------------------------------------------- Qt API --
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -194,6 +198,7 @@ class ChannelModel(QAbstractListModel):
         identity a channel has."""
         self.beginResetModel()
         current_url = self._current.url if self._current else None
+        self._logo_loadable = {}
         self._channels = list(channels)
         self._current = None
         if current_url:
@@ -285,6 +290,7 @@ class ChannelModel(QAbstractListModel):
         """Empty the list (Clear Playlist). The shared controller stops the
         player itself; `current` drops with the content."""
         self.beginResetModel()
+        self._logo_loadable = {}
         self._channels = []
         self._view = []
         self._current = None
@@ -355,9 +361,21 @@ class ChannelModel(QAbstractListModel):
         * no logo at all;
         * a URL that *cannot* decode in this build (SVG, image share pages);
         * a URL that has already failed for us before.
+
+        Called from :meth:`data`, so it is on the hot path of building a
+        15k-row view: the URL *inspection* is memoised per distinct URL (it
+        parses the string, the view does not), while the failure gate is asked
+        every time (it is a set lookup, and its answer legitimately changes as
+        the session discovers more dead logos).
         """
         logo = (channel.logo or "").strip()
-        if not logo or not is_loadable_logo(logo):
+        if not logo:
+            return ""
+        loadable = self._logo_loadable.get(logo)
+        if loadable is None:
+            loadable = is_loadable_logo(logo)
+            self._logo_loadable[logo] = loadable
+        if not loadable:
             return ""
         is_dead = self._logo_is_dead
         if is_dead is not None:

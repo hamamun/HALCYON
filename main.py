@@ -521,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             log.exception("settings flush failed")
 
-        # Taskbar preview first: it touches the window handle, so it must go
+        # Taskbar preview next: it touches the window handle, so it must go
         # before Qt tears the window down.
         try:
             if taskbar_preview is not None:
