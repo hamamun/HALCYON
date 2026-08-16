@@ -95,6 +95,11 @@ class RemoteBridge(QObject):
 
         self.store = StatusStore()
         self._server_url = ""
+        #: Flipped by :meth:`stop` on shutdown. Read from the server thread in
+        #: :meth:`request` and checked again in :meth:`_dispatch`, because a
+        #: command emitted just before the flag was set is already sitting in
+        #: the Qt event queue and will still be delivered.
+        self._closed = False
         # Cache for heavy M3U channel snapshot — rebuilt only when the model
         # actually changes, not on every 500 ms tick (§R.4 perf for thousands).
         self._m3u_cache_sig = None
@@ -149,7 +154,14 @@ class RemoteBridge(QObject):
 
     # ---------------------------------------------------------- server side ---
     def request(self, action: str, payload: dict | None = None) -> None:
-        """Thread-safe command entry point — safe from the aiohttp thread."""
+        """Thread-safe command entry point — safe from the aiohttp thread.
+
+        Silently drops everything once :meth:`stop` has run: during teardown
+        the controller, engine and mode contexts are being destroyed, and a
+        queued command delivered into them is a crash, not a feature.
+        """
+        if self._closed:
+            return
         self.commandRequested.emit(action, payload or {})
 
     # ------------------------------------------------------------- status ----
@@ -163,16 +175,46 @@ class RemoteBridge(QObject):
         self.publish_now()
 
     def stop(self) -> None:
-        """Stop the status poller. Idempotent; called on app shutdown so the
-        bridge never reads engine state after the engine is torn down."""
+        """Close the bridge. Idempotent; called on app shutdown so the bridge
+        never reads engine state after the engine is torn down.
+
+        Beyond stopping the poll timer this drops every reference the bridge
+        holds to the player, the controller and the mode contexts. Those are
+        the objects Qt is about to destroy, and a stale reference here is what
+        turns a late ``QTimer.singleShot(40, publish_now)`` — one is armed by
+        *every* dispatched command — into a read of a dead object.
+
+        The ``commandRequested`` connection is deliberately left in place: the
+        ``_closed`` flag already makes both :meth:`request` and
+        :meth:`_dispatch` inert, and PySide warns loudly when disconnecting a
+        slot Qt has already cleaned up. A guarded slot is quieter and just as
+        safe as a disconnected one.
+        """
+        if self._closed:
+            return  # already torn down; re-running would only warn
+        self._closed = True
         try:
             if self._timer.isActive():
                 self._timer.stop()
         except RuntimeError:  # pragma: no cover — already destroyed
             pass
+        self._controller = None
+        self._engine = None
+        self._equalizer = None
+        self._subs = None
+        self._contexts = {}
+        self._m3u_cache_sig = None
+        self._m3u_cache_rows = []
 
     def publish_now(self) -> None:
-        """Rebuild the snapshot from live state (Qt thread) and publish it."""
+        """Rebuild the snapshot from live state (Qt thread) and publish it.
+
+        Guarded on ``_closed``: singleShot timers armed by the last dispatched
+        command, and signal handlers registered on the mode contexts, can both
+        fire after :meth:`stop` — after the engine is gone.
+        """
+        if self._closed:
+            return
         snap: dict = {"app": "halcyon", "serverUrl": self._server_url}
         controller, engine = self._controller, self._engine
 
@@ -405,6 +447,10 @@ class RemoteBridge(QObject):
         """Run a remote command on the Qt thread. Never raises to the caller:
         each handler is individually guarded so one bad payload cannot take
         down the queue."""
+        # Queued delivery means a command emitted before stop() can arrive
+        # after it. Drop it rather than reach into a torn-down player.
+        if self._closed:
+            return
         log.debug("remote command: %s %s", action, payload)
         handler = getattr(self, f"_cmd_{action.replace('.', '_')}", None)
         if handler is None:
