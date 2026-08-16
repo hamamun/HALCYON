@@ -42,7 +42,8 @@ let SUBL = new Set();    // subtitle language selection
 let WEBM = null;         // last web media status
 let WM_VOLUME_PENDING = null;
 let WM_VOLUME_FRAME = null;
-let EQOPEN = true;       // equalizer accordion
+// NOTE: the collapsible Local sections keep their own open/closed state inside
+// makeCollapser() below, so snapshots can never re-open or close them.
 let M3U_EXPANDED = null; // remembered expanded groups (null = auto first time)
 let M3U_LAST_HTML = "";  // cached html to avoid DOM churn + innerHTML normalization mismatch
 let M3U_LAST_COUNT = -1;
@@ -151,6 +152,9 @@ $("clearPlBtn").addEventListener("click", () => {
 
 function renderPlaylist(pl) {
   const box = $("playlist");
+  // track count stays visible on the header while the list is collapsed
+  const plc = $("plCount");
+  if (plc) plc.textContent = pl.rows.length ? String(pl.rows.length) : "";
   if (!pl.rows.length) {
     if (box.innerHTML !== '<div class="status">Playlist is empty</div>') {
       box.innerHTML = '<div class="status">Playlist is empty</div>';
@@ -185,7 +189,7 @@ function renderPlaylist(pl) {
   // own scrolling on every 500 ms snapshot push.
   if (pl.currentIndex >= 0 && pl.currentIndex !== PL_LAST_CUR) {
     const el = box.querySelector(".row.current");
-    if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   PL_LAST_CUR = pl.currentIndex >= 0 ? pl.currentIndex : -1;
   $("shuffleBtn").classList.toggle("on", pl.shuffle);
@@ -333,15 +337,51 @@ function renderSubs(subs) {
   }
 }
 
+/* ------------------------- collapsible sections -------------------------
+   Snapshots stream in ~3x/second and re-render these cards, so open/closed
+   state lives in JS (never re-derived from the snapshot) and the body is
+   only shown/hidden — a section can never snap shut under the user's finger. */
+function makeCollapser(headId, bodyId, arrowId, open) {
+  const head = $(headId), body = $(bodyId), arrow = $(arrowId);
+  if (!head || !body) return { get open() { return false; }, set: () => {} };
+  const state = { open: !!open };
+  const apply = () => {
+    body.hidden = !state.open;
+    head.classList.toggle("open", state.open);
+    head.setAttribute("aria-expanded", state.open ? "true" : "false");
+    if (arrow) arrow.textContent = state.open ? "▾" : "▸";
+  };
+  const toggle = () => { state.open = !state.open; apply(); };
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+  });
+  apply();
+  return state;
+}
+
+/* Tracks & Subtitles — collapsed by default */
+const TRK = makeCollapser("trkHead", "trkBody", "trkArrow", false);
+
+/* Playlist — starts expanded; shuffle/repeat/clear stay live while collapsed */
+const PLC = makeCollapser("plHead", "playlist", "plArrow", true);
+
 /* ----------------------------- equalizer ----------------------------- */
-$("eqToggle").addEventListener("click", () => {
-  EQOPEN = !EQOPEN;
-  $("eqBody").hidden = !EQOPEN;
-  $("eqToggle").textContent = "Equalizer " + (EQOPEN ? "▾" : "▸");
-});
+/* Equalizer — collapsed by default; bands are a nested section, also closed */
+const EQC = makeCollapser("eqToggle", "eqBody", "eqArrow", false);
+const EQB = makeCollapser("eqBandsHead", "eqBands", "eqBandsArrow", false);
+
+/* VLC hands back raw floats (a preset band is 4.800000190734863), which would
+   overflow the fixed-width dB column and wrap the row. Round to 1 decimal and
+   drop a trailing ".0" so the readout is never wider than "-12.5 dB". */
+function fmtDb(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return "0";
+  return String(Math.round(n * 10) / 10);
+}
 
 $("eqPreset").addEventListener("change", (e) => cmd("eq.preset", { index: Number(e.target.value) }));
-$("eqPreamp").addEventListener("input", (e) => { $("eqPreampVal").textContent = e.target.value + " dB"; });
+$("eqPreamp").addEventListener("input", (e) => { $("eqPreampVal").textContent = fmtDb(e.target.value) + " dB"; });
 $("eqPreamp").addEventListener("change", (e) => cmd("eq.preamp", { value: Number(e.target.value) }));
 $("eqReset").addEventListener("click", () => cmd("eq.reset", {}));
 
@@ -354,15 +394,20 @@ function renderEq(eq) {
 
   if (!isDragging($("eqPreamp"))) {
     $("eqPreamp").value = eq.preamp;
-    $("eqPreampVal").textContent = eq.preamp + " dB";
+    $("eqPreampVal").textContent = fmtDb(eq.preamp) + " dB";
   }
   let html = "";
   (eq.bands || []).forEach((label, i) => {
     const val = (eq.amps && eq.amps[i]) || 0;
-    html += `<label class="lbl">${esc(label)}
-      <input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">
-      <span class="val">${val} dB</span></label>`;
+    // fixed-width label/value columns keep every slider on the same left and
+    // right edge, so a flat EQ reads as a straight line (§ band alignment)
+    html += `<div class="eqband-row"><span class="eqlabel">${esc(label)}</span>` +
+      `<input type="range" class="eqband" data-band="${i}" min="-15" max="15" step="0.5" value="${val}">` +
+      `<span class="val">${fmtDb(val)} dB</span></div>`;
   });
+  const bandCount = (eq.bands || []).length;
+  const bc = $("eqBandsCount");
+  if (bc) bc.textContent = bandCount ? String(bandCount) : "";
   // Only update bands if none of the sliders are being dragged and content changed
   const bandsBox = $("eqBands");
   const anyBandDragging = Array.from(bandsBox.querySelectorAll(".eqband")).some(isDragging);
@@ -370,7 +415,7 @@ function renderEq(eq) {
     bandsBox.innerHTML = html;
     bandsBox.querySelectorAll(".eqband").forEach((s) => {
       s.addEventListener("input", () => {
-        s.nextElementSibling.textContent = s.value + " dB";
+        s.nextElementSibling.textContent = fmtDb(s.value) + " dB";
       });
       s.addEventListener("change", () => {
         cmd("eq.band", { band: Number(s.dataset.band), value: Number(s.value) });
@@ -615,6 +660,36 @@ function bindChannelActions(box, count) {
 /* ----------------------------- Web ----------------------------- */
 let WEB_BM_LAST_HTML = "";
 let WEB_BM_LAST_SIG = "";
+let WEB_BM_OPEN = false;      // bookmarks accordion — collapsed by default
+let WEB_TABS_LAST_HTML = "";  // cached tab rows to avoid DOM churn every snapshot
+let WEB_TABS_LAST_ACTIVE = "";
+
+/* Bookmarks accordion: collapsed on load, tap the title to expand. */
+function setBookmarksOpen(open) {
+  WEB_BM_OPEN = !!open;
+  const head = $("bmHead"), body = $("bmBody"), arrow = $("bmArrow");
+  if (!head || !body) return;
+  body.hidden = !WEB_BM_OPEN;
+  head.classList.toggle("open", WEB_BM_OPEN);
+  head.setAttribute("aria-expanded", WEB_BM_OPEN ? "true" : "false");
+  if (arrow) arrow.textContent = WEB_BM_OPEN ? "▾" : "▸";
+}
+
+if ($("bmHead")) {
+  $("bmHead").addEventListener("click", () => setBookmarksOpen(!WEB_BM_OPEN));
+  $("bmHead").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setBookmarksOpen(!WEB_BM_OPEN); }
+  });
+  setBookmarksOpen(false);
+}
+
+if ($("webNewTabBtn")) {
+  $("webNewTabBtn").addEventListener("click", () => {
+    cmd("switchMode", { id: "web" });
+    setChip("web");
+    cmd("web.newTab", {});
+  });
+}
 
 $("addBmBtn").addEventListener("click", () => {
   if (SNAP && SNAP.web.activeTab && SNAP.web.activeTab.url) {
@@ -634,16 +709,81 @@ function renderWeb(web) {
   const url = tab.url || "—";
   $("webTitle").textContent = title;
   $("webUrl").textContent = url;
+  const tabs = Array.isArray(web.tabs) ? web.tabs : [];
+  const activeIdx = (typeof web.activeTabIndex === "number" && web.activeTabIndex >= 0)
+    ? web.activeTabIndex
+    : (tab.id ? tabs.findIndex((t) => t && t.id === tab.id) : -1);
   const tc = $("webTabCount");
   if (tc) {
-    const count = web.tabCount || 0;
-    const idx = (web.tabs && tab.id) ? (web.tabs.findIndex(t=>t.id===tab.id)+1) : 0;
+    const count = web.tabCount || tabs.length || 0;
+    const idx = activeIdx >= 0 ? activeIdx + 1 : 0;
     tc.textContent = count ? (idx ? `Tab ${idx}/${count}` : `${count} tabs`) : "";
+  }
+
+  // --- Open tabs: tap to switch, ✕ to close (cached to avoid DOM churn) ---
+  const tl = $("webTabs");
+  if (tl) {
+    const activeId = (activeIdx >= 0 && tabs[activeIdx]) ? (tabs[activeIdx].id || "") : "";
+    let tabsHtml = "";
+    if (tabs.length) {
+      tabsHtml = tabs.map((t, i) => {
+        const cur = i === activeIdx ? " current" : "";
+        const name = (t && (t.title || t.url)) || "New Tab";
+        const sub = ((t && t.url) || "").replace(/^https?:\/\//, "");
+        return `<div class="row${cur}" data-tab-sel="${i}" data-tab-id="${esc((t && t.id) || "")}">` +
+          `<span class="tnum">${i + 1}</span>` +
+          `<div class="rname">${esc(name)}</div>` +
+          (sub ? `<div class="rsub" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>` : "") +
+          `<button class="tclose" data-tab-close="${i}" title="Close tab">✕</button></div>`;
+      }).join("");
+    } else {
+      tabsHtml = '<div class="status">No open tabs</div>';
+    }
+    if (tabsHtml !== WEB_TABS_LAST_HTML) {
+      tl.innerHTML = tabsHtml;
+      WEB_TABS_LAST_HTML = tabsHtml;
+      tl.querySelectorAll("[data-tab-sel]").forEach((row) => {
+        row.addEventListener("click", (e) => {
+          if (e.target.closest("[data-tab-close]")) return;   // ✕ handled below
+          const id = row.dataset.tabId || "";
+          const index = Number(row.dataset.tabSel);
+          // Optimistic highlight; the next snapshot confirms.
+          tl.querySelectorAll(".row").forEach((r) => r.classList.remove("current"));
+          row.classList.add("current");
+          cmd("switchMode", { id: "web" });
+          setChip("web");
+          cmd("web.selectTab", id ? { id, index } : { index });
+        });
+      });
+      tl.querySelectorAll("[data-tab-close]").forEach((b) => {
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const row = b.closest("[data-tab-sel]");
+          const id = (row && row.dataset.tabId) || "";
+          const index = Number(b.dataset.tabClose);
+          b.disabled = true;
+          cmd("web.closeTab", id ? { id, index } : { index });
+        });
+      });
+    }
+    // keep the active tab visible in the 4-row window, without fighting scrolling
+    if (activeId !== WEB_TABS_LAST_ACTIVE) {
+      const cur = tl.querySelector(".row.current");
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+      WEB_TABS_LAST_ACTIVE = activeId;
+    }
+  }
+  const ntb = $("webNewTabBtn");
+  if (ntb) {
+    ntb.disabled = !!web.atMaxTabs;
+    ntb.title = web.atMaxTabs ? "Maximum 15 tabs reached" : "Open a new tab";
   }
 
   // --- Bookmarks with caching for perf ---
   const bm = $("webBookmarks");
   const list = web.bookmarks || [];
+  const bmc = $("bmCount");
+  if (bmc) bmc.textContent = list.length ? String(list.length) : "";
   const sig = list.length + "|" + (list[0]?.url||"") + "|" + list.filter(b=>b.title).length + "|" + (list.map(b=>b.url).join(",").slice(0,200));
   let bmHtml = "";
   if (list.length) {

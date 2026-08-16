@@ -165,11 +165,65 @@ select { cursor: pointer; }
 .gbody { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .gbody[hidden] { display: none !important; }
 
+/* ---------- equalizer bands: fixed label + value columns ----------
+   The band labels ("31" … "16k") differ in width. Laid out inline they push
+   every slider to a different left edge, so a flat EQ still renders as a
+   zigzag. A 3-column grid pins the track's start and end, making flat look
+   flat and the dB readouts line up. */
+.eqbands { margin-top: 4px; }
+.eqbands[hidden] { display: none !important; }
+.eqband-row { display: grid; grid-template-columns: 34px 1fr 56px;
+  align-items: center; gap: 8px; margin-top: 8px; }
+.eqband-row .eqlabel { font-size: 0.75rem; color: var(--dim); text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eqband-row input[type="range"] { width: 100%; min-width: 0; margin: 0; }
+/* widest readout is "-14.5 dB"; nowrap keeps it on one line if it ever grows */
+.eqband-row .val { margin-left: 0; text-align: right; font-size: 0.7rem;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---------- collapsible card title (bookmarks) ---------- */
+.card-title.collapser { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  user-select: none; -webkit-user-select: none; margin-bottom: 0; padding: 2px 0; }
+.card-title.collapser.open { margin-bottom: 8px; }
+.card-title.collapser:active { color: var(--accent2); }
+.card-title.collapser .garrow { min-width: 12px; text-align: center; }
+.card-title.collapser .gcount { margin-left: auto; color: var(--dim); font-weight: 600;
+  letter-spacing: 0; text-transform: none; font-size: 0.72rem; }
+#bmBody[hidden] { display: none !important; }
+#trkBody[hidden], #eqBody[hidden] { display: none !important; }
+/* nested collapser (EQ bands) sits inside an already-open card */
+.card-title.collapser.sub { margin-top: 12px; color: var(--accent2); font-size: 0.68rem; }
+.card-title.collapser.sub.open { margin-bottom: 4px; }
+/* more than 3 bookmarks -> scrolls inside a 3-row window */
+.bmlist { max-height: calc(3 * 48px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---------- web tab list ---------- */
+.subhead { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.subhead-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--accent1); flex: 1; }
+.subhead .mini { flex: 0 0 auto; padding: 7px 10px; font-size: 0.72rem; }
+.subhead .mini:disabled { opacity: 0.45; cursor: default; }
+/* more than 4 tabs -> scrolls inside a 4-row window (15 tabs max on PC) */
+.tablist { margin-top: 8px; display: flex; flex-direction: column; gap: 4px;
+  max-height: calc(4 * 48px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.tablist .row { min-height: 44px; cursor: pointer; }
+.tablist .row.current { border-color: rgba(94,234,212,0.6); background: rgba(94,234,212,0.08); }
+.tablist .row.current .rname { color: var(--accent1); font-weight: 600; }
+.tablist .tnum { color: var(--dim); font-size: 0.72rem; min-width: 18px; text-align: center;
+  font-variant-numeric: tabular-nums; }
+.tablist .tclose { border: 0; background: transparent; color: var(--dim); font-size: 1rem;
+  cursor: pointer; padding: 6px 8px; }
+.tablist .tclose:active { color: var(--danger); }
+
 /* ---------- playlist (pinned bottom, max 7 rows, autoscroll) ---------- */
 #playlistWrap { margin-top: auto; }
 #playlistHead { display: flex; align-items: center; gap: 8px; }
 #playlistHead .card-title { margin: 0; flex: 1; }
 #playlistHead .mini { margin: 0; }
+/* collapsed: the row is just the header + shuffle/repeat/clear, still usable */
+#playlist[hidden] { display: none !important; }
+#playlistHead .card-title.collapser { margin-bottom: 0; }
+#playlistHead .gcount { margin-left: 4px; }
 #playlist {
   max-height: calc(7 * 48px); overflow-y: auto; margin-top: 8px;
   display: flex; flex-direction: column; gap: 4px;

@@ -383,6 +383,7 @@ class RemoteBridge(QObject):
 
     def _web_snapshot(self) -> dict:
         out = {"tabCount": 0, "tabs": [], "activeTab": None,
+               "activeTabIndex": -1, "atMaxTabs": False,
                "runtimeAvailable": False, "bookmarks": [],
                "activeTabBookmarked": False, "media": None}
         ctx = self._contexts.get("web")
@@ -390,6 +391,7 @@ class RemoteBridge(QObject):
             return out
         for key, attr in (
             ("tabCount", "tabCount"), ("tabs", "tabs"), ("activeTab", "activeTab"),
+            ("activeTabIndex", "activeTabIndex"), ("atMaxTabs", "isAtMaxTabs"),
             ("runtimeAvailable", "runtimeAvailable"), ("bookmarks", "bookmarkItems"),
             ("activeTabBookmarked", "activeTabBookmarked")
         ):
@@ -737,6 +739,72 @@ class RemoteBridge(QObject):
     def _cmd_web_openBookmark(self, p: dict) -> None:
         """Alias – bookmark tap always opens new tab per UX spec."""
         self._cmd_web_openInNewTab(p)
+
+    def _ensure_web_mode(self) -> None:
+        """Bring the PC to Web mode so tab actions are visible immediately."""
+        try:
+            if self._controller is not None:
+                cur = read(self._controller, "activeMode", "")
+                if cur != "web":
+                    self._controller.setActiveMode("web")
+        except Exception:
+            pass
+
+    def _web_tab_index(self, ctx, p: dict) -> int:
+        """Resolve a tab index from an explicit index or a stable tab id.
+
+        The phone sends the id whenever it has one: indices can shift between
+        the snapshot the phone rendered and the moment the tap arrives.
+        """
+        tab_id = str(p.get("id", "") or "")
+        if tab_id:
+            try:
+                for i, tab in enumerate(read(ctx, "tabs", []) or []):
+                    if str((tab or {}).get("id", "")) == tab_id:
+                        return i
+            except Exception:
+                pass
+            return -1
+        try:
+            return int(p.get("index", -1))
+        except (TypeError, ValueError):
+            return -1
+
+    def _cmd_web_selectTab(self, p: dict) -> None:
+        """Switch the PC browser to the tab the phone tapped (§R.2)."""
+        ctx = self._web()
+        if ctx is None:
+            return
+        index = self._web_tab_index(ctx, p)
+        if index < 0:
+            return
+        self._ensure_web_mode()
+        selector = getattr(ctx, "setActiveTab", None)
+        if callable(selector):
+            selector(index)
+
+    def _cmd_web_closeTab(self, p: dict) -> None:
+        """Close a tab from the phone."""
+        ctx = self._web()
+        if ctx is None:
+            return
+        index = self._web_tab_index(ctx, p)
+        if index < 0:
+            return
+        closer = getattr(ctx, "closeTab", None)
+        if callable(closer):
+            closer(index)
+
+    def _cmd_web_newTab(self, p: dict) -> None:
+        """Open a fresh tab (optionally at a URL) from the phone."""
+        ctx = self._web()
+        if ctx is None:
+            return
+        self._ensure_web_mode()
+        url = str(p.get("url", "") or "")
+        opener = getattr(ctx, "addTab", None)
+        if callable(opener):
+            opener(url)
 
     def _cmd_web_back(self, _p: dict) -> None:
         ctx = self._web()
