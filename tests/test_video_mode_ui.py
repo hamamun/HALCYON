@@ -344,8 +344,8 @@ def test_native_dialogs_are_seated_on_the_current_chrome_host():
     )
     for raw in ("fileDialog.open()", "folderDialog.open()", "subtitleDialog.open()"):
         assert raw not in main, (
-            f"{raw} bypasses the seating path — in Turbo that opens "
-            "Explorer under the topmost chrome overlay"
+            f"{raw} bypasses the seating path — in Turbo that gives the "
+            "dialog a different owner from the chrome that opened it"
         )
 
     # Turbo ending while Explorer is up: the dialogs must be pointed home
@@ -392,6 +392,23 @@ def test_the_chrome_moves_into_a_transparent_overlay_window():
         "Soft must get the glass/layered shell back when Turbo ends"
     )
     assert "videoWidth: window.turboVideoWidth" in main
+
+
+def test_turbo_chrome_is_owned_but_not_globally_always_on_top():
+    """Other applications must cover the complete Halcyon window group.
+
+    Turbo needs a separate native window so QML chrome can sit above VLC's
+    child HWND.  Making that overlay globally topmost, however, leaves its
+    transparent playlist/panels/transport floating above Explorer after the
+    main video window goes behind it.  Ownership supplies the required local
+    stacking; WindowStaysOnTopHint is reserved for intentional independent
+    surfaces such as PiP and Mini Mode.
+    """
+    chrome = _read(TURBO_CHROME_QML)
+    flags = chrome.split("flags:", 1)[1].split("\n", 1)[0]
+    assert "Qt.Tool" in flags
+    assert "Qt.WindowStaysOnTopHint" not in flags
+    assert "transientParent: hostWindow" in chrome
 
 
 def test_there_is_still_exactly_one_transport_bar_and_one_osd():
@@ -720,6 +737,7 @@ def test_the_shell_starts_on_soft_with_no_native_container(turbo_window):
 
 @gui_only
 def test_turbo_embeds_the_native_child_and_moves_the_chrome(turbo_window):
+    from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
 
     window, stub = turbo_window
@@ -739,6 +757,15 @@ def test_turbo_embeds_the_native_child_and_moves_the_chrome(turbo_window):
     assert chrome.parentItem() is not home, "the chrome stayed under the native surface"
     assert chrome.parentItem().objectName() == "turboChromeHost"
     assert window.property("chromeInOverlay") is True
+    overlay_window = chrome.window()
+    assert overlay_window is not window
+    assert overlay_window.transientParent() is window, (
+        "the Turbo chrome must remain owned by the main window so the whole "
+        "Halcyon group follows normal application z-order"
+    )
+    assert not (overlay_window.flags() & Qt.WindowStaysOnTopHint), (
+        "the Turbo overlay must sit above VLC, not above every application"
+    )
     letterbox = _named(window, "turboLetterbox")
     assert letterbox is not None and letterbox.property("visible") is True
     shell_color = window.color() if callable(getattr(window, "color", None)) else window.color

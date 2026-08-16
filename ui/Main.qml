@@ -1206,15 +1206,12 @@ Shell {
         settingsDialog.open();
     }
 
-    // Native dialogs (Add files / Add folder / Load subtitle) are the same
-    // disease Settings had, one layer further out. Left alone, QtQuick.Dialogs
-    // resolves their owner to the main shell window — but in Turbo the chrome
-    // lives in a *topmost* overlay window (TurboChromeWindow), so Explorer
-    // opens UNDER the overlay and its WindowModal modality blocks the shell:
-    // a dialog that is visible somewhere yet cannot be clicked. Seating means
-    // handing the dialog the current chrome host as its owner window at open
-    // time — owned windows stack above their owner, and the modality then
-    // blocks the overlay's hierarchy instead of fighting it. Assigned per
+    // Native dialogs (Add files / Add folder / Load subtitle) need the same
+    // owner as the controls that opened them. QtQuick.Dialogs would otherwise
+    // resolve their owner to the main shell while Turbo's controls live in its
+    // separate owned tool window. Seating means handing the dialog the current
+    // chrome host as its owner at open time, so it stacks above that host and
+    // its WindowModal modality blocks the correct hierarchy. Assigned per
     // open, never as a binding, so a live native dialog is not re-seated
     // mid-flight (the same rule seatSettingsDialog follows). In Soft the host
     // is the main window and this is exactly the old behaviour.
@@ -1487,7 +1484,7 @@ Shell {
             osdLayer.clear()
             // Complementary to the catcher gate: if Turbo is already off
             // (Web / M3U / Soft), chrome must be home in the same moment so
-            // an always-on-top overlay window cannot linger over Web.
+            // an orphaned native overlay window cannot linger over Web.
             if (!window.turboActive)
                 window.moveChromeHome()
         }
