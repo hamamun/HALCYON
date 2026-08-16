@@ -54,10 +54,17 @@ from urllib.parse import unquote, urlparse
 
 log = logging.getLogger(__name__)
 
-#: The per-media libVLC option the Turbo route records in
-#: ``VlcEngine._media_options``. Defined here so the engine's "is the GPU
-#: being requested?" checks and this policy can never drift apart.
+#: The per-media libVLC options used to make the decoder choice explicit.
+#:
+#: ``CPU_DECODE_OPTION`` is deliberately not represented by merely omitting
+#: ``HW_DECODE_OPTION``.  In libVLC 3, ``libvlc_media_player_set_hwnd()`` sets
+#: the player's ``avcodec-hw`` variable to an empty string (automatic).  That
+#: player-level value is closer than the instance's ``--avcodec-hw=none``, so
+#: an option-less legacy media still enters hardware decode.  An explicit
+#: per-media ``none`` overrides the HWND reset while retaining the same player
+#: and Turbo's native output window.
 HW_DECODE_OPTION = ":avcodec-hw=d3d11va"
+CPU_DECODE_OPTION = ":avcodec-hw=none"
 
 #: ``libvlc_track_type_t``: unknown=-1, audio=0, video=1, text=2.
 _TRACK_TYPE_VIDEO = 1
@@ -91,8 +98,8 @@ GPU_UNSAFE_CODECS = frozenset({
 })
 
 #: Containers whose video is, in practice, always a legacy codec. The engine
-#: strips the GPU request for these at ``open()`` time, before the driver
-#: gets a chance to lie.
+#: replaces the GPU request with an explicit CPU request for these at
+#: ``open()`` time, before the driver gets a chance to lie.
 GPU_UNSAFE_EXTENSIONS = frozenset({
     ".wmv", ".asf", ".wm",                 # Windows Media → WMV3 / VC-1
     ".avi", ".divx",                       # DivX/XviD-era MPEG-4
