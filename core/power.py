@@ -88,6 +88,20 @@ class PowerGuard(QObject):
         # (cover-art "video" tracks, or a video ES appearing late), and the
         # right answer changes with it.
         engine.tracksChanged.connect(self._refresh)
+        # The moment libVLC knows the picture size is the moment ``has_vout()``
+        # starts answering yes. Without this, a film held only the
+        # system-required flag for the first seconds of playback and waited for
+        # the 5 s re-check below to upgrade it — a window in which Windows was
+        # still free to blank the screen. This adds no new state and no new
+        # thread: ``videoSizeChanged`` is emitted on the GUI thread from the
+        # same player-event handling that already drives ``stateChanged``, and
+        # ``_refresh`` is idempotent (``_apply`` returns immediately when the
+        # flags are unchanged), so an extra emission can only ever be a no-op.
+        try:
+            engine.videoSizeChanged.connect(self._refresh)
+        except AttributeError:
+            # Head-less fakes in the tests do not all carry this signal.
+            log.debug("engine has no videoSizeChanged; relying on the re-check")
 
         # Belt and braces, and cheap: a periodic re-check.
         #

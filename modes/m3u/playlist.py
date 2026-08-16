@@ -40,6 +40,7 @@ from core import paths as path_utils
 from modes.m3u.parser import Channel, ParseResult, parse_m3u
 from modes.m3u import parser
 from modes.m3u.favourites import FavouritesStore
+from modes.m3u.logo_cache import LogoFailureStore, is_loadable_logo
 from modes.m3u.sources import KIND_FILE, KIND_URL, MAX_SOURCES, Source, SourcesStore
 
 log = logging.getLogger(__name__)
@@ -85,6 +86,15 @@ class ChannelModel(QAbstractListModel):
         self._group_counts: dict[str, int] = {}
         self._favourite_urls: set[str] = set()
         self._favourites_only = False
+        #: Predicate injected by :class:`M3UContext`: "has this logo URL
+        #: already failed?". Kept as a plain callable so the model stays
+        #: testable head-less and knows nothing about where the answer is
+        #: stored.
+        self._logo_is_dead = None
+        #: Memo for the *static* half of the logo decision (see
+        #: :meth:`display_logo`). Dropped whenever the channel list is
+        #: replaced, so it cannot outgrow the playlist it describes.
+        self._logo_loadable: dict[str, bool] = {}
 
     # ------------------------------------------------------------- Qt API --
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -103,7 +113,7 @@ class ChannelModel(QAbstractListModel):
         if role == self.LanguageRole:
             return channel.language
         if role == self.LogoRole:
-            return channel.logo
+            return self.display_logo(channel)
         if role == self.UrlRole:
             return channel.url
         if role == self.GroupKeyRole:
@@ -188,6 +198,7 @@ class ChannelModel(QAbstractListModel):
         identity a channel has."""
         self.beginResetModel()
         current_url = self._current.url if self._current else None
+        self._logo_loadable = {}
         self._channels = list(channels)
         self._current = None
         if current_url:
@@ -279,6 +290,7 @@ class ChannelModel(QAbstractListModel):
         """Empty the list (Clear Playlist). The shared controller stops the
         player itself; `current` drops with the content."""
         self.beginResetModel()
+        self._logo_loadable = {}
         self._channels = []
         self._view = []
         self._current = None
@@ -328,6 +340,51 @@ class ChannelModel(QAbstractListModel):
     def is_favourite(self, url: str) -> bool:
         """True when ``url`` is starred — used by the mobile remote snapshot."""
         return str(url).strip() in self._favourite_urls
+
+    # ---------------------------------------------------------------- logos --
+    def set_logo_gate(self, is_dead) -> None:
+        """Install the "has this logo already failed?" predicate.
+
+        Injected rather than imported so the model keeps no store of its own:
+        :class:`M3UContext` owns the persistent one, and a head-less test can
+        pass a plain ``set().__contains__`` (or nothing at all).
+        """
+        self._logo_is_dead = is_dead
+
+    def display_logo(self, channel: Channel) -> str:
+        """The logo URL the list should actually request — or ``""``.
+
+        Three things are filtered out here, before a single byte is asked for,
+        because the row falls back to the globe glyph either way and a request
+        that cannot succeed is pure cost:
+
+        * no logo at all;
+        * a URL that *cannot* decode in this build (SVG, image share pages);
+        * a URL that has already failed for us before.
+
+        Called from :meth:`data`, so it is on the hot path of building a
+        15k-row view: the URL *inspection* is memoised per distinct URL (it
+        parses the string, the view does not), while the failure gate is asked
+        every time (it is a set lookup, and its answer legitimately changes as
+        the session discovers more dead logos).
+        """
+        logo = (channel.logo or "").strip()
+        if not logo:
+            return ""
+        loadable = self._logo_loadable.get(logo)
+        if loadable is None:
+            loadable = is_loadable_logo(logo)
+            self._logo_loadable[logo] = loadable
+        if not loadable:
+            return ""
+        is_dead = self._logo_is_dead
+        if is_dead is not None:
+            try:
+                if is_dead(logo):
+                    return ""
+            except Exception:  # noqa: BLE001 - a broken gate must not blank the list
+                log.debug("logo gate raised for %s", logo, exc_info=True)
+        return logo
 
     # ------------------------------------------------------------ internals --
     #: Set by the context: the function that actually opens a URL in the
@@ -491,6 +548,11 @@ class M3UContext(QObject):
         self._store = SourcesStore(store_path)
         favourites_path = settings.path.parent / "m3u-favourites.json"
         self._favourites = FavouritesStore(favourites_path)
+        # Dead logos are remembered across sessions: without this, every entry
+        # into M3U re-requests every 404/403 in the playlist (§M2.3).
+        logo_failures_path = settings.path.parent / "m3u-logo-failures.json"
+        self._logo_failures = LogoFailureStore(logo_failures_path)
+        self._model.set_logo_gate(self._logo_failures.contains)
 
         self._status_message = ""
         self._status_is_error = False
@@ -612,20 +674,29 @@ class M3UContext(QObject):
 
     @Slot(str, result=bool)
     def removeSource(self, source_id: str) -> bool:  # noqa: N802
-        source = self._store.get(source_id)
         ok = self._store.remove(source_id)
         if ok:
             self._favourites.remove_source(source_id)
             if self._settings.get_mode("m3u", "lastSource", "") == source_id:
-                self._settings.set_mode("m3u", "lastSource", "")
+                self._forget_last_source()
             if source_id == self._current_source_id:
+                # Deleting the playlist you are looking at removes it from the
+                # screen too. Keeping its channels listed (as an unsaved
+                # "(not saved)" list, which one bookmark click would re-save)
+                # made a confirmed delete look like it had not happened, and
+                # the list came back on the next launch.
                 self._current_source_id = ""
+                self._current_source_name = ""
                 if self._model.favouritesOnly:
                     self._model.setFavouritesOnly(False)
                 self._model.set_favourites(set())
-                if source is not None:
-                    self._remember_unsaved_source(source.name, source.kind, source.location)
-                    self._current_source_name = f"{source.name} (not saved)"
+                self._clear_unsaved_source()
+                self._last_attempted_id = ""
+                self._pending_source_id = ""
+                self._stop_playback()
+                self._model.clear()
+                self._current_channel_name = ""
+                self._set_status("", is_error=False)
                 self.infoChanged.emit()
             self.sourcesChanged.emit()
             self.infoChanged.emit()
@@ -700,6 +771,37 @@ class M3UContext(QObject):
     @Slot()
     def clearStatus(self) -> None:  # noqa: N802
         self._set_status("", is_error=False)
+
+    @Slot(str)
+    def noteLogoFailed(self, url: str) -> None:  # noqa: N802
+        """Remember a logo URL that the list could not load (§M2.3).
+
+        Called by the panel from ``Image.onStatusChanged`` when a thumbnail
+        ends in ``Image.Error`` — a 404, a 403 hot-link block, a timeout or an
+        undecodable payload. The row is already showing its globe fallback; the
+        only purpose of remembering is that the *next* visit does not pay for
+        the same dead URL again.
+
+        Deliberately fire-and-forget from QML's point of view: it returns
+        nothing, cannot fail, and does not touch the model. Re-reading the row
+        to blank it now would restart the list's delegate churn for no visible
+        gain — the filter takes effect the next time the view is built.
+        """
+        url = (url or "").strip()
+        if not url:
+            return
+        if self._logo_failures.add(url):
+            log.debug("logo unavailable, will not ask again: %s", url)
+
+    @Slot()
+    def forgetFailedLogos(self) -> None:  # noqa: N802
+        """Give every remembered-bad logo another chance.
+
+        Nothing in the UI calls this yet; it exists so "my logos are missing
+        and I know the server is back" has an answer that is not "delete a
+        JSON file by hand".
+        """
+        self._logo_failures.clear()
 
     @Slot(str)
     def persistGrouping(self, grouping: str) -> None:  # noqa: N802
@@ -820,8 +922,21 @@ class M3UContext(QObject):
 
     @Slot()
     def clear(self) -> None:
+        """Clear Playlist, from the panel button, the Delete key or the remote.
+
+        Emptying the list must also **forget** it. The remembered last source
+        is what M3U reloads the next time it is opened, so leaving it behind
+        meant a cleared playlist quietly came back on the next launch — the
+        clearest possible contradiction of an action the user confirmed.
+        """
         self._model.clear()
         self._current_channel_name = ""
+        self._current_source_id = ""
+        self._current_source_name = ""
+        self._clear_unsaved_source()
+        self._last_attempted_id = ""
+        self._pending_source_id = ""
+        self._forget_last_source()
         self.infoChanged.emit()
         self._set_status("", is_error=False)
 
@@ -840,6 +955,12 @@ class M3UContext(QObject):
         if self._shut_down:
             return
         self._shut_down = True
+        # Batched logo failures are written here so a session's worth of dead
+        # URLs survives even if fewer than SAVE_EVERY of them accumulated.
+        try:
+            self._logo_failures.save()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            log.debug("could not save the logo failure store", exc_info=True)
         for signals in self._inflight.values():
             signals.cancelled = True
         try:
@@ -861,6 +982,20 @@ class M3UContext(QObject):
         self._inflight.clear()
 
     # ------------------------------------------------------------ internals --
+    def _forget_last_source(self) -> None:
+        """Drop the remembered "reload this on next launch" pointer.
+
+        Flushed immediately rather than left to the settings debounce: this is
+        written by actions the user takes seconds before closing the app, and a
+        pending write is exactly what gets lost then.
+        """
+        self._settings.set_mode("m3u", "lastSource", "")
+        try:
+            self._settings.flush()
+        except Exception:  # noqa: BLE001 - never let a disk problem break the UI
+            log.debug("could not flush settings after forgetting last source",
+                      exc_info=True)
+
     def _remember_unsaved_source(self, name: str, kind: str, location: str) -> None:
         self._unsaved_source_name = (name or "").strip()
         self._unsaved_source_kind = kind

@@ -134,9 +134,21 @@ Item {
         placeholderText: "Filter channels…"
         clearable: true
         clearTooltip: "Clear filter"
-        // Clearing the shared field assigns an empty string, which runs this
-        // same filter path and restores the full channel list in one click.
-        onTextChanged: if (root.ctx) root.ctx.channels.setFilter(text)
+        // Debounced, not per-keystroke. Every filter change rebuilds the view
+        // and resets the model, which destroys and recreates every delegate —
+        // so typing a six-letter channel name used to tear down and restart
+        // the whole visible list six times, cancelling and re-issuing its
+        // logo requests each time. One rebuild per pause in typing does the
+        // same job invisibly. Clearing the shared field assigns an empty
+        // string, which runs this same path and restores the full list.
+        onTextChanged: filterDebounce.restart()
+    }
+
+    Timer {
+        id: filterDebounce
+        interval: 250
+        repeat: false
+        onTriggered: if (root.ctx) root.ctx.channels.setFilter(filterField.text)
     }
 
     // -------------------------------------------------------- status strip --
@@ -176,6 +188,100 @@ Item {
             // osdLayer is provided by the shell; show a toast for stream errors.
             if (typeof osdLayer !== "undefined" && osdLayer)
                 osdLayer.show(message, Glyphs.alert);
+        }
+    }
+
+    // ---------------------------------------------------- logo throttling --
+    // A public IPTV playlist is thousands of *other people's* logo URLs, and a
+    // collapsed accordion still builds a delegate for every row it contains
+    // (zero-height rows all "fit" on screen, so the view instantiates the lot).
+    // Left alone, opening M3U fires one image request per channel at once —
+    // hundreds of streams on a single HTTP/2 connection — and servers answer
+    // exactly as you would expect: "excessive load detected", GOAWAY, protocol
+    // errors, and a wave of timeouts for the requests that never got a turn.
+    //
+    // Two rules fix that, and both live here rather than in the model:
+    //
+    //   1. a row that is not in the expanded group asks for nothing at all
+    //      (`wanted` below is empty for collapsed rows — invisible and
+    //      zero-height does NOT stop an Image from loading; only an empty
+    //      source does);
+    //   2. no more than `maxActive` requests are in flight at any moment, the
+    //      rest queue.
+    //
+    // Once a picture has arrived its slot is released but its source is kept,
+    // so nothing is ever re-fetched to make room for the next row.
+    QtObject {
+        id: logoQueue
+
+        // Six is the conventional per-host browser limit and comfortably more
+        // than a screenful of rows, so scrolling never feels gated.
+        readonly property int maxActive: 6
+        property int activeCount: 0
+        // Plain JS array: it is a work queue, nothing binds to it.
+        property var pending: []
+
+        function restart(slot) {
+            // Idempotent on purpose: this runs both from Component.onCompleted
+            // and from onWantedChanged, and those can fire in either order
+            // while a row is being built. Without the early-outs the second
+            // call would abort the request the first one just started — the
+            // very churn this queue exists to remove.
+            if (!slot)
+                return;
+            if (slot.wanted.length === 0) {
+                withdraw(slot);
+                return;
+            }
+            if (slot.granted === slot.wanted)
+                return;                       // already loading it, or showing it
+            if (pending.indexOf(slot) !== -1)
+                return;                       // already queued; grant() reads
+                                              // `wanted` fresh at its turn
+            withdraw(slot);
+            if (activeCount < maxActive)
+                grant(slot);
+            else
+                pending.push(slot);
+        }
+
+        function grant(slot) {
+            if (!slot || slot.holdsSlot)
+                return;                       // never count one row twice
+            activeCount += 1;
+            slot.holdsSlot = true;
+            slot.granted = slot.wanted;
+        }
+
+        // The request finished (either way). Free the slot, keep the picture.
+        function done(slot) {
+            if (!slot || !slot.holdsSlot)
+                return;
+            slot.holdsSlot = false;
+            activeCount = Math.max(0, activeCount - 1);
+            pump();
+        }
+
+        // The row no longer wants what it asked for — recycled by the view,
+        // scrolled out, or its group collapsed.
+        function withdraw(slot) {
+            if (!slot)
+                return;
+            var i = pending.indexOf(slot);
+            if (i !== -1)
+                pending.splice(i, 1);
+            slot.granted = "";
+            done(slot);
+        }
+
+        function pump() {
+            while (activeCount < maxActive && pending.length > 0) {
+                var next = pending.shift();
+                // Rows destroyed while queued are gone from `pending` already;
+                // this guards the one that changed its mind in between.
+                if (next && next.wanted.length > 0)
+                    grant(next);
+            }
         }
     }
 
@@ -292,25 +398,56 @@ Item {
                 anchors.right: parent.right
                 spacing: Theme.spaceSm
 
-                // tvg-logo thumbnail: async + cached by Qt; a typed fallback —
-                // never a broken-image icon (§M2.3: graceful fallback).
+                // tvg-logo thumbnail: throttled by logoQueue, requested only
+                // for rows in the open group, with a typed fallback — never a
+                // broken-image icon (§M2.3: graceful fallback). URLs that
+                // cannot work (SVG, image share pages) and URLs that have
+                // failed before never reach here: the model returns an empty
+                // logo for those.
                 Item {
+                    id: logoCell
                     width: 34
                     height: 22
                     anchors.verticalCenter: parent.verticalCenter
 
+                    // What this row would show if it were allowed to load now.
+                    readonly property string wanted:
+                        (row.isGroupExpanded && row.logo.length > 0) ? row.logo : ""
+                    // What the queue has actually let it fetch. Never cleared
+                    // on success: the picture stays, only the slot is handed on.
+                    property string granted: ""
+                    property bool holdsSlot: false
+
+                    onWantedChanged: logoQueue.restart(logoCell)
+                    Component.onCompleted: logoQueue.restart(logoCell)
+                    // Guarded: on a mode switch the whole panel is torn down,
+                    // and a delegate outliving the queue by one destruction
+                    // step would otherwise log a TypeError on every switch.
+                    Component.onDestruction: if (logoQueue) logoQueue.withdraw(logoCell)
+
                     Image {
                         id: logoImage
                         anchors.fill: parent
-                        source: row.logo
+                        source: logoCell.granted
                         asynchronous: true
                         cache: true
                         fillMode: Image.PreserveAspectFit
                         visible: status === Image.Ready
+                        onStatusChanged: {
+                            if (status === Image.Ready) {
+                                logoQueue.done(logoCell);
+                            } else if (status === Image.Error) {
+                                // Tell the mode, so this URL is not requested
+                                // again in this session or the next one.
+                                if (root.ctx && logoCell.granted.length > 0)
+                                    root.ctx.noteLogoFailed(logoCell.granted);
+                                logoQueue.done(logoCell);
+                            }
+                        }
                     }
                     Text {
                         anchors.centerIn: parent
-                        visible: row.logo.length === 0 || logoImage.status !== Image.Ready
+                        visible: logoImage.status !== Image.Ready
                         text: Glyphs.globe
                         font.family: Theme.fontFamilyIcons
                         font.pixelSize: 12

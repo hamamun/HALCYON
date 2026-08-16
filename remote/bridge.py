@@ -322,7 +322,14 @@ class RemoteBridge(QObject):
                             rows.append({
                                 "name": ch.name, "url": ch.url, "group": ch.group,
                                 "country": ch.country, "language": ch.language,
-                                "logo": ch.logo, "fav": model.is_favourite(ch.url),
+                                # Same filtered logo the desktop list uses, so
+                                # the phone does not spend its data re-fetching
+                                # URLs already known to be dead (§M2.3). Falls
+                                # back to the raw value for models that predate
+                                # the filter (the bridge's own fakes).
+                                "logo": (model.display_logo(ch)
+                                         if hasattr(model, "display_logo") else ch.logo),
+                                "fav": model.is_favourite(ch.url),
                                 "current": i == cur_idx,
                             })
                         self._m3u_cache_sig = sig
