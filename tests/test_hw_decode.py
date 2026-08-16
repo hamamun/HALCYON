@@ -13,8 +13,8 @@ which is what VLC's own desktop player does. Three layers, three test groups:
 
 * the pure policy (``engine/hw_decode.py``): codec fourccs and container
   extensions classify as safe / unsafe / unknown;
-* the ``open()`` gate: a legacy container opened on the Turbo route does not
-  carry the GPU-decode option, everything else keeps it;
+* the ``open()`` gate: a legacy container opened on the Turbo route carries
+  an explicit CPU-decode option, while modern/unknown media keep the GPU one;
 * the runtime watchdog: a media that was given the GPU and produced zero
   decoded pictures is silently re-opened with CPU decode at the same
   position — and never handed to the GPU again.
@@ -273,13 +273,17 @@ def _engine(*, route=vm.TURBO, hw_option=True):
 # The open() gate
 # ---------------------------------------------------------------------------
 class TestOpenGate:
-    def test_wmv_on_turbo_does_not_carry_the_gpu_option(self, qt_application):
+    def test_wmv_on_turbo_explicitly_forces_cpu_decode(self, qt_application):
         engine = _engine()
         engine.open("file:///C:/Videos/Maula%20-%20Jism%202.wmv")
         media = engine._instance.created[-1]
         assert hw_decode.HW_DECODE_OPTION not in media.options, (
             "a legacy container must never carry the d3d11va request — "
             "the driver advertises the decoder and then rejects every frame"
+        )
+        assert hw_decode.CPU_DECODE_OPTION in media.options, (
+            "omitting d3d11va is not a CPU override: libVLC 3 set_hwnd resets "
+            "the player-level decoder choice to automatic"
         )
 
     def test_mkv_on_turbo_keeps_the_gpu_option(self, qt_application):
@@ -319,6 +323,23 @@ class TestOpenGate:
         engine.open("file:///C:/Videos/odd.mkv")
         media = engine._instance.created[-1]
         assert hw_decode.HW_DECODE_OPTION not in media.options
+        assert hw_decode.CPU_DECODE_OPTION in media.options
+
+    def test_gpu_then_legacy_media_overrides_hwnd_player_state(self, qt_application):
+        """Regression for the Windows log that exposed the first attempted fix.
+
+        Merely stripping d3d11va produced an option-less WMV.  libVLC 3's
+        set_hwnd had reset the closer player-level value to automatic, so it
+        overrode the instance's ``none`` and WMV3 still entered D3D11VA.
+        """
+        engine = _engine()
+        engine.open("file:///C:/Videos/modern.mp4")
+        assert hw_decode.HW_DECODE_OPTION in engine._instance.created[-1].options
+
+        engine.open("file:///C:/Videos/legacy.wmv")
+        legacy = engine._instance.created[-1]
+        assert legacy.options == [hw_decode.CPU_DECODE_OPTION]
+        assert engine._hw_decode_pending is False
 
     def test_the_override_names_one_mrl_not_all(self, qt_application):
         engine = _engine()
@@ -378,8 +399,10 @@ class TestWatchdog:
         # The fallback re-opened the same MRL...
         reopened = engine._instance.created[-1]
         assert reopened.mrl == "file:///C:/V/odd.mkv"
-        # ...without the GPU request this time.
+        # ...with an explicit CPU request this time.  Absence alone falls back
+        # to the automatic player value installed by set_hwnd on libVLC 3.
         assert hw_decode.HW_DECODE_OPTION not in reopened.options
+        assert hw_decode.CPU_DECODE_OPTION in reopened.options
         # And the Turbo route/window was never torn down.
         assert engine._video_route == vm.TURBO
 
@@ -428,6 +451,7 @@ class TestWatchdog:
         assert engine._cpu_decode_override == "file:///C:/V/wmv_in_mkv.mkv"
         reopened = engine._instance.created[-1]
         assert hw_decode.HW_DECODE_OPTION not in reopened.options
+        assert hw_decode.CPU_DECODE_OPTION in reopened.options
 
     def test_watchdog_is_a_noop_on_soft(self, qt_application):
         engine = _engine(route=vm.SOFT, hw_option=False)

@@ -793,10 +793,13 @@ class VlcEngine(QObject):
         # The GPU request is a *route-level* wish, not a per-media certainty:
         # legacy codecs (WMV3/VC-1, DivX-era MPEG-4) black-screen on the
         # d3d11va path because drivers advertise decoders they no longer
-        # honour. _effective_media_options() strips the request for known-bad
-        # containers and for a media the runtime watchdog already caught —
-        # the native Turbo window stays, only the decode moves to the CPU,
-        # which is exactly what VLC's own desktop player does (§V.2).
+        # honour. _effective_media_options() replaces the request for known-bad
+        # containers and for a media the runtime watchdog already caught with
+        # an explicit ``:avcodec-hw=none``.  Omitting the D3D11VA option is not
+        # sufficient: libVLC 3's ``set_hwnd`` resets the player-level decoder
+        # choice to automatic, which overrides the instance's
+        # ``--avcodec-hw=none``.  The native Turbo window stays; only decode
+        # moves to the CPU, exactly as it does in VLC's desktop player (§V.2).
         options = self._effective_media_options(mrl)
         for option in options:
             try:
@@ -1054,9 +1057,11 @@ class VlcEngine(QObject):
             self.video_output.notify_video_stopped()
             if not surface.start(self._player):
                 raise RuntimeError("native Turbo surface unavailable")
-            # Hardware decode is what Turbo is for; the instance-wide
-            # --avcodec-hw=none exists for the vmem path, so override it on
-            # this player only.
+            # Hardware decode is what Turbo is for.  set_hwnd resets libVLC
+            # 3's player-level decoder value to automatic; record the narrower
+            # per-media D3D11VA request here.  _effective_media_options() swaps
+            # that request for an equally narrow explicit ``none`` when this
+            # particular media must use the CPU.
             self._set_player_option("avcodec-hw", "d3d11va")
             self._turbo_surface = surface
             self._video_route = video_policy.TURBO
@@ -1151,10 +1156,9 @@ class VlcEngine(QObject):
     # the CPU when the GPU is a known or proven bad bet. See engine/hw_decode.py.
 
     def _effective_media_options(self, mrl: str) -> list[str]:
-        """The recorded media options, minus a GPU-decode request this media
-        must not carry.
+        """Return the recorded options with an explicit decoder for this media.
 
-        Two reasons to strip it, checked in order of certainty:
+        Two reasons force CPU decode, checked in order of certainty:
 
         * the runtime watchdog already proved hardware decode broken for this
           exact MRL (``_cpu_decode_override``) — never hand the driver the
@@ -1162,6 +1166,17 @@ class VlcEngine(QObject):
         * the container is on the legacy list (``hw_decode.path_gpu_safe``),
           where the codec is not knowable synchronously but the extension is
           right in practice for every family that produced the black screens.
+
+        Forced CPU decode must be represented by ``:avcodec-hw=none``, not by
+        simply removing ``:avcodec-hw=d3d11va``.  In libVLC 3,
+        ``libvlc_media_player_set_hwnd()`` sets the player's ``avcodec-hw``
+        variable to an empty string (automatic).  That player-level value
+        overrides the instance's ``--avcodec-hw=none``, so an option-less
+        WMV/AVI still enters D3D11VA and produces exactly the
+        ``Failed to execute: 0x80070057`` log this gate is meant to prevent.
+        A media option is closer than both values, so an explicit ``none``
+        reliably wins without replacing the player or giving up Turbo's native
+        output window.
         """
         options = list(self._media_options)
         if hw_decode.HW_DECODE_OPTION not in options:
@@ -1172,8 +1187,17 @@ class VlcEngine(QObject):
             if hw_decode.path_gpu_safe(mrl) is not False:
                 return options
             reason = "legacy container — GPU drivers mishandle this codec family"
-        log.info("Turbo output kept, decoding on the CPU: %s (%s)", mrl, reason)
-        return [option for option in options if option != hw_decode.HW_DECODE_OPTION]
+        log.info(
+            "Turbo output kept, forcing CPU decode with "
+            ":avcodec-hw=none: %s (%s)",
+            mrl,
+            reason,
+        )
+        return [
+            option
+            for option in options
+            if not option.startswith(":avcodec-hw=")
+        ] + [hw_decode.CPU_DECODE_OPTION]
 
     def _check_hw_decode_health(self, state: State) -> None:
         """Watchdog for a media opened with the GPU-decode request (§V.4).
