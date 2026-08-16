@@ -44,9 +44,11 @@ most x265 ``.mkv`` rips are — it is ``I0AL``/``P010``, i.e. **two bytes per
 sample**. We then allocate an 8-bit I420 ring, hand VLC 8-bit pitches, and
 interpret the result as 8-bit planar: a sheared, green picture.
 
-(The repeated "frame ring allocated" lines in the logs are a separate, normal
-thing — libVLC builds and rebuilds the vout while it settles on a size. They
-are worth watching but are not by themselves a fault.)
+(libVLC builds and rebuilds the vout while it settles on a size — ASF/WMV
+renegotiates several times per open. Rebuilds that keep the same geometry now
+*reuse* the ring's storage (see :meth:`FrameRing.allocate`), so "frame ring
+allocated" appears once per genuine format change and a same-format rebuild
+logs "frame ring kept" at debug instead of churning megabytes per reopen.)
 
 The fix is to declare the callback ourselves with ``chroma`` typed as a raw
 ``c_void_p``, so ``memmove`` lands in VLC's buffer, and then ``ctypes.cast`` the
@@ -302,7 +304,33 @@ class FrameRing:
         threads; replacing a ctypes buffer list while Qt copies from one of its
         addresses is a native use-after-free and terminates the process without
         a Python traceback.  Retire, rather than discard, a pinned generation.
+
+        **An identical format keeps its storage.** libVLC rebuilds the vout
+        several times while a stream settles (ASF/WMV renegotiates more than
+        most — logs showed five identical 1280×720 allocations before the
+        real 1280×738 arrived), and every rebuild lands here with the format
+        callback's freshly computed geometry. When that geometry matches the
+        current generation byte for byte, throwing away SLOTS × frame_size of
+        perfectly good buffers to allocate the same amount again is pure
+        churn — worse, each retired generation lingers until its render
+        leases drain. Reusing the storage is safe precisely *because* the
+        format is identical: every pitch, line count and address the decoder
+        and the render thread hold remains true. Only the ring indices are
+        reset, exactly as a fresh allocation would leave them, so the new
+        vout starts writing into slot 0 of a clean ring.
         """
+        with self._lock:
+            if self._fmt == fmt and self._generation is not None:
+                if self._pins == 0:
+                    self._read = -1
+                # Never point the new vout's first write at a slot a render
+                # lease still pins — the whole reason retirement exists.
+                self._write = 0 if self._read != 0 else 1
+                self._ready = -1
+                self._serial = 0
+                self._read_serial = 0
+                log.debug("frame ring kept: %s (format unchanged)", fmt.describe())
+                return
         buffers = [(ctypes.c_ubyte * fmt.frame_size)() for _ in range(SLOTS)]
         generation = _BufferGeneration(
             fmt, buffers, [ctypes.addressof(buf) for buf in buffers]

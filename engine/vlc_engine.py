@@ -36,6 +36,7 @@ from PySide6.QtCore import (
 
 from core import paths
 from core import video_mode as video_policy
+from engine import hw_decode
 from engine.video_out import Chroma, VideoOutput
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,13 @@ _SETTLED_STATES = (0, 5, 6, 7)
 # Never let such a value cross the Python/Qt boundary: shiboken raises an
 # OverflowError and QML retains its previous (often end-of-file) seek state.
 _QT_INT_MAX = 2_147_483_647
+
+# How long a hardware-decoded media may play without producing a single
+# decoded picture before the engine concludes the GPU path is broken and
+# re-opens the same media with CPU decode (engine/hw_decode.py). Long enough
+# for a slow disk and a cold decoder to deliver the first frame; short enough
+# that a black screen never settles in as the outcome.
+_HW_DECODE_GRACE_S = 3.0
 
 # libVLC's public time and position values are samples from the demuxer, not a
 # continuously advancing presentation clock. Some files update them sparsely;
@@ -335,6 +343,13 @@ class VlcEngine(QObject):
     _pending_turbo_play = False
     _video_width = 0
     _video_height = 0
+    # Hardware-decode watchdog state (§V.2, engine/hw_decode.py). ``pending``
+    # is True only while the *current* media was opened with the GPU-decode
+    # option and its health has not been confirmed yet; ``override`` names the
+    # one MRL that must be re-opened with CPU decode after a runtime failure.
+    _hw_decode_pending = False
+    _hw_watch_started = None
+    _cpu_decode_override = ""
     # Defaults keep the timeline helpers safe in focused tests that construct
     # VlcEngine with __new__ instead of starting a native libVLC instance.
     _timeline_tick = None
@@ -667,6 +682,15 @@ class VlcEngine(QObject):
                 self.positionChanged.emit(position)
 
         self._refresh_video_size()
+        # Turbo's decode watchdog (§V.2): confirm a media opened with the
+        # GPU-decode request is actually producing pictures, and quietly
+        # re-open it with CPU decode when it is not. No-op on Soft and for
+        # media that never asked for hardware decode.
+        try:
+            self._check_hw_decode_health(state)
+        except Exception:
+            log.debug("hardware-decode health check failed", exc_info=True)
+            self._hw_decode_pending = False
 
     # ------------------------------------------------------------ playback ---
     @Slot(str)
@@ -722,6 +746,10 @@ class VlcEngine(QObject):
         self._current_mrl = ""
         self._scrubbing = False
         self._pending_resume_ms = 0
+        # Disarm the decode watchdog with the media it was watching; the new
+        # media re-arms it below only if it actually carries the GPU request.
+        self._hw_decode_pending = False
+        self._hw_watch_started = None
         self._reset_timeline()
 
         # Retire whatever the previous media left on the video surface
@@ -761,11 +789,23 @@ class VlcEngine(QObject):
         # hardware decode applies to this media only, leaving the instance-wide
         # "none" that protects the Soft vmem path untouched. Never fatal — a
         # build that rejects the option still plays, just without HW decode.
-        for option in self._media_options:
+        #
+        # The GPU request is a *route-level* wish, not a per-media certainty:
+        # legacy codecs (WMV3/VC-1, DivX-era MPEG-4) black-screen on the
+        # d3d11va path because drivers advertise decoders they no longer
+        # honour. _effective_media_options() strips the request for known-bad
+        # containers and for a media the runtime watchdog already caught —
+        # the native Turbo window stays, only the decode moves to the CPU,
+        # which is exactly what VLC's own desktop player does (§V.2).
+        options = self._effective_media_options(mrl)
+        for option in options:
             try:
                 media.add_option(option)
             except Exception:
                 log.debug("media option %s rejected", option, exc_info=True)
+        # Arm the decode watchdog only when the GPU was actually requested.
+        self._hw_decode_pending = hw_decode.HW_DECODE_OPTION in options
+        self._hw_watch_started = None
         try:
             media.parse_with_options(self._vlc.MediaParseFlag.local, 3000)
         except Exception:
@@ -911,6 +951,9 @@ class VlcEngine(QObject):
         self._pending_turbo_play = False
         self._user_paused = False
         self._current_mrl = ""
+        # A stopped player has no media to watch.
+        self._hw_decode_pending = False
+        self._hw_watch_started = None
         self._set_video_size(0, 0)
         # One-tuner rule (§V.4): a full stop — including the one
         # AppController performs when switching to a mode that does not use
@@ -1095,6 +1138,177 @@ class VlcEngine(QObject):
         log.warning("Turbo failed after setup (%s) — falling back to Soft", reason or "?")
         self._leave_turbo()
         self.videoRouteChanged.emit(self._video_route)
+
+    # ------------------------------------------------- hardware decoding ---
+    #
+    # Turbo is two separable things: the *output route* (libVLC renders into
+    # the native child window — works for every file) and the *decode method*
+    # (":avcodec-hw=d3d11va" — great for H.264/HEVC/VP9/AV1, a black screen
+    # for WMV3/VC-1 and DivX-era MPEG-4, whose hardware decoders modern
+    # drivers advertise but reject at execute time, one 0x80070057 per frame).
+    # The helpers below keep the two apart, the way VLC's own desktop player
+    # does: the Turbo window always stays; only the decoder quietly moves to
+    # the CPU when the GPU is a known or proven bad bet. See engine/hw_decode.py.
+
+    def _effective_media_options(self, mrl: str) -> list[str]:
+        """The recorded media options, minus a GPU-decode request this media
+        must not carry.
+
+        Two reasons to strip it, checked in order of certainty:
+
+        * the runtime watchdog already proved hardware decode broken for this
+          exact MRL (``_cpu_decode_override``) — never hand the driver the
+          same media twice;
+        * the container is on the legacy list (``hw_decode.path_gpu_safe``),
+          where the codec is not knowable synchronously but the extension is
+          right in practice for every family that produced the black screens.
+        """
+        options = list(self._media_options)
+        if hw_decode.HW_DECODE_OPTION not in options:
+            return options
+        if self._cpu_decode_override and self._cpu_decode_override == mrl:
+            reason = "hardware decode already failed for this media"
+        else:
+            if hw_decode.path_gpu_safe(mrl) is not False:
+                return options
+            reason = "legacy container — GPU drivers mishandle this codec family"
+        log.info("Turbo output kept, decoding on the CPU: %s (%s)", mrl, reason)
+        return [option for option in options if option != hw_decode.HW_DECODE_OPTION]
+
+    def _check_hw_decode_health(self, state: State) -> None:
+        """Watchdog for a media opened with the GPU-decode request (§V.4).
+
+        The extension gate in :meth:`_effective_media_options` catches the
+        known-bad containers before the driver sees them; this catches the
+        rest — a legacy codec inside a modern container, or a driver that
+        fails a codec the safe-list trusts. Two triggers:
+
+        * the parsed track list names a codec on the unsafe list — fall back
+          immediately, no need to wait for pictures that will never come;
+        * the media has been Playing for :data:`_HW_DECODE_GRACE_S` seconds,
+          has a video track, and libVLC's own statistics show **zero decoded
+          pictures** — the black-screen signature, regardless of codec.
+
+        The fallback re-opens the same MRL at the same position with CPU
+        decode, exactly like the route-switch reopen: same media, same Turbo
+        window, no announcement. Runs on the GUI thread from the poll.
+        """
+        if not self._hw_decode_pending:
+            return
+        if self._video_route != video_policy.TURBO:
+            # Soft never carries the request; a stale flag must not linger.
+            self._hw_decode_pending = False
+            return
+        if state != State.Playing:
+            return
+        now = time.monotonic()
+        if self._hw_watch_started is None:
+            self._hw_watch_started = now
+            return
+
+        if self._current_media_gpu_safe() is False:
+            self._hw_decode_pending = False
+            self._fallback_to_cpu_decode("codec is on the GPU-unsafe list")
+            return
+
+        if now - self._hw_watch_started < _HW_DECODE_GRACE_S:
+            return
+
+        decoded = self._decoded_video_pictures()
+        if decoded is None:
+            # No statistics on this build — nothing to measure, stop watching.
+            self._hw_decode_pending = False
+            return
+        if decoded > 0:
+            # Pictures are flowing: the hardware path is healthy.
+            self._hw_decode_pending = False
+            return
+        if not self.video_tracks():
+            # Audio-only media decodes zero pictures forever, correctly.
+            self._hw_decode_pending = False
+            return
+        self._hw_decode_pending = False
+        self._fallback_to_cpu_decode(
+            f"no decoded pictures after {_HW_DECODE_GRACE_S:.0f} s"
+        )
+
+    def _current_media_gpu_safe(self) -> bool | None:
+        """Codec verdict for the media the player holds now, or ``None``.
+
+        ``None`` until the asynchronous parse lands (tracks_get is empty
+        before then) — the watchdog just keeps waiting.
+        """
+        player = self._player
+        getter = getattr(player, "get_media", None) if player is not None else None
+        if not callable(getter):
+            return None
+        media = None
+        try:
+            media = getter()
+            return hw_decode.media_gpu_safe(media)
+        except Exception:
+            log.debug("could not classify the current media's codecs", exc_info=True)
+            return None
+        finally:
+            # get_media returns a new reference; never leak it.
+            if media is not None:
+                try:
+                    media.release()
+                except Exception:
+                    pass
+
+    def _decoded_video_pictures(self) -> int | None:
+        """``decoded_video`` from libVLC's media statistics, or ``None``.
+
+        ``None`` means "cannot know" (no media, no stats API), never zero —
+        the watchdog treats the two very differently.
+        """
+        vlc = self._vlc
+        player = self._player
+        if vlc is None or player is None:
+            return None
+        getter = getattr(player, "get_media", None)
+        if not callable(getter):
+            return None
+        media = None
+        try:
+            media = getter()
+            if media is None:
+                return None
+            stats = vlc.MediaStats()
+            if not media.get_stats(stats):
+                return None
+            return int(stats.decoded_video)
+        except Exception:
+            log.debug("could not read media statistics", exc_info=True)
+            return None
+        finally:
+            if media is not None:
+                try:
+                    media.release()
+                except Exception:
+                    pass
+
+    def _fallback_to_cpu_decode(self, reason: str) -> None:
+        """Re-open the current media with CPU decode, keeping the Turbo window.
+
+        §V.4's promise, applied to the decoder: the user must not lose
+        playback because the *driver* could not be made to work. The MRL is
+        remembered in ``_cpu_decode_override`` so replaying the same file
+        later never repeats the failed attempt.
+        """
+        mrl = self._current_mrl
+        if not mrl:
+            return
+        log.warning(
+            "hardware decode failed (%s) — re-opening with CPU decode, "
+            "Turbo output kept: %s",
+            reason,
+            mrl,
+        )
+        self._cpu_decode_override = mrl
+        resume_ms, was_paused = self._capture_playback()
+        self._reopen_current(resume_ms, was_paused)
 
     def _restore_soft_output(self) -> None:
         """Re-install the vmem callbacks and undo the Turbo player options."""
@@ -1518,6 +1732,8 @@ class VlcEngine(QObject):
         self._turbo_surface = None
         self._video_route = video_policy.SOFT
         self._media_options = []
+        self._hw_decode_pending = False
+        self._hw_watch_started = None
         if surface is None:
             return
         try:

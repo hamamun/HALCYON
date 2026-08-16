@@ -183,6 +183,68 @@ class TestRingBasics:
             ring.publish()
         assert len(seen) == SLOTS
 
+    def test_reallocating_an_identical_format_reuses_the_storage(self):
+        """The ASF/WMV settling churn: libVLC rebuilds the vout several times
+        per open, and most rebuilds keep the *same* geometry (the log showed
+        five identical 1280×720 allocations before the real 1280×738). An
+        identical format must keep its buffers — same addresses, no retired
+        generation — instead of churning SLOTS × frame_size per rebuild.
+        """
+        ring = FrameRing()
+        fmt = make_format(1280, 720)
+        ring.allocate(fmt)
+        first_addresses = list(ring._generation.addresses)
+
+        ring.allocate(make_format(1280, 720))   # equal value, fresh object
+
+        assert list(ring._generation.addresses) == first_addresses
+        assert ring._retired == []
+
+    def test_identical_format_reuse_still_resets_the_ring_state(self):
+        """Reuse must leave the ring exactly as a fresh allocation would:
+        no stale ready frame from the previous vout generation."""
+        ring = FrameRing()
+        fmt = make_format(1280, 720)
+        ring.allocate(fmt)
+        ring.publish()
+        assert ring.acquire_read() is not None  # old vout's frame visible...
+
+        ring.allocate(make_format(1280, 720))
+
+        assert ring.acquire_read() is None, (
+            "the new vout has published nothing yet — serving the previous "
+            "generation's frame here is the stale-picture bug mark_stopped fixes"
+        )
+        assert ring.serial == 0
+
+    def test_identical_format_reuse_never_writes_into_a_pinned_slot(self):
+        """A render lease may still be copying when the same-format rebuild
+        arrives. The reused ring's first write target must avoid that slot."""
+        ring = FrameRing()
+        fmt = make_format(1280, 720)
+        ring.allocate(fmt)
+        ring.publish()                        # slot 0 becomes ready
+        claim = ring.acquire_read()           # pin slot 0
+        assert claim is not None
+        pinned_address = claim.address
+
+        ring.allocate(make_format(1280, 720))
+
+        assert ring.write_address() != pinned_address
+        ring.release_read(claim)
+
+    def test_a_different_format_still_reallocates(self):
+        """The reuse path must never swallow a genuine format change —
+        1280×720 → 1280×738 is the real WMV ending of the settling dance."""
+        ring = FrameRing()
+        ring.allocate(make_format(1280, 720))
+        first_addresses = list(ring._generation.addresses)
+
+        ring.allocate(make_format(1280, 738))
+
+        assert ring.format.height == 738
+        assert list(ring._generation.addresses) != first_addresses
+
 
 class TestConcurrency:
     def test_no_torn_frames_under_load(self):
