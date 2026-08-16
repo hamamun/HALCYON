@@ -69,6 +69,13 @@ class ChannelModel(QAbstractListModel):
     countChanged = Signal()
     totalCountChanged = Signal()
     currentIndexChanged = Signal()
+    #: The *selected* channel changed — which is not the same event as
+    #: :attr:`currentIndexChanged`. The index moves whenever the view is
+    #: rebuilt (filter, grouping, favourites) and drops to -1 when the playing
+    #: channel is filtered out; the selection itself only changes when another
+    #: channel is played. The pinned "now playing" strip binds to this one, so
+    #: it keeps showing what you chose through every view change.
+    currentChannelChanged = Signal()
     groupingChanged = Signal()
     expandedGroupChanged = Signal()
     favouritesOnlyChanged = Signal()
@@ -83,6 +90,21 @@ class ChannelModel(QAbstractListModel):
         self._filter = ""
         self._grouping = GROUPING_CATEGORY
         self._expanded_group = ""
+        #: True once the user has clicked the open header shut *themselves*.
+        #: Without it a rebuild cannot tell "nothing is open because the user
+        #: closed it" from "nothing is open yet", and a later filter change
+        #: would helpfully re-open the playing channel's group behind their
+        #: back. Cleared by anything that legitimately re-opens one: playing a
+        #: channel, expanding a header, or changing the grouping (which throws
+        #: the whole set of groups away).
+        self._user_collapsed = False
+        #: True when :attr:`_expanded_group` was picked by the rebuild only
+        #: because the playing channel's own group had nothing to show (a
+        #: filter hid it, or nothing is playing yet). Such a choice is a
+        #: stand-in, not a decision, so it is given up again the moment the
+        #: playing channel's group is back in view. A group the *user* opened
+        #: is never a fallback and is never taken away from them.
+        self._expanded_is_fallback = False
         self._group_counts: dict[str, int] = {}
         self._favourite_urls: set[str] = set()
         self._favourites_only = False
@@ -161,6 +183,42 @@ class ChannelModel(QAbstractListModel):
     def currentIndex(self) -> int:  # noqa: N802
         return self._current_index
 
+    # -- the pinned "now playing" strip (§P2.3) ------------------------------
+    # Deliberately *selection*, not playback state: a channel that is offline,
+    # 404s or never decodes a frame still reads back here, because the strip
+    # answers "what did you pick?" and not "what is the decoder doing?". The
+    # engine is never consulted from this model.
+    @Property(str, notify=currentChannelChanged)
+    def currentName(self) -> str:  # noqa: N802
+        return self._current.name if self._current is not None else ""
+
+    @Property(str, notify=currentChannelChanged)
+    def currentGroup(self) -> str:  # noqa: N802
+        return self._current.group if self._current is not None else ""
+
+    @Property(str, notify=currentChannelChanged)
+    def currentUrl(self) -> str:  # noqa: N802
+        return self._current.url if self._current is not None else ""
+
+    @Property(str, notify=currentChannelChanged)
+    def currentLogo(self) -> str:  # noqa: N802
+        """The one logo the strip may request, already filtered by the same
+        rules the list rows use (:meth:`display_logo`).
+
+        It is a single, permanently-visible row, so it is *not* routed through
+        the panel's logo queue (PR #176): the queue exists to stop a 15k-row
+        list stampeding a stranger's image host, and adding one pinned slot to
+        it would let a collapsed accordion's backlog delay the one picture the
+        user is actually looking at.
+        """
+        return self.display_logo(self._current) if self._current is not None else ""
+
+    @Property(bool, notify=currentChannelChanged)
+    def hasCurrent(self) -> bool:  # noqa: N802
+        """False until something has been played — the strip shows its muted
+        placeholder in that state rather than an empty row."""
+        return self._current is not None
+
     @Property(str, notify=groupingChanged)
     def grouping(self) -> str:  # noqa: N802
         return self._grouping
@@ -183,13 +241,38 @@ class ChannelModel(QAbstractListModel):
             return
         if self._expanded_group == group_key:
             self._expanded_group = ""
+            self._user_collapsed = True    # they shut it; leave it shut
         else:
             self._expanded_group = group_key
+            self._user_collapsed = False
+        self._expanded_is_fallback = False  # a click is a decision, not a guess
         if self._view:
             top = self.index(0)
             bottom = self.index(len(self._view) - 1)
             self.dataChanged.emit(top, bottom, [self.IsGroupExpandedRole])
         self.expandedGroupChanged.emit()
+
+    @Slot(result=int)
+    def revealCurrent(self) -> int:  # noqa: N802
+        """Make the playing channel reachable and say where it now is.
+
+        Clicking the pinned strip calls this: it opens the playing channel's
+        group if the accordion has it shut, then returns the row the panel
+        should scroll to — or ``-1`` when the channel is not in the current
+        view at all (filtered out, or favourites-only with the channel not
+        starred), which the panel reads as "nothing to scroll to".
+
+        It deliberately does **not** play anything: the channel is already the
+        selected one, and re-opening the URL would restart a stream the user
+        only wanted to look at.
+        """
+        if self._current is None:
+            return -1
+        if self._grouping != GROUPING_NONE:
+            group = self._group_key(self._current)
+            if group and group != self._expanded_group and group in self._group_counts:
+                self.toggleGroup(group)
+        return self._current_index
 
     # ------------------------------------------------------------ mutation --
     def set_channels(self, channels: list[Channel]) -> None:
@@ -211,6 +294,10 @@ class ChannelModel(QAbstractListModel):
         self.countChanged.emit()
         self.totalCountChanged.emit()
         self.currentIndexChanged.emit()
+        # The selection either survived the swap by URL or was dropped; either
+        # way the strip must be told, since the Channel object behind it is a
+        # new one even when the name is the same.
+        self.currentChannelChanged.emit()
         self.expandedGroupChanged.emit()
         self.favouritesChanged.emit()
 
@@ -296,11 +383,14 @@ class ChannelModel(QAbstractListModel):
         self._current = None
         self._current_index = -1
         self._expanded_group = ""
+        self._user_collapsed = False
+        self._expanded_is_fallback = False
         self._group_counts = {}
         self.endResetModel()
         self.countChanged.emit()
         self.totalCountChanged.emit()
         self.currentIndexChanged.emit()
+        self.currentChannelChanged.emit()
         self.expandedGroupChanged.emit()
         self.favouritesChanged.emit()
 
@@ -408,6 +498,7 @@ class ChannelModel(QAbstractListModel):
             idx = self.index(row)
             self.dataChanged.emit(idx, idx, [self.IsCurrentRole])
         self.currentIndexChanged.emit()
+        self.currentChannelChanged.emit()
 
     def _group_key(self, channel: Channel) -> str:
         if self._grouping == GROUPING_CATEGORY:
@@ -417,6 +508,24 @@ class ChannelModel(QAbstractListModel):
         if self._grouping == GROUPING_LANGUAGE:
             return channel.language or "Unknown"
         return ""
+
+    def _choose_expanded_group(self) -> None:
+        """Open the playing channel's group, or a stand-in if it is not here.
+
+        Called from :meth:`_rebuild_view` once it has decided the accordion is
+        free to move. Records whether the choice was a real one (the playing
+        channel's group) or a fallback, so a later rebuild can tell the two
+        apart — see :attr:`_expanded_is_fallback`.
+        """
+        if self._current is not None and self._group_key(self._current) in self._group_counts:
+            self._expanded_group = self._group_key(self._current)
+            self._expanded_is_fallback = False
+        elif self._view:
+            self._expanded_group = self._group_key(self._view[0])
+            self._expanded_is_fallback = True
+        else:
+            self._expanded_group = ""
+            self._expanded_is_fallback = False
 
     def _rebuild_view(self, preserve_expanded: bool = False) -> None:
         view = list(self._channels)
@@ -443,16 +552,38 @@ class ChannelModel(QAbstractListModel):
             counts[key] = counts.get(key, 0) + 1
         self._group_counts = counts
 
+        # Which group is open after this rebuild. The rule the owner set is
+        # "the group containing the playing channel stays expanded, others
+        # collapsed, until the user collapses it themselves" — so the choice
+        # is made in that order of authority: the user's own click first, then
+        # the playing channel, then a fallback so the list is never a wall of
+        # shut headers.
         if self._grouping == GROUPING_NONE:
+            # Flat mode has no accordion at all, so there is nothing to
+            # remember — and no "collapsed by the user" state either.
             self._expanded_group = ""
-        else:
-            if not (preserve_expanded and self._expanded_group in self._group_counts):
-                if self._current is not None and self._group_key(self._current) in self._group_counts:
-                    self._expanded_group = self._group_key(self._current)
-                elif self._view:
-                    self._expanded_group = self._group_key(self._view[0])
-                else:
-                    self._expanded_group = ""
+            self._user_collapsed = False
+            self._expanded_is_fallback = False
+        elif not preserve_expanded:
+            # A grouping change (or a new playlist): every group key is new,
+            # so nothing about the old accordion state can carry over.
+            self._user_collapsed = False
+            self._choose_expanded_group()
+        elif self._user_collapsed and not self._expanded_group:
+            # They shut it. A filter or a favourites toggle is not permission
+            # to open it again.
+            pass
+        elif self._expanded_group not in self._group_counts:
+            # What was open has no rows left in this view.
+            self._choose_expanded_group()
+        elif (self._expanded_is_fallback
+              and self._current is not None
+              and self._group_key(self._current) in self._group_counts):
+            # The open group was only ever a stand-in, chosen while the playing
+            # channel was filtered out. It is back now, so hand the accordion
+            # to it — otherwise clearing a filter would strand the playing
+            # channel behind a shut header.
+            self._choose_expanded_group()
 
         # keep cached index in sync with filtered / sorted view
         if self._current is None:
