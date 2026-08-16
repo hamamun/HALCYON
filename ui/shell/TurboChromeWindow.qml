@@ -31,10 +31,16 @@ Window {
     // still receive its own clicks, so this is a normal input-taking window
     // that simply has no background of its own.
     color: "transparent"
-    flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
-    // Tracks the main window: minimise/restore and close follow the parent,
-    // which is exactly what an overlay should do (the opposite of PipWindow,
-    // which sets transientParent to null precisely to escape this).
+    // This is an *owned tool window*, not a globally topmost window.  The Tool
+    // flag plus transientParent keeps the chrome above its own Halcyon host and
+    // therefore above the native VLC child.  WindowStaysOnTopHint must not be
+    // used here: on Windows it maps to a global topmost HWND, so when Explorer
+    // covered the main/video window this transparent window stayed in front,
+    // leaving the playlist, panels and transport floating over Explorer.
+    flags: Qt.FramelessWindowHint | Qt.Tool
+    // Tracks the main window: z-order, minimise/restore and close follow the
+    // parent, which is exactly what an overlay should do (the opposite of
+    // PipWindow, which sets transientParent to null precisely to escape this).
     transientParent: hostWindow
 
     x: hostWindow ? hostWindow.x + bodyRect.x : 0

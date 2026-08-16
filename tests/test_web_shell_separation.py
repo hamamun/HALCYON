@@ -42,7 +42,7 @@ def test_turbo_stage_click_catcher_is_off_unless_chrome_is_in_the_overlay():
 
 
 def test_leaving_a_mode_brings_turbo_chrome_home_when_turbo_is_off():
-    """Mode switch must not leave the always-on-top Turbo overlay on Web."""
+    """Mode switch must not leave the native Turbo overlay on Web."""
     source = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
     handler = source.split("function onActiveModeChanged()", 1)[1]
     handler = handler.split("\n    }", 1)[0]
