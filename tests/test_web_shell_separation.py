@@ -100,6 +100,18 @@ def test_browser_popups_are_native_windows_and_manager_supports_drag_reorder():
     assert "reorderBookmarks(fromIndex, targetIndex)" in manager
 
 
+def test_web_borderless_mode_chips_sit_between_tabs_and_settings_cluster():
+    """Web's borderless row is: New Tab, page tabs, mode chips, window controls."""
+    source = (ROOT / "modes" / "web" / "TabsRow.qml").read_text(encoding="utf-8")
+
+    add_button = source.index("id: addTabButton")
+    tabs_list = source.index("id: tabsList")
+    mode_chips = source.index("id: modeChips")
+    window_buttons = source.index("id: webWindowButtons")
+
+    assert add_button < tabs_list < mode_chips < window_buttons
+
+
 def test_window_title_uses_generic_active_mode_title_protocol():
     source = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app.py").read_text(encoding="utf-8")

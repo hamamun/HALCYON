@@ -128,3 +128,89 @@ def test_typing_continues_while_suggestions_are_visible(gui_app, tmp_path: Path)
     )
     assert popup.property("visible") is True, "suggestions must remain visible while typing"
     bar.deleteLater()
+
+
+def test_same_tab_snapshot_update_preserves_address_draft_and_suggestions(
+    gui_app, tmp_path: Path
+):
+    """YouTube/media updates must not masquerade as a tab switch while editing."""
+    bar, browser = _build(gui_app, tmp_path)
+    window = _show_in_window(gui_app, bar, browser)
+    assert browser.addBookmark("Hello Example", "https://hello.example.com")
+    assert browser.addTab("https://www.youtube.com")
+
+    url_input = _find(bar, "GlassField")
+    popup = _find(bar, "UrlSuggestionsDropdown")
+    assert url_input is not None
+    assert popup is not None
+
+    url_input.forceActiveFocus()
+    url_input.selectAll()
+    QTest.keyClick(window, Qt.Key_H)
+    QTest.keyClick(window, Qt.Key_E)
+    QTest.qWait(100)
+    assert url_input.property("text") == "he"
+    assert popup.property("visible") is True
+    assert url_input.hasActiveFocus()
+
+    # BrowserContext emits this same signal for media/title/loading/history
+    # updates on the current tab. It is not evidence that the tab changed.
+    browser.activeTabChanged.emit()
+    QTest.qWait(30)
+
+    assert url_input.property("text") == "he", "same-tab update erased the address draft"
+    assert popup.property("visible") is True, "same-tab update dismissed live suggestions"
+    assert url_input.hasActiveFocus(), "same-tab update removed address-bar focus"
+    bar.deleteLater()
+
+
+def test_real_tab_switch_replaces_draft_and_closes_suggestions(gui_app, tmp_path: Path):
+    """Protecting same-tab edits must not weaken URL sync on a real tab change."""
+    bar, browser = _build(gui_app, tmp_path)
+    window = _show_in_window(gui_app, bar, browser)
+    assert browser.addBookmark("Hello Example", "https://hello.example.com")
+    assert browser.addTab("https://first.example.com")
+    assert browser.addTab("https://second.example.com")
+
+    url_input = _find(bar, "GlassField")
+    popup = _find(bar, "UrlSuggestionsDropdown")
+    assert url_input is not None
+    assert popup is not None
+
+    url_input.forceActiveFocus()
+    url_input.selectAll()
+    QTest.keyClick(window, Qt.Key_H)
+    QTest.keyClick(window, Qt.Key_E)
+    QTest.qWait(100)
+    assert popup.property("visible") is True
+
+    browser.setActiveTab(0)
+    QTest.qWait(30)
+
+    assert url_input.property("text") == "https://first.example.com"
+    assert popup.property("visible") is False
+    assert not url_input.hasActiveFocus()
+    bar.deleteLater()
+
+
+def test_main_return_and_keypad_enter_both_commit_navigation(gui_app, tmp_path: Path):
+    """The physical Return and keypad Enter keys must share TextField.onAccepted."""
+    bar, browser = _build(gui_app, tmp_path)
+    window = _show_in_window(gui_app, bar, browser)
+    assert browser.addTab("")
+    url_input = _find(bar, "GlassField")
+    assert url_input is not None
+
+    url_input.forceActiveFocus()
+    url_input.setProperty("text", "example.com")
+    QTest.keyClick(window, Qt.Key_Return)
+    QTest.qWait(30)
+    assert browser.activeTab["url"] == "https://example.com"
+
+    url_input.forceActiveFocus()
+    url_input.selectAll()
+    url_input.setProperty("text", "example.org")
+    QTest.keyClick(window, Qt.Key_Enter)
+    QTest.qWait(30)
+    assert browser.activeTab["url"] == "https://example.org"
+    bar.deleteLater()
