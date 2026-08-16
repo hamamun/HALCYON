@@ -14,12 +14,35 @@ Rectangle {
     property var browser: null
     property bool stageActive: true
     property bool _isSyncing: false
+    // activeTabChanged is a snapshot/update signal, not just a tab-switch
+    // signal: WebView2 emits it for URL, title, loading, history and media
+    // changes too.  Remember the identity separately so same-page updates can
+    // never erase an address draft or dismiss its suggestions.
+    property string _activeTabId: ""
     // Set when focus is being handed back from the suggestions popup so the
     // focus-in handler skips selectAll() (typing must continue, Edge-style).
     property bool _refocusingFromPopup: false
 
     function currentUrl() {
         return browser && browser.activeTab ? (browser.activeTab.url || "") : ""
+    }
+
+    function currentTabId() {
+        return browser && browser.activeTab ? (browser.activeTab.id || "") : ""
+    }
+
+    function handleActiveTabUpdate() {
+        var nextId = currentTabId()
+        if (nextId !== _activeTabId) {
+            _activeTabId = nextId
+            urlSuggestions.hidePopup()
+            syncUrlField(true)
+            urlInput.focus = false
+        } else {
+            // Redirects still reach the bar when it is idle, but an in-progress
+            // edit and its suggestion list remain wholly owned by the user.
+            syncUrlField(false)
+        }
     }
 
     // Edge-like: force=true always overwrites, even when focused - needed for tab switch/close/new
@@ -193,17 +216,9 @@ Rectangle {
                 event.accepted = true
             }
 
-            Keys.onReturnPressed: function(event) {
-                // Handled in onAccepted but keep for Up/Down selection
-                if (urlSuggestions.visible && urlSuggestions.hasSelection) {
-                    urlSuggestions.acceptSelection()
-                    event.accepted = true
-                    return
-                }
-                // let onAccepted handle
-            }
-
-            // Enter or Down selection via Return
+            // TextField emits accepted for both the main Return key and the
+            // numeric-keypad Enter key. Keep one path for both so neither key
+            // is swallowed and navigation can never be committed twice.
             onAccepted: {
                 if (urlSuggestions.visible && urlSuggestions.hasSelection) {
                     urlSuggestions.acceptSelection()
@@ -412,11 +427,12 @@ Rectangle {
     Connections {
         target: root.browser
         enabled: target !== null
-        // Edge: switching tab always shows that tab's URL and blurs address bar
+        // activeTabChanged also fires for same-tab URL/title/loading/history/
+        // media updates. Only a real tab identity change may discard the
+        // current edit. Same-tab updates refresh the displayed URL only while
+        // the field is not being edited and leave suggestions/focus untouched.
         function onActiveTabChanged() {
-            urlSuggestions.hidePopup()
-            root.syncUrlField(true)
-            urlInput.focus = false
+            root.handleActiveTabUpdate()
         }
         function onTabsChanged() {
             // When last tab closed -> blank (Edge)
@@ -427,9 +443,10 @@ Rectangle {
             }
         }
         function onActiveTabIndexChanged() {
-            // Some paths emit only index - force sync as safety
-            urlSuggestions.hidePopup()
-            root.syncUrlField(true)
+            // Handle the index signal too, but decide by stable tab identity:
+            // closing a tab to the left changes the index without changing the
+            // active page and must not interrupt an address edit.
+            root.handleActiveTabUpdate()
         }
         function onAddressFocusRequested() {
             // New blank tab -> blank + focused + select all (Edge)
@@ -440,5 +457,8 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: syncUrlField(true)
+    Component.onCompleted: {
+        _activeTabId = currentTabId()
+        syncUrlField(true)
+    }
 }

@@ -51,18 +51,6 @@ Rectangle {
             onClicked: if (root.browser) root.browser.addTab("")
         }
 
-        // The title bar is removed in borderless mode, so the shared mode
-        // switcher gets a real chrome slot beside New Tab.  Collapse it rather
-        // than merely hiding it, leaving normal Web layout untouched.
-        ModeChips {
-            id: modeChips
-            visible: root.borderless
-            Layout.preferredWidth: root.borderless ? implicitWidth : 0
-            Layout.preferredHeight: root.borderless ? implicitHeight : 0
-            activeMode: root.activeMode
-            onModeRequested: function(modeId) { Actions.switchMode(modeId) }
-        }
-
         ListView {
             id: tabsList
             Layout.fillWidth: true
@@ -121,6 +109,19 @@ Rectangle {
                     onClicked: if (root.browser) root.browser.setActiveTab(tabItem.index)
                 }
             }
+        }
+
+        // The title bar is removed in borderless mode, so keep the shared mode
+        // switcher in the chrome row. It belongs at the right end of the tab
+        // list, immediately before Settings (the first WindowButtons control),
+        // rather than between New Tab and the page tabs.
+        ModeChips {
+            id: modeChips
+            visible: root.borderless
+            Layout.preferredWidth: root.borderless ? implicitWidth : 0
+            Layout.preferredHeight: root.borderless ? implicitHeight : 0
+            activeMode: root.activeMode
+            onModeRequested: function(modeId) { Actions.switchMode(modeId) }
         }
 
         // Window buttons inline at the far right — borderless only. Reserved as
