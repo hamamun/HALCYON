@@ -533,6 +533,13 @@ def main(argv: list[str] | None = None) -> int:
         # input from outside the process, so once shutdown starts no new
         # command may be accepted (§R.4). Stop the bridge's status poller too
         # so it never reads engine state mid-teardown.
+        #
+        # Order matters between these two. ``remote.stop()`` is synchronous and
+        # bounded (it wakes every SSE stream, closes the socket, stops and
+        # closes its event loop, then joins the thread), so when it returns
+        # nothing outside the process can still reach the bridge. Only then is
+        # it safe to close the bridge, which drops its references to the
+        # controller, engine and mode contexts Qt is about to destroy.
         try:
             remote.stop()
         except Exception:

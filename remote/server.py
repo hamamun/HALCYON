@@ -14,6 +14,25 @@ with the full API surface the phone UI talks to:
 
 Safety: all player state is read on the Qt thread by the bridge poller; this
 thread only reads plain dicts and emits queued signals.
+
+**Shutdown is the other half of the contract.** ``/api/events`` is an endless
+handler by design — it only returns when the phone goes away. aiohttp's
+``cleanup()`` waits for every in-flight handler before it finishes, so an
+endless handler plus aiohttp's 60 s default grace meant the server thread
+outlived the window by a minute while the app waited only five seconds for it
+and then dropped the handle: an orphaned event loop, a still-bound port and a
+``python.exe`` left in Task Manager. Three things fix it, and all three are
+load-bearing:
+
+* a shutdown :class:`asyncio.Event` the SSE loop *waits on* instead of
+  sleeping, so every stream returns the instant shutdown starts;
+* ``shutdown_timeout`` cut to :data:`SHUTDOWN_TIMEOUT`, so aiohttp can never
+  sit on a straggler for a minute;
+* a single close path that runs *on the server thread*: cancel leftover tasks,
+  drain async generators and the default executor, then close the loop.
+  ``concurrent.futures`` registers an atexit hook that ``join()``s every
+  executor worker — daemon status does not exempt them — so a worker still
+  busy at close delays interpreter exit for as long as its job runs.
 """
 
 from __future__ import annotations
@@ -43,10 +62,51 @@ DEFAULT_PORT = 8765
 BIND_HOST = "0.0.0.0"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+#: How long aiohttp may wait for in-flight handlers during ``cleanup()``.
+#: aiohttp's own default is 60 s, which is a shutdown hang by any other name
+#: for a server whose main endpoint is an infinite SSE stream. Our streams are
+#: woken explicitly by :attr:`RemoteServer._closing`, so this is only a
+#: backstop for a handler that ignores it.
+SHUTDOWN_TIMEOUT = 1.0
+
+#: Hard cap on :meth:`RemoteServer.stop`. Past this the thread is abandoned —
+#: but it is a *daemon* thread whose loop has already been told to close, so
+#: abandoning it cannot keep the process alive.
+STOP_JOIN_TIMEOUT = 4.0
+
+#: Cadence of the SSE snapshot push. Waiting on the shutdown event for this
+#: long is exactly equivalent to sleeping for it, except it returns early when
+#: shutdown starts.
+SSE_TICK = 0.15
+
 
 def available() -> bool:
     """True when aiohttp is installed and the server can actually run."""
     return _AIOHTTP
+
+
+def _make_runner(app):
+    """Build the AppRunner with :data:`SHUTDOWN_TIMEOUT` applied.
+
+    ``shutdown_timeout`` moved between aiohttp releases: it was a ``TCPSite``
+    argument up to 3.11 and became a ``BaseRunner`` argument in 3.12, where
+    passing it to the site warns. ``requirements.txt`` allows ``aiohttp>=3.9``,
+    so ask the signature rather than the version string and return the kwargs
+    the *site* should get. Getting this wrong is not cosmetic — the value
+    silently reverting to aiohttp's 60 s default is the whole bug.
+    """
+    import inspect
+
+    try:
+        on_runner = "shutdown_timeout" in inspect.signature(
+            web.BaseRunner.__init__
+        ).parameters
+    except (TypeError, ValueError):  # pragma: no cover — exotic build
+        on_runner = False
+
+    if on_runner:
+        return web.AppRunner(app, shutdown_timeout=SHUTDOWN_TIMEOUT), {}
+    return web.AppRunner(app), {"shutdown_timeout": SHUTDOWN_TIMEOUT}
 
 
 def lan_ip() -> str:
@@ -83,6 +143,13 @@ class RemoteServer:
         self._site: web.TCPSite | None = None
         self._started = False
         self._ready = threading.Event()
+        #: Set on the server loop the moment shutdown begins. Created there
+        #: too: an asyncio.Event must belong to the loop that awaits it.
+        self._closing: asyncio.Event | None = None
+        #: True from the first stop() call onwards, readable from any thread.
+        #: Guards against a late start() and against re-entering the teardown.
+        self._stopping = False
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------- state ---
     @property
@@ -92,6 +159,11 @@ class RemoteServer:
     @property
     def started(self) -> bool:
         return self._started
+
+    @property
+    def stopping(self) -> bool:
+        """True once :meth:`stop` has been entered. Safe from any thread."""
+        return self._stopping
 
     @property
     def base_url(self) -> str:
@@ -150,7 +222,19 @@ class RemoteServer:
         Reduced from 0.4s to 0.15s polling for remote web responsiveness.
         Bridge also now emits publish_now on tab/bookmark/media changes via
         QTimer.singleShot(25ms), so bookmark taps feel <200ms.
+
+        **This handler must end when the app closes.** It used to loop on a
+        bare ``asyncio.sleep``, so it only ever returned when the phone hung
+        up — and ``AppRunner.cleanup()``, which waits for live handlers,
+        therefore waited out its full grace period on every close where a
+        phone still had the page open. Waiting on ``self._closing`` instead of
+        sleeping keeps the 0.15 s cadence identical while making shutdown
+        immediate.
         """
+        if self._stopping:
+            # Shutdown already started; do not open a new endless stream.
+            return web.Response(status=503, text="shutting down")
+
         resp = web.StreamResponse(
             headers={
                 "Content-Type": "text/event-stream",
@@ -160,9 +244,10 @@ class RemoteServer:
             }
         )
         await resp.prepare(request)
+        closing = self._closing
         last = -1
         try:
-            while True:
+            while not self._stopping:
                 if self._bridge is not None:
                     version = self._bridge.store.version()
                     if version != last:
@@ -171,9 +256,20 @@ class RemoteServer:
                             self._bridge.store.snapshot(), ensure_ascii=False
                         )
                         await resp.write(f"data: {payload}\n\n".encode("utf-8"))
-                await asyncio.sleep(0.15)
+                if closing is None:  # pragma: no cover — defensive
+                    await asyncio.sleep(SSE_TICK)
+                    continue
+                try:
+                    # Returns early the instant shutdown starts; otherwise this
+                    # is just the poll interval.
+                    await asyncio.wait_for(closing.wait(), timeout=SSE_TICK)
+                    break  # closing was set
+                except asyncio.TimeoutError:
+                    pass
         except (asyncio.CancelledError, ConnectionResetError, ConnectionError):
             pass
+        except Exception:  # pragma: no cover — a dead socket must not log-spam
+            log.debug("remote SSE stream ended with an error", exc_info=True)
         return resp
 
     async def _handle_drives(self, _request: web.Request) -> web.Response:
@@ -200,6 +296,11 @@ class RemoteServer:
             return web.json_response({"error": "missing action"}, status=400)
         if self._bridge is None:
             return web.json_response({"error": "bridge not wired"}, status=503)
+        # Once shutdown has begun the player is being torn down; a command
+        # accepted now would be dispatched into half-destroyed objects (§R.4:
+        # the remote stops accepting outside input first).
+        if self._stopping:
+            return web.json_response({"error": "shutting down"}, status=503)
         self._bridge.request(action, payload)
         return web.json_response({"ok": True})
 
@@ -212,6 +313,9 @@ class RemoteServer:
         """
         if self._started:
             return True
+        if self._stopping:
+            # A stop() has been issued; refuse to resurrect the server.
+            return False
         if not _AIOHTTP:
             log.warning("mobile remote disabled — aiohttp is not installed")
             return False
@@ -224,16 +328,39 @@ class RemoteServer:
         self._thread.start()
         if not self._ready.wait(timeout=10.0):
             log.error("mobile remote server failed to start within 10s")
+            # The thread is still trying to bind. Tear it down rather than
+            # leaking it: a half-started server is exactly the case that used
+            # to leave a live thread nobody held a handle to any more.
+            self.stop(force=True)
+            # A failed start is not a shutdown — leave the object usable so a
+            # caller may retry (e.g. after freeing the port).
+            self._stopping = False
             return False
+        if not self._started:
+            # Bind failed (port in use, etc.). _run has already unwound its
+            # loop; drop the handles so a later stop() is a clean no-op.
+            self._join_thread()
         return self._started
 
     def _run(self) -> None:
-        asyncio.set_event_loop(self._loop)
+        """Server thread body: bind, serve, and — always — close the loop.
+
+        The loop is created in :meth:`start` but *closed here*, on the thread
+        that owns it, after ``run_forever`` returns. Closing it from the
+        caller's thread (or not at all, which is what happened before) leaves
+        the selector, its socket and the loop's default executor alive.
+        """
+        loop = self._loop
+        assert loop is not None
+        asyncio.set_event_loop(loop)
         try:
-            self._runner = web.AppRunner(self._build_app())
-            self._loop.run_until_complete(self._runner.setup())
-            self._site = web.TCPSite(self._runner, BIND_HOST, self._port)
-            self._loop.run_until_complete(self._site.start())
+            self._closing = asyncio.Event()
+            self._runner, site_kwargs = _make_runner(self._build_app())
+            loop.run_until_complete(self._runner.setup())
+            self._site = web.TCPSite(
+                self._runner, BIND_HOST, self._port, **site_kwargs
+            )
+            loop.run_until_complete(self._site.start())
             self._port = self._actual_port()
             self._started = True
             if self._bridge is not None:
@@ -243,16 +370,63 @@ class RemoteServer:
             log.info("mobile remote listening on %s", self.base_url)
         except Exception:
             log.exception("mobile remote server failed to start")
+            self._started = False
             self._ready.set()  # never leave start() blocked
+            self._close_loop(loop)
             return
         finally:
             self._ready.set()
 
         try:
-            self._loop.run_forever()
+            loop.run_forever()
         except Exception:  # pragma: no cover — loop failure is fatal anyway
             log.exception("mobile remote server loop ended unexpectedly")
+        finally:
             self._started = False
+            self._close_loop(loop)
+
+    @staticmethod
+    def _close_loop(loop: asyncio.AbstractEventLoop) -> None:
+        """Fully retire ``loop``. Runs on the server thread, never raises.
+
+        ``run_forever`` returning is not the end of a loop's resources. Tasks
+        may still be pending, async generators unfinalized, and — the one that
+        actually keeps a process alive — the loop's default
+        ``ThreadPoolExecutor`` may still hold busy workers (aiohttp's
+        static-file responses use it).
+
+        Those workers are daemon threads, which is exactly why this is easy to
+        get wrong: daemon status does *not* exempt them. ``concurrent.futures``
+        registers an atexit hook that ``join()``s every worker it ever handed
+        out, so interpreter exit blocks until each in-flight job finishes,
+        with no Python frame to blame it on. Draining the executor here, on the
+        way out and while we can still bound it, is what keeps that off the
+        exit path.
+        """
+        try:
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except Exception:
+            log.debug("remote loop task cancellation failed", exc_info=True)
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            log.debug("remote loop asyncgen shutdown failed", exc_info=True)
+        try:
+            # Python 3.9+. Drains the executor here rather than leaving its
+            # workers to be joined by concurrent.futures' atexit hook.
+            loop.run_until_complete(loop.shutdown_default_executor())
+        except Exception:
+            log.debug("remote loop executor shutdown failed", exc_info=True)
+        try:
+            loop.close()
+        except Exception:
+            log.debug("remote loop close failed", exc_info=True)
 
     def _actual_port(self) -> int:
         try:
@@ -260,31 +434,100 @@ class RemoteServer:
         except Exception:
             return self._port
 
-    def stop(self) -> None:
-        """Stop serving. Idempotent and safe to call from any thread."""
-        if not self._started:
-            return
+    def stop(self, force: bool = False) -> None:
+        """Stop serving. Idempotent and safe to call from any thread.
+
+        Ordered so nothing can be left behind:
+
+        1. flip ``_stopping`` — new commands are refused and every SSE loop
+           sees its exit condition on the next check;
+        2. set the shutdown event *on the loop*, waking those loops now
+           instead of at their next 0.15 s tick;
+        3. ``runner.cleanup()`` — closes the listening socket and finishes the
+           remaining handlers, bounded by :data:`SHUTDOWN_TIMEOUT`;
+        4. ``loop.stop()``, which lets :meth:`_run` fall through to
+           :meth:`_close_loop`;
+        5. join the thread, bounded by :data:`STOP_JOIN_TIMEOUT`.
+
+        The previous version returned immediately when ``_started`` was False,
+        which skipped cleanup for a server still mid-bind, and it dropped the
+        thread/loop handles even when the join timed out — the leak behind
+        "window closed but python.exe is still in Task Manager".
+        """
+        with self._lock:
+            if self._stopping and not force:
+                # A stop is already in flight (or finished). Still wait for the
+                # thread so callers can rely on stop() being synchronous.
+                thread = self._thread
+                if thread is not None and thread.is_alive():
+                    thread.join(timeout=STOP_JOIN_TIMEOUT)
+                return
+            self._stopping = True
+            thread = self._thread
+            loop = self._loop
+
         self._started = False
-        loop = self._loop
+
         if loop is not None:
 
             def _schedule_cleanup() -> None:
+                closing = self._closing
+                if closing is not None:
+                    closing.set()  # wake every SSE stream right now
+
                 async def _cleanup() -> None:
-                    if self._runner is not None:
-                        await self._runner.cleanup()
-                    loop.stop()
+                    try:
+                        if self._site is not None:
+                            # Close the listening socket first so no new
+                            # connection can arrive during cleanup.
+                            await self._site.stop()
+                    except Exception:
+                        log.debug("remote site stop failed", exc_info=True)
+                    try:
+                        if self._runner is not None:
+                            await self._runner.cleanup()
+                    except Exception:
+                        log.debug("remote runner cleanup failed", exc_info=True)
+                    finally:
+                        loop.stop()
 
                 loop.create_task(_cleanup())
 
             try:
                 loop.call_soon_threadsafe(_schedule_cleanup)
-            except RuntimeError:  # pragma: no cover — loop already closed
+            except RuntimeError:  # loop already closed — nothing to unwind
                 pass
 
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-        self._thread = None
-        self._loop = None
-        self._runner = None
-        self._site = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=STOP_JOIN_TIMEOUT)
+            if thread.is_alive():
+                # Should not happen: cleanup is bounded well under the join
+                # timeout. Log loudly — a surviving thread here is precisely
+                # the symptom we are fixing, and silence is what made it hard
+                # to find last time. It is a daemon thread whose loop has been
+                # told to stop, so it cannot hold the process open by itself.
+                log.error(
+                    "mobile remote thread still alive after %.1fs — "
+                    "abandoning it (daemon, loop already stopped)",
+                    STOP_JOIN_TIMEOUT,
+                )
+
+        with self._lock:
+            self._thread = None
+            self._loop = None
+            self._runner = None
+            self._site = None
+            self._closing = None
         log.info("mobile remote stopped")
+
+    def _join_thread(self) -> None:
+        """Reap a thread whose loop already unwound (failed bind)."""
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=STOP_JOIN_TIMEOUT)
+        with self._lock:
+            self._thread = None
+            self._loop = None
+            self._runner = None
+            self._site = None
+            self._closing = None
