@@ -214,3 +214,61 @@ def test_a_throwing_has_vout_degrades_to_audio(guard):
 
     assert guard.active, "still keeps the machine awake"
     assert not guard.keeping_display_on
+
+
+# ------------------------------------------------- late-arriving picture ---
+class SizeAwareEngine(FakeEngine):
+    """A VlcEngine that also reports the decoded picture size, like the real one.
+
+    Reproduces the real startup order: the state goes Playing before libVLC has
+    a video output, and the picture (and therefore ``has_vout()``) appears a
+    moment later, announced by ``videoSizeChanged``.
+    """
+
+    videoSizeChanged = Signal()
+
+    def picture_appeared(self) -> None:
+        self.raw_player.vouts = 1
+        self.videoSizeChanged.emit()
+
+
+def _recording_guard(engine, monkeypatch):
+    g = PowerGuard(engine)
+    g._supported = True
+    g._current = 0
+    g._set_state = lambda flags: 1
+    return g
+
+
+def test_the_display_request_follows_the_first_picture(monkeypatch):
+    """A film must not spend its opening seconds without a display request.
+
+    ``has_vout()`` is false for the moment between "playing" and "there is a
+    picture", so a video used to start with the audio-only flags and wait for
+    the 5 s re-check to upgrade them. That is a window in which Windows is
+    still free to blank the screen.
+    """
+    engine = SizeAwareEngine()
+    guard = _recording_guard(engine, monkeypatch)
+
+    engine.set(State.Playing, vouts=0)       # decoder is up, no picture yet
+    assert guard.active
+    assert not guard.keeping_display_on
+
+    engine.picture_appeared()                # ...and now there is one
+
+    assert guard.keeping_display_on, (
+        "the display request must be raised as soon as the picture exists, "
+        "not up to five seconds later"
+    )
+
+
+def test_an_engine_without_the_size_signal_still_works(monkeypatch):
+    """Older/fake engines have no ``videoSizeChanged``; that is not fatal."""
+    engine = FakeEngine()
+    assert not hasattr(engine, "videoSizeChanged")
+
+    guard = _recording_guard(engine, monkeypatch)
+    engine.set(State.Playing, vouts=1)
+
+    assert guard.keeping_display_on

@@ -1188,7 +1188,14 @@ Shell {
         var hostWin = window.settingsHostWindow();
         if (!hostWin || !hostWin.contentItem)
             return;
-        if (settingsDialog.Window.window === hostWin)
+        // Compare parents, not windows. SettingsDialog is a Popup, and the
+        // Window attached property only exists on Items — asking a Popup for
+        // `Window.window` produced "Window.window does only support types
+        // deriving from Item" on every startup and evaluated to undefined, so
+        // this early-out never fired and the dialog was re-parented on every
+        // call. The popup's parent IS the host window's content item (set
+        // three lines below), which is the same question, correctly asked.
+        if (settingsDialog.parent === hostWin.contentItem)
             return;
         var wasOpen = !!settingsDialog.visible;
         // Close first: moving a live Popup between windows is the same

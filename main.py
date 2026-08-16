@@ -504,6 +504,23 @@ def main(argv: list[str] | None = None) -> int:
         if shutdown_tracer is not None:
             shutdown_tracer.arm()
 
+        # Settings first, before anything that could hang.
+        #
+        # They are flushed again later, inside ``controller.shutdown()`` — but
+        # that runs *after* the taskbar preview, the remote server, the remote
+        # bridge, the QML context teardown, the power guard and the subtitle
+        # backend have all had their turn. Any one of those wedging or raising
+        # takes the pending write with it, and writes are debounced by 400 ms,
+        # so a setting changed seconds before closing (volume, geometry, the
+        # last-used playlist) was exactly the one at risk. Flushing here costs
+        # one atomic write of a small JSON file and makes the outcome
+        # independent of everything that follows. ``flush()`` is a no-op when
+        # nothing is dirty, so the later call stays harmless.
+        try:
+            settings.flush()
+        except Exception:
+            log.exception("settings flush failed")
+
         # Taskbar preview first: it touches the window handle, so it must go
         # before Qt tears the window down.
         try:
