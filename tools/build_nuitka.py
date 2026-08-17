@@ -42,6 +42,11 @@ def get_nuitka_args(
         "--include-package=core",
         "--include-package=engine",
         "--include-package=remote",
+        # python-vlc is imported lazily (inside VlcEngine.__init__, after the
+        # DLL path has been fixed up), so Nuitka's static analysis can miss it
+        # and the frozen build then fails with ModuleNotFoundError: vlc at
+        # first launch. Force it in.
+        "--include-module=vlc",
         # WebView2 is reached through pythonnet at runtime, so Nuitka cannot
         # infer these lazy imports from static analysis alone.
         "--include-module=clr",

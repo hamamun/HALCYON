@@ -26,24 +26,33 @@ def _runtime_root() -> Path:
 
     Order matters:
 
-    1. **Nuitka** (standalone or onefile).  Nuitka neither sets ``sys.frozen``
-       nor guarantees that ``__file__`` points at the install directory — the
-       main module's ``__file__`` can report the *source* path captured at
-       compile time, which does not exist on the end user's machine.  The
-       supported anchor is ``__compiled__.containing_dir``: for a standalone
-       build it is the ``.dist`` folder (the directory holding
-       ``Halcyon.exe``), and for a onefile build it is the temporary unpack
-       directory where the bundled ``ui/``, ``config/`` and ``vendor/`` trees
-       actually live.
-    2. **PyInstaller** (used by some downstream packagers).  ``sys.frozen`` is
-       set and bundled resources live under ``sys._MEIPASS``.
-    3. **Source checkout.**  Two parents up from this file — the directory
+    1. **Nuitka standalone.**  This is the build the Inno installer ships.
+       Nuitka neither sets ``sys.frozen`` nor makes ``__file__`` point at the
+       install dir, and ``__compiled__.containing_dir`` reports the directory
+       of *whichever module reads it* — so reading it from this ``core.paths``
+       submodule would yield ``<app>\\core``, one level too deep, and the
+       bundled ``vendor\\vlc`` tree would never be found. For a standalone
+       build the bundled data files always live beside the executable, so the
+       directory of ``sys.executable`` is the correct, module-independent
+       root.
+    2. **Nuitka onefile / macOS app bundle.**  Here the data files live in a
+       temp unpack directory (or inside the ``.app``), not beside the
+       executable. ``__compiled__.containing_dir`` from the *main* module
+       abstracts that. We cannot read the main module's value directly from
+       here, but Nuitka exposes the same value through ``__compiled__``; if a
+       containing_dir is present and is NOT the directory of the executable,
+       use it (the onefile/unpack case).
+    3. **PyInstaller.**  ``sys.frozen`` is set and bundled resources live
+       under ``sys._MEIPASS``.
+    4. **Source checkout.**  Two parents up from this file — the directory
        holding ``main.py``.
 
     Using anything based on ``os.getcwd()`` would break when Explorer launches
     the app with a different working directory (file associations, the
     AutoPlay handler), so it is deliberately never consulted.
     """
+    exe_dir = Path(sys.executable).resolve().parent
+
     # In a Nuitka build every compiled module has a ``__compiled__`` attribute
     # in its own globals (Nuitka does *not* set ``sys.frozen`` — that is a
     # PyInstaller convention). It may also be visible as a builtin in some
@@ -52,14 +61,23 @@ def _runtime_root() -> Path:
     if compiled is None:
         compiled = getattr(__import__("builtins"), "__compiled__", None)
     containing_dir = getattr(compiled, "containing_dir", None)
-    if containing_dir:
-        return Path(containing_dir).resolve()
+
+    if containing_dir is not None:
+        containing_path = Path(containing_dir).resolve()
+        # Standalone: containing_dir of a submodule is a child of the .dist
+        # folder (e.g. .dist\\core). The exe directory IS the .dist root and
+        # is where vendor/ and ui/ live.
+        if containing_path == exe_dir or containing_path.is_relative_to(exe_dir):
+            return exe_dir
+        # Onefile / app bundle: data files are in the unpack/containing
+        # location, which differs from the exe directory.
+        return containing_path
 
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             return Path(meipass).resolve()
-        return Path(sys.executable).resolve().parent
+        return exe_dir
 
     return Path(__file__).resolve().parent.parent
 

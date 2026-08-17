@@ -35,22 +35,34 @@ import sys
 import threading
 from pathlib import Path
 
-# ROOT is resolved from __file__ here only for the very early sys.path setup.
-# Once core.paths is importable, use core.paths.ROOT instead — it understands
-# Nuitka/PyInstaller layouts where __file__ of the main module may point at a
-# non-existent source path from the build machine.
+# ROOT is resolved here only for the very early sys.path setup, before
+# core.paths is importable. In a Nuitka standalone build this must be the
+# directory holding Halcyon.exe (the .dist root), NOT __compiled__.containing_dir
+# of the main module's submodules — for a submodule that points one level too
+# deep (e.g. .dist\core), which makes bundled vendor/ and ui/ unfindable. Once
+# core.paths imports, use core.paths.ROOT (it encodes the same logic robustly).
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-# In a Nuitka onefile build __file__ lives in the temp unpack dir; in
-# standalone it lives in .dist. Either way, make sure the directory that
-# actually holds the compiled package is importable.
 try:
-    compiled_root = Path(__compiled__.containing_dir).resolve()  # type: ignore[name-defined]
-    if str(compiled_root) not in sys.path:
-        sys.path.insert(0, str(compiled_root))
-    ROOT = compiled_root
-except NameError:
+    import builtins as _builtins
+
+    _compiled = globals().get("__compiled__") or getattr(_builtins, "__compiled__", None)
+    _containing = getattr(_compiled, "containing_dir", None)
+    if _containing:
+        _exe_dir = Path(sys.executable).resolve().parent
+        _containing_path = Path(_containing).resolve()
+        # Standalone: the containing dir is the .dist root itself (main module)
+        # or a child of it (a submodule). The .dist root is always beside the
+        # executable and is where vendor/ and ui/ are installed.
+        if _containing_path == _exe_dir or _containing_path.is_relative_to(_exe_dir):
+            ROOT = _exe_dir
+        else:
+            # Onefile / app bundle: data unpacked elsewhere.
+            ROOT = _containing_path
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+except Exception:
     pass
 
 #: Anything QML holds a context-property reference to lives here for the life of
@@ -432,11 +444,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         player = VlcEngine(backend=backend, parent=app)
     except Exception as exc:  # libVLC missing is the common first-run failure
-        log.error("could not start libVLC: %s", exc)
+        log.error("could not start libVLC: %s", exc, exc_info=True)
+        # Report exactly where we looked and what the loader said, so this is
+        # diagnosable from a screenshot instead of a second guess.
+        checked = [paths.VENDOR_VLC]
+        if sys.platform == "win32":
+            checked.append(Path(sys.executable).resolve().parent / "vendor" / "vlc")
+            checked.append(Path(sys.executable).resolve().parent / "vlc")
+        existing = "\n".join(
+            f"   [{'OK ' if p.is_dir() else 'MISS'}] {p}" for p in checked
+        )
+        env_lib = os.environ.get("PYTHON_VLC_LIB_PATH", "(not set)")
+        env_plugins = os.environ.get("VLC_PLUGIN_PATH", "(not set)")
         _fatal(
             "libVLC could not be loaded.\n\n"
-            "Populate vendor/vlc/ with libvlc.dll, libvlccore.dll and plugins/ "
-            "(see README), or install VLC 3.0.21 x64."
+            f"Error: {type(exc).__name__}: {exc}\n\n"
+            f"App root: {paths.ROOT}\n"
+            f"Looked for vendor/vlc in:\n{existing}\n\n"
+            f"PYTHON_VLC_LIB_PATH={env_lib}\n"
+            f"VLC_PLUGIN_PATH={env_plugins}\n\n"
+            "Either reinstall Halcyon (the installer should place libvlc.dll, "
+            "libvlccore.dll and a plugins\\ folder under "
+            f"{paths.VENDOR_VLC}), or install VLC 3.0.21 x64 system-wide. "
+            "Details are in %APPDATA%\\Halcyon\\halcyon.log."
         )
         return 1
 

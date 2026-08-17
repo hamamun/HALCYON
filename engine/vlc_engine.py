@@ -240,6 +240,18 @@ def _resolve_bundled_vlc() -> Path | None:
 
     Must happen *before* ``import vlc``. In a packaged build the same directory
     sits under the application root (§9, the Nuitka row).
+
+    Two things here are deliberately not left to python-vlc's own finder:
+
+    * python-vlc's ``find_lib()`` calls ``sys.exit(1)`` when
+      ``PYTHON_VLC_LIB_PATH`` points at a DLL that fails to load (e.g. a
+      missing VC++/MinGW dependency). That is a silent, uncatchable exit in a
+      GUI subsystem build. We preload ``libvlccore.dll`` then ``libvlc.dll``
+      ourselves *first*; if a dependency is missing the OSError names it, and
+      once the DLLs are mapped into the process python-vlc's subsequent
+      ``ctypes.CDLL`` just increments the refcount.
+    * python-vlc derives ``VLC_PLUGIN_PATH`` from ``PYTHON_VLC_MODULE_PATH``
+      (not from the lib path), so set both.
     """
     candidates = [paths.VENDOR_VLC]
     if paths.is_packaged_build():
@@ -250,31 +262,61 @@ def _resolve_bundled_vlc() -> Path | None:
         # "vlc/" folder is kept for manual/sideload deployments.
         candidates.insert(0, Path(sys.executable).resolve().parent / "vendor" / "vlc")
         candidates.append(Path(sys.executable).resolve().parent / "vlc")
+
     for base in candidates:
         if not base.is_dir():
             continue
-        lib = base / ("libvlc.dll" if sys.platform == "win32" else "libvlc.so")
-        if not lib.exists() and sys.platform != "win32":
+        if sys.platform == "win32":
+            lib = base / "libvlc.dll"
+            core = base / "libvlccore.dll"
+        else:
+            core = base / "libvlccore.so"
             lib = next(iter(base.glob("libvlc.so*")), None)
-        if lib and lib.exists():
-            plugins = base / "plugins"
-            if plugins.is_dir():
-                os.environ["VLC_PLUGIN_PATH"] = str(plugins)
-            if sys.platform == "win32":
-                # Do not discard this handle: discarding it immediately removes
-                # ``base`` from the DLL search path, which can make libvlc.dll
-                # load while libvlccore.dll or a codec plugin fails later.
-                try:
-                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(base)))
-                except (AttributeError, OSError):
-                    # Older Python/Windows combinations may not expose the API;
-                    # python-vlc can still use the explicit library path below.
-                    log.debug("could not register VLC DLL directory", exc_info=True)
-                os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
-            else:
-                os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
-            log.info("using bundled libVLC at %s", base)
-            return base
+        if not lib or not lib.exists():
+            continue
+
+        plugins = base / "plugins"
+        if plugins.is_dir():
+            os.environ["VLC_PLUGIN_PATH"] = str(plugins)
+            # python-vlc reads this and sets VLC_PLUGIN_PATH itself; setting
+            # both means it works regardless of which code path reaches libVLC.
+            os.environ["PYTHON_VLC_MODULE_PATH"] = str(plugins)
+
+        if sys.platform == "win32":
+            # Do not discard this handle: discarding it immediately removes
+            # ``base`` from the DLL search path, which can make libvlc.dll
+            # load while libvlccore.dll or a codec plugin fails later.
+            try:
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(base)))
+            except (AttributeError, OSError):
+                # Older Python/Windows combinations may not expose the API;
+                # ctypes can still use the explicit library paths below.
+                log.debug("could not register VLC DLL directory", exc_info=True)
+            # Put the VLC dir on PATH too — some VLC plugin dependencies are
+            # resolved via the loader's normal search, not add_dll_directory.
+            os.environ["PATH"] = str(base) + os.pathsep + os.environ.get("PATH", "")
+
+            # Preload core then main library so a missing dependency is a
+            # catchable OSError (naming the missing DLL) rather than python-vlc's
+            # sys.exit(1). Hold references for the process lifetime.
+            import ctypes
+
+            try:
+                if not core.exists():
+                    raise FileNotFoundError(f"missing {core.name} in {base}")
+                _DLL_DIRECTORY_HANDLES.append(ctypes.CDLL(str(core)))
+                _DLL_DIRECTORY_HANDLES.append(ctypes.CDLL(str(lib)))
+            except OSError as exc:
+                raise OSError(
+                    f"could not load libVLC from {base}: {exc}. "
+                    "The Microsoft Visual C++ 2015-2022 x64 Redistributable may "
+                    "be missing."
+                ) from exc
+
+        os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
+        log.info("using bundled libVLC at %s", base)
+        return base
+
     log.info("vendor/vlc not populated — falling back to system libVLC")
     return None
 
@@ -365,7 +407,13 @@ class VlcEngine(QObject):
     def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
         super().__init__(parent)
         vlc_base = _resolve_bundled_vlc()
-        import vlc  # noqa: PLC0415 - deliberately after the path fix-up
+        try:
+            import vlc  # noqa: PLC0415 - deliberately after the path fix-up
+        except ImportError as exc:
+            raise RuntimeError(
+                "The python-vlc module is missing from this build "
+                f"({exc}). Rebuild with --include-module=vlc."
+            ) from exc
 
         self._vlc = vlc
         self._instance = vlc.Instance(_instance_args(vlc_base))
