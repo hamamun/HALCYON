@@ -1,0 +1,72 @@
+# Builds the Windows release installer (Halcyon-Setup.exe).
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-installer:
+    name: Build Halcyon-Setup.exe
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Add Python Scripts to PATH
+        shell: pwsh
+        run: |
+          echo "$env:pythonLocation\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka ordered-set zstandard
+
+      - name: Fetch vendor files (VLC, WebView2, redists)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File packaging/fetch_vendor_windows.ps1
+
+      - name: Compile shaders
+        run: python tools/build_shaders.py
+
+      - name: Build standalone app with Nuitka
+        run: python tools/build_nuitka.py --output-dir dist
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer with Inno Setup
+        run: iscc packaging\installer\Halcyon.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Halcyon-Setup
+          path: dist/installer/Halcyon-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/Halcyon-Setup.exe
+          generate_release_notes: true
