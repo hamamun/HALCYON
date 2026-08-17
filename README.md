@@ -117,6 +117,34 @@ certificate.
 
 ---
 
+## Windows installer build
+
+The release installer is built by GitHub Actions on Windows:
+
+1. downloads VLC 3.0.21 x64 into `vendor/vlc/`;
+2. prunes VLC plugins using `packaging/vlc-plugin-whitelist.txt`;
+3. keeps `vendor/vlc/hrtfs/` beside `libvlccore.dll` for spatial audio;
+4. downloads the WebView2 bridge DLLs from the official NuGet package into
+   `vendor/webview2/` and unblocks them;
+5. downloads the VC++ and WebView2 Runtime installers into `packaging/redist/`;
+6. builds the Nuitka standalone app;
+7. builds `Halcyon-Setup.exe` with Inno Setup.
+
+Manual Windows build equivalent:
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+pip install nuitka ordered-set zstandard
+powershell -ExecutionPolicy Bypass -File packaging/fetch_vendor_windows.ps1
+python tools/build_shaders.py
+python tools/build_nuitka.py --output-dir dist
+iscc packaging\installer\Halcyon.iss
+```
+
+---
+
 ## Running
 
 ```bash

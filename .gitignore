@@ -22,6 +22,10 @@ vendor/vlc/
 # WebView2 SDK bridge files — fetched locally, never committed (see README / §P3.2)
 vendor/webview2/
 
+# installer dependency downloads — fetched during the Windows build
+.vendor-tmp/
+packaging/redist/*.exe
+
 # compiled shaders are generated from .frag sources
 *.qsb
 

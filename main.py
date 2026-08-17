@@ -205,6 +205,30 @@ def main(argv: list[str] | None = None) -> int:
     if debug:
         log.debug("debug mode on — Qt/QML messages are routed through logging")
 
+    from core.launch import (
+        ACTION_PLAY,
+        ACTION_QUEUE,
+        LaunchRequest,
+        parse_launch_request,
+        split_media_and_playlists,
+    )
+
+    launch_request = parse_launch_request(argv)
+    if os.environ.get("HALCYON_DISABLE_SINGLE_INSTANCE", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        try:
+            from core.single_instance import send_to_running_instance
+
+            if send_to_running_instance(launch_request):
+                log.info("forwarded launch request to existing Halcyon instance")
+                return 0
+        except Exception:
+            log.debug("single-instance forwarding unavailable", exc_info=True)
+
     # Opt-in shutdown hang tracer. Starts an idle daemon thread that only does
     # something if the process is still alive a few seconds after aboutToQuit.
     # No effect at all unless --trace-shutdown (or HALCYON_TRACE_SHUTDOWN=1) is
@@ -261,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     surface_format.setAlphaBufferSize(8)
     QSurfaceFormat.setDefaultFormat(surface_format)
 
-    from PySide6.QtCore import QCoreApplication, QUrl
+    from PySide6.QtCore import QCoreApplication, QTimer, Qt, QUrl
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtQml import QQmlApplicationEngine
 
@@ -440,6 +464,72 @@ def main(argv: list[str] | None = None) -> int:
         log.error("QML failed to load — see the messages above")
         return 2
 
+    # --- shell launches / single-instance IPC -------------------------------
+    def _activate_window() -> None:
+        """Bring the existing window forward after a shell launch."""
+        try:
+            for window in app.allWindows():
+                if not window.isVisible():
+                    continue
+                state = window.windowState()
+                if state & Qt.WindowState.WindowMinimized:
+                    window.showNormal()
+                window.raise_()
+                window.requestActivate()
+                break
+        except Exception:
+            log.debug("could not activate existing window", exc_info=True)
+
+    def _apply_launch_request(request: LaunchRequest) -> None:
+        """Apply file association/context-menu/AutoPlay requests."""
+        _activate_window()
+        if not request.paths:
+            return
+
+        media_paths, playlist_paths = split_media_and_playlists(request.paths)
+
+        # Playlist documents belong to the M3U mode.  ``--play`` autostarts the
+        # first channel so file association double-clicks feel like a media
+        # player; the M3U panel remains responsible for showing the loaded list.
+        if playlist_paths:
+            playlist_context = controller.context("m3u")
+            if playlist_context is not None and hasattr(playlist_context, "openFiles"):
+                controller.setActiveMode("m3u")
+                loaded = bool(playlist_context.openFiles(playlist_paths))
+                if loaded and request.action == ACTION_PLAY and hasattr(playlist_context, "play_index"):
+                    QTimer.singleShot(0, lambda ctx=playlist_context: ctx.play_index(0))
+            if not media_paths:
+                return
+
+        # Normal files and folders are Local.  ``--play`` replaces the Local
+        # queue; ``--queue`` appends and lets the current playback continue.
+        controller.setActiveMode("local")
+        if request.action == ACTION_PLAY:
+            controller.clearPlaylist()
+        elif request.action != ACTION_QUEUE:
+            log.debug("unknown launch action %r; treating as play", request.action)
+            controller.clearPlaylist()
+        controller.addPaths(media_paths)
+
+    if os.environ.get("HALCYON_DISABLE_SINGLE_INSTANCE", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        try:
+            from core.single_instance import SingleInstanceServer
+
+            single_instance = SingleInstanceServer(parent=app)
+            single_instance.requestReceived.connect(
+                lambda payload: _apply_launch_request(LaunchRequest.from_payload(payload))
+            )
+            single_instance.listen()
+            app.aboutToQuit.connect(single_instance.close)
+            _KEEP_ALIVE.append(single_instance)
+        except Exception:
+            log.warning("single-instance IPC could not be started", exc_info=True)
+
     # --- mobile remote (Phase R, §R.4) --------------------------------------
     # On by default; the LAST step of startup loading (owner decision
     # 2026-08-08). Never fatal: without aiohttp the app starts exactly as
@@ -587,11 +677,11 @@ def main(argv: list[str] | None = None) -> int:
 
     app.aboutToQuit.connect(on_quit)
 
-    # Files passed on the command line go through the same append path as
-    # everything else (§4.1).
-    media_args = [a for a in argv[1:] if not a.startswith("-")]
-    if media_args:
-        controller.addPaths(media_args)
+    # Files passed by Explorer/file associations/context menus go through the
+    # same request path as second-instance IPC.  Delay one tick so the QML scene
+    # and remote bridge are fully settled before a launch-time autoplay starts.
+    if launch_request.paths:
+        QTimer.singleShot(0, lambda: _apply_launch_request(launch_request))
 
     exit_code = app.exec()
 

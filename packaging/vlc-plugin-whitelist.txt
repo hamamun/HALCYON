@@ -1,0 +1,26 @@
+# VLC plugin directories kept in the Halcyon installer.
+#
+# The GitHub Actions build downloads the official VLC package, then keeps only
+# these plugin categories before Nuitka/Inno package the app.  This avoids
+# shipping VLC's own UI/skins/discovery/server plugins while preserving normal
+# file playback, subtitles, audio filters/equalizer, local folders, HTTP/HLS
+# streams and the Windows/Turbo video path.
+access
+access_demux
+audio_filter
+audio_mixer
+audio_output
+codec
+d3d11_filters
+demux
+keystore
+meta_engine
+misc
+packetizer
+playlist
+spu
+stream_filter
+text_renderer
+video_chroma
+video_filter
+video_output

@@ -1,4 +1,4 @@
-"""M3U/M3U8 playlist parsing — Milestone 2.1 (§P2.4).
+"""M3U/M3U8/PLS playlist parsing — Milestone 2.1 (§P2.4).
 
 Pure Python, deliberately Qt-free, so the parser is unit-testable without a
 display (and on any box): bytes in, channels out.
@@ -10,15 +10,16 @@ What this understands:
   (``tvg-id``, ``tvg-name``, ``tvg-logo``, ``tvg-country``,
   ``tvg-language``) plus ``group-title``
 * ``#EXTGRP`` as a fallback group
+* Winamp-style ``.pls`` files: ``FileN=``, ``TitleN=`` and ``LengthN=``
 * plain entries without an ``#EXTINF`` (the URL's file name becomes the title)
 * local paths — absolute, ``~``-relative and playlist-relative — and remote
   ``http(s)://`` entries, left untouched
 * UTF-8 with or without BOM, Latin-1 fallback (a lot of IPTV lists are not
   UTF-8, however loudly they claim to be)
 * malformed lines: skipped and counted, never fatal
-* nested playlist references (``.m3u`` / ``.m3u8`` URLs, including HLS master
-  playlists): explicitly ignored and counted — a playlist is a document you
-  load, not a channel you play
+* nested playlist references (``.m3u`` / ``.m3u8`` / ``.pls`` URLs, including
+  HLS master playlists): explicitly ignored and counted — a playlist is a
+  document you load, not a channel you play
 * **country resolution** — when ``tvg-country`` is missing, the parser tries
   four fallback strategies (tvg-id pattern, group-title splitting, title
   pattern) to extract an ISO country code and maps it to a readable name.
@@ -50,7 +51,8 @@ _EXTINF_RE = re.compile(r"^#EXTINF\s*:\s*(-?\d+(?:\.\d+)?)?\s*(.*?),(.*)$", re.I
 _ATTR_RE = re.compile(r'([a-zA-Z0-9\-_]+)\s*=\s*"([^"]*)"')
 #: HLS variant directives — a master playlist's stream list, not a channel.
 _HLS_VARIANT_RE = re.compile(r"^#EXT-X-(STREAM-INF|MEDIA)\b", re.IGNORECASE)
-_PLAYLIST_EXT = {".m3u", ".m3u8"}
+_PLAYLIST_EXT = {".m3u", ".m3u8", ".pls"}
+_PLS_ENTRY_RE = re.compile(r"^(file|title|length)(\d+)\s*=\s*(.*)$", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Country resolution lookup tables
@@ -463,6 +465,79 @@ def parse_m3u(text: str, base_dir: Path | None = None) -> ParseResult:
     return ParseResult(channels=channels, skipped=skipped)
 
 
+def parse_pls(text: str, base_dir: Path | None = None) -> ParseResult:
+    """Parse a Winamp/Shoutcast ``.pls`` playlist into channels.
+
+    PLS is an INI-like format, but real files are often loose about section
+    names, ordering and missing ``NumberOfEntries``.  We therefore collect every
+    ``FileN`` entry we see, attach optional ``TitleN``/``LengthN`` metadata, and
+    skip entries with no playable file/URL instead of failing the whole list.
+    """
+    entries: dict[int, dict[str, str]] = {}
+    malformed = 0
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            continue
+        if "=" not in line:
+            malformed += 1
+            continue
+        match = _PLS_ENTRY_RE.match(line)
+        if not match:
+            # NumberOfEntries, Version and other harmless keys.
+            continue
+        key, index_s, value = match.groups()
+        try:
+            index = int(index_s)
+        except ValueError:
+            malformed += 1
+            continue
+        entries.setdefault(index, {})[key.lower()] = value.strip()
+
+    channels: list[Channel] = []
+    skipped = malformed
+    for index in sorted(entries):
+        entry = entries[index]
+        raw_url = entry.get("file", "").strip()
+        if not raw_url:
+            skipped += 1
+            continue
+        url = _resolve_entry_url(raw_url, base_dir)
+        if not is_url(url) and looks_like_playlist_ref(url):
+            skipped += 1
+            continue
+        try:
+            duration = float(entry.get("length", "-1") or -1)
+        except ValueError:
+            duration = -1.0
+        title = entry.get("title", "").strip() or _title_from_url(raw_url)
+        channels.append(Channel(name=title, url=url, duration=duration))
+
+    return ParseResult(channels=channels, skipped=skipped)
+
+
+def _playlist_suffix(location: str | Path | None) -> str:
+    if location is None:
+        return ""
+    text = str(location).split("?", 1)[0].split("#", 1)[0]
+    return Path(text).suffix.lower()
+
+
+def parse_playlist_text(
+    text: str,
+    *,
+    base_dir: Path | None = None,
+    location: str | Path | None = None,
+) -> ParseResult:
+    """Parse playlist text, selecting M3U or PLS by ``location`` suffix."""
+    if _playlist_suffix(location) == ".pls":
+        return parse_pls(text, base_dir=base_dir)
+    return parse_m3u(text, base_dir=base_dir)
+
+
 def read_playlist(path: Path) -> str:
     """Read a local playlist file as text (encoding detected)."""
     return decode_playlist(Path(path).expanduser().read_bytes())
@@ -497,6 +572,6 @@ def load_playlist(location: str) -> tuple[ParseResult, Path | None]:
     (``None`` for remote playlists — relative entries there stay as written).
     """
     if is_url(location):
-        return parse_m3u(fetch_playlist(location)), None
+        return parse_playlist_text(fetch_playlist(location), location=location), None
     path = Path(location).expanduser()
-    return parse_m3u(read_playlist(path), base_dir=path.parent), path.parent
+    return parse_playlist_text(read_playlist(path), base_dir=path.parent, location=path), path.parent

@@ -732,7 +732,7 @@ Item {
             // window-level drop, whose one home is Local's queue (§4.1).
             for (var i = 0; i < drop.urls.length; i++) {
                 var u = drop.urls[i].toString().split("?")[0].toLowerCase();
-                if (u.endsWith(".m3u") || u.endsWith(".m3u8")) {
+                if (u.endsWith(".m3u") || u.endsWith(".m3u8") || u.endsWith(".pls")) {
                     root.ctx.openFiles(drop.urls);
                     drop.accept();
                     return;

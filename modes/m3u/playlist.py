@@ -37,7 +37,7 @@ from PySide6.QtCore import (
 )
 
 from core import paths as path_utils
-from modes.m3u.parser import Channel, ParseResult, parse_m3u
+from modes.m3u.parser import Channel, ParseResult
 from modes.m3u import parser
 from modes.m3u.favourites import FavouritesStore
 from modes.m3u.logo_cache import LogoFailureStore, is_loadable_logo
@@ -866,31 +866,41 @@ class M3UContext(QObject):
         if self._last_attempted_id:
             self.loadSource(self._last_attempted_id)
 
-    @Slot(list)
-    def openFiles(self, urls: list) -> None:  # noqa: N802
-        """A dropped ``.m3u``/``.m3u8`` on the panel (§P2.4): opens it through
-        the same pipeline as Add File — and does **not** save it to the seven."""
+    @Slot(list, result=bool)
+    def openFiles(self, urls: list) -> bool:  # noqa: N802
+        """A dropped/external ``.m3u``/``.m3u8``/``.pls`` opens unsaved.
+
+        Returns whether a new playlist was actually loaded.  QML ignores the
+        return value, but Windows shell launches use it to avoid auto-playing an
+        old list when a malformed playlist file fails to parse.
+        """
         candidates = []
         for entry in urls:
             text = entry.toString() if hasattr(entry, "toString") else str(entry)
             path = path_utils.normalise_path(text)
-            if Path(path.split("?", 1)[0]).suffix.lower() in (".m3u", ".m3u8"):
+            if Path(path.split("?", 1)[0]).suffix.lower() in (".m3u", ".m3u8", ".pls"):
                 candidates.append(path)
         if not candidates:
-            return
+            return False
         path = candidates[0]
         self._stop_playback()
         self._last_attempted_id = ""
+        # Opening an external/dropped playlist supersedes any asynchronous
+        # restore of the last saved source that may have been started when the
+        # M3U mode became active.  The worker cannot be cancelled, but clearing
+        # the pending id makes its eventual result a no-op.
+        self._pending_source_id = ""
         try:
-            result = parser.parse_m3u(parser.read_playlist(Path(path)),
-                                      base_dir=Path(path).parent)
+            result = parser.parse_playlist_text(
+                parser.read_playlist(Path(path)), base_dir=Path(path).parent, location=path
+            )
         except (OSError, RuntimeError) as exc:
             self._set_status(f"Could not open the file ({exc})", is_error=True)
-            return
+            return False
         except Exception:  # noqa: BLE001
             log.exception("dropped playlist failed: %s", path)
             self._set_status("Could not open the file.", is_error=True)
-            return
+            return False
         self._current_source_id = ""
         if self._model.favouritesOnly:
             self._model.setFavouritesOnly(False)
@@ -898,6 +908,7 @@ class M3UContext(QObject):
         self._remember_unsaved_source(Path(path).stem, KIND_FILE, path)
         self.infoChanged.emit()
         self._apply_result(result)
+        return True
 
     @Slot()
     def clearStatus(self) -> None:  # noqa: N802
@@ -1185,7 +1196,7 @@ class M3UContext(QObject):
         source = self._store.get(source_id)
         base_dir = (Path(source.location).parent
                     if source and source.kind == KIND_FILE else None)
-        result = parser.parse_m3u(text, base_dir=base_dir)
+        result = parser.parse_playlist_text(text, base_dir=base_dir, location=source.location if source else None)
         self._current_source_id = source_id
         self._current_source_name = source.name if source else ""
         self._clear_unsaved_source()

@@ -1,7 +1,7 @@
 """The saved-sources store — up to 7 playlists (§P2.4, owner decision).
 
 Each source is a name plus either a remote URL or a local ``.m3u`` /
-``.m3u8`` file. This file is pure Python (json + pathlib) so it is testable
+``.m3u8`` / ``.pls`` file. This file is pure Python (json + pathlib) so it is testable
 without Qt; the Qt-facing wrapper lives in :mod:`modes.m3u.playlist`.
 
 The store belongs to M3U alone (§A.1): it lives at ``m3u-sources.json`` in the

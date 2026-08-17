@@ -7,7 +7,7 @@ import Halcyon.Ui
 // The Playlists manager — §P2.4, owner decision 2026-08-02.
 //
 // ONE dialog, ONE home (§4.1) for every way a source enters M3U: add a stream
-// URL, add a saved .m3u/.m3u8 file, edit, delete — up to seven saved sources.
+// URL, add a saved .m3u/.m3u8/.pls file, edit, delete — up to seven saved sources.
 // Clicking a row loads it (and stops the current stream, per the same owner
 // decision). At seven, the Add buttons disable with the hint "Remove one to
 // add another" — never a silent cap.
@@ -225,7 +225,7 @@ Dialog {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: "No playlists saved yet.\nAdd a stream URL or a saved .m3u file."
+                text: "No playlists saved yet.\nAdd a stream URL or a saved .m3u/.m3u8/.pls file."
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.textFaint
@@ -387,7 +387,7 @@ Dialog {
     FileDialog {
         id: fileDialog
         title: "Choose a playlist"
-        nameFilters: ["Playlists (*.m3u *.m3u8)", "All files (*)"]
+        nameFilters: ["Playlists (*.m3u *.m3u8 *.pls)", "All files (*)"]
         onAccepted: {
             var problem = root.ctx.addSource("", selectedFile.toString(), "file");
             if (problem.length > 0) {
