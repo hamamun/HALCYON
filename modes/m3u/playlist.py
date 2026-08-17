@@ -866,10 +866,14 @@ class M3UContext(QObject):
         if self._last_attempted_id:
             self.loadSource(self._last_attempted_id)
 
-    @Slot(list)
-    def openFiles(self, urls: list) -> None:  # noqa: N802
-        """A dropped ``.m3u``/``.m3u8``/``.pls`` on the panel (§P2.4): opens it
-        through the same pipeline as Add File — and does **not** save it to the seven."""
+    @Slot(list, result=bool)
+    def openFiles(self, urls: list) -> bool:  # noqa: N802
+        """A dropped/external ``.m3u``/``.m3u8``/``.pls`` opens unsaved.
+
+        Returns whether a new playlist was actually loaded.  QML ignores the
+        return value, but Windows shell launches use it to avoid auto-playing an
+        old list when a malformed playlist file fails to parse.
+        """
         candidates = []
         for entry in urls:
             text = entry.toString() if hasattr(entry, "toString") else str(entry)
@@ -877,7 +881,7 @@ class M3UContext(QObject):
             if Path(path.split("?", 1)[0]).suffix.lower() in (".m3u", ".m3u8", ".pls"):
                 candidates.append(path)
         if not candidates:
-            return
+            return False
         path = candidates[0]
         self._stop_playback()
         self._last_attempted_id = ""
@@ -892,11 +896,11 @@ class M3UContext(QObject):
             )
         except (OSError, RuntimeError) as exc:
             self._set_status(f"Could not open the file ({exc})", is_error=True)
-            return
+            return False
         except Exception:  # noqa: BLE001
             log.exception("dropped playlist failed: %s", path)
             self._set_status("Could not open the file.", is_error=True)
-            return
+            return False
         self._current_source_id = ""
         if self._model.favouritesOnly:
             self._model.setFavouritesOnly(False)
@@ -904,6 +908,7 @@ class M3UContext(QObject):
         self._remember_unsaved_source(Path(path).stem, KIND_FILE, path)
         self.infoChanged.emit()
         self._apply_result(result)
+        return True
 
     @Slot()
     def clearStatus(self) -> None:  # noqa: N802

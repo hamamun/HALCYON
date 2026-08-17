@@ -495,8 +495,8 @@ def main(argv: list[str] | None = None) -> int:
             playlist_context = controller.context("m3u")
             if playlist_context is not None and hasattr(playlist_context, "openFiles"):
                 controller.setActiveMode("m3u")
-                playlist_context.openFiles(playlist_paths)
-                if request.action == ACTION_PLAY and hasattr(playlist_context, "play_index"):
+                loaded = bool(playlist_context.openFiles(playlist_paths))
+                if loaded and request.action == ACTION_PLAY and hasattr(playlist_context, "play_index"):
                     QTimer.singleShot(0, lambda ctx=playlist_context: ctx.play_index(0))
             if not media_paths:
                 return
