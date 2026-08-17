@@ -26,6 +26,10 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "nuitka",
         "--standalone",
         "--enable-plugin=pyside6",
+        # QML app: bundle the Qt qml plugin family, otherwise the frozen
+        # build ships QML files that cannot be loaded (Nuitka warns about
+        # this during the build).
+        "--include-qt-plugins=qml",
         "--include-package=modes",
         "--include-package=ui",
         "--include-package=core",
@@ -39,6 +43,13 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "--product-name=Halcyon",
         "--file-description=Halcyon media player",
         "--company-name=Halcyon",
+        # Windows requires file/product version numbers whenever any version
+        # info (product name, file description, company) is given; without
+        # them Nuitka exits instantly on Windows with:
+        #   "Error, company name and file or product version need to be given
+        #    when any version information is given."
+        "--file-version=1.2.0",
+        "--product-version=1.2.0",
         f"--output-dir={output_dir}",
     ]
 
