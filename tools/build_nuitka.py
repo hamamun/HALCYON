@@ -25,6 +25,7 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "-m",
         "nuitka",
         "--standalone",
+        "--enable-plugin=pyside6",
         # CI runs with no interactive terminal; never stall on a download
         # prompt (e.g. Dependency Walker / ccache) — assume yes instead.
         "--assume-yes-for-downloads",
