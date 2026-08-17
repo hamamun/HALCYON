@@ -74,12 +74,25 @@ jobs:
 
       # Official Inno Setup installer (no chocolatey dependency; the runner
       # image no longer guarantees choco is preinstalled/usable).
+      # Inno Setup 6 is already preinstalled on the windows-latest runner
+      # image. Use it when present; only download as a fallback (from the
+      # official GitHub release — the jrsoftware redirect page can return a
+      # corrupted download).
       - name: Install Inno Setup
         shell: pwsh
         run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            Write-Host "Inno Setup already installed: $iscc"
+            exit 0
+          }
           $ProgressPreference = "SilentlyContinue"
-          Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "$env:TEMP\innosetup.exe"
-          Start-Process -FilePath "$env:TEMP\innosetup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait
+          $installer = "$env:TEMP\innosetup.exe"
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-6_5_3/innosetup-6.5.3.exe" -OutFile $installer
+          if ((Get-Item $installer).Length -lt 2MB) {
+            throw "Inno Setup download is too small - download failed"
+          }
+          Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait
 
       - name: Compile installer with Inno Setup
         shell: pwsh
