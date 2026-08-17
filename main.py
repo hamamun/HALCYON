@@ -35,9 +35,23 @@ import sys
 import threading
 from pathlib import Path
 
+# ROOT is resolved from __file__ here only for the very early sys.path setup.
+# Once core.paths is importable, use core.paths.ROOT instead — it understands
+# Nuitka/PyInstaller layouts where __file__ of the main module may point at a
+# non-existent source path from the build machine.
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+# In a Nuitka onefile build __file__ lives in the temp unpack dir; in
+# standalone it lives in .dist. Either way, make sure the directory that
+# actually holds the compiled package is importable.
+try:
+    compiled_root = Path(__compiled__.containing_dir).resolve()  # type: ignore[name-defined]
+    if str(compiled_root) not in sys.path:
+        sys.path.insert(0, str(compiled_root))
+    ROOT = compiled_root
+except NameError:
+    pass
 
 #: Anything QML holds a context-property reference to lives here for the life of
 #: the process. Qt parenting already covers this, but a stray Python-side
@@ -152,13 +166,61 @@ def configure_logging(debug: bool = False) -> None:
     uses, and which is swallowed entirely in some launchers. That is why a
     broken QML connection can look like "nothing happened" with a clean console.
 
-    In debug mode we install a handler that forwards every Qt/QML message into
-    the same logger as the Python side, so one stream carries both.
+    The packaged Windows build is compiled with
+    ``--windows-console-mode=disable``, so a crash that happens before the
+    window appears leaves *nothing* for the user to report. We therefore always
+    mirror the root logger into ``%APPDATA%\\Halcyon\\halcyon.log`` (rotated when
+    it grows past 1 MiB), regardless of debug mode. That file is the first
+    thing to ask for when a report says "the shortcuts exist but the app never
+    opens".
+
+    In debug mode we also install a handler that forwards every Qt/QML message
+    into the same logger as the Python side, so one stream carries both.
     """
+    handlers: list[logging.Handler] = []
+    if sys.stderr is not None:
+        # In a GUI subsystem build sys.stderr can be None; only attach a stream
+        # handler when there is actually somewhere for it to write.
+        handlers.append(logging.StreamHandler())
+    try:
+        # Import lazily: core.paths creates the profile directory on demand,
+        # and configure_logging runs before any other application import.
+        from core.paths import data_file
+
+        log_path = data_file("halcyon.log")
+        file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        handlers.append(file_handler)
+        # Keep the log from growing without bound on a long-lived install.
+        try:
+            if log_path.exists() and log_path.stat().st_size > 1_048_576:
+                backup = log_path.with_suffix(".log.1")
+                if backup.exists():
+                    backup.unlink()
+                log_path.replace(backup)
+                # Re-point the handler at the fresh file.
+                file_handler.close()
+                handlers.remove(file_handler)
+                file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+                handlers.append(file_handler)
+        except OSError:
+            pass
+    except Exception:
+        # Logging must never block startup — if the profile directory is not
+        # writable we fall back to stderr only.
+        pass
+
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
+        force=True,
     )
     if not debug:
         return
@@ -201,9 +263,11 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     debug = debug_enabled(argv)
     configure_logging(debug)
+    _install_crash_logging()
     log = logging.getLogger("halcyon")
     if debug:
         log.debug("debug mode on — Qt/QML messages are routed through logging")
+    log.info("Halcyon starting (root=%s)", ROOT)
 
     from core.launch import (
         ACTION_PLAY,
@@ -236,8 +300,12 @@ def main(argv: list[str] | None = None) -> int:
     shutdown_tracer = None
     if shutdown_trace_enabled(argv):
         from core.shutdown_trace import ShutdownTracer
+        from core.paths import data_file
 
-        shutdown_tracer = ShutdownTracer(ROOT / "shutdown-trace.log")
+        # Write to the per-user profile, not next to the executable: under
+        # Program Files the install directory is not writable by a normal
+        # user, which would make the diagnostic silently produce nothing.
+        shutdown_tracer = ShutdownTracer(data_file("shutdown-trace.log"))
         shutdown_tracer.start()
 
     # WebView2 uses COM on the GUI thread.  Initialise pythonnet's bridge before
@@ -831,14 +899,89 @@ def _build_mode_context(spec, player, controller, settings):
 
 
 def _fatal(message: str) -> None:
-    try:
-        from PySide6.QtWidgets import QApplication, QMessageBox
+    """Show a fatal error to the user, even before the QML window exists.
 
-        app = QApplication.instance() or QApplication([])
-        QMessageBox.critical(None, "Halcyon", message)
-    except Exception:
-        print(message, file=sys.stderr)
+    Tries the native Win32 message box first (it has no Qt dependency and
+    therefore works even when Qt itself failed to initialise), then falls back
+    to a Qt message box. Never raises — a failed error dialog must not mask the
+    original failure.
+    """
+    logging.getLogger("halcyon").error("FATAL: %s", message)
+    shown = False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            # MB_ICONERROR | MB_OK | MB_TOPMOST | MB_SETFOREGROUND
+            ctypes.windll.user32.MessageBoxW(0, message, "Halcyon", 0x10 | 0x0 | 0x40000 | 0x10000)
+            shown = True
+        except Exception:
+            shown = False
+    if not shown:
+        try:
+            from PySide6.QtWidgets import QMessageBox
+
+            # Use whatever QApplication/QGuiApplication already exists; never
+            # construct a second QCoreApplication, which aborts the process.
+            QMessageBox.critical(None, "Halcyon", message)
+            shown = True
+        except Exception:
+            pass
+    if not shown:
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
+
+
+def _install_crash_logging() -> None:
+    """Route uncaught exceptions to the log file and show a visible error.
+
+    Without this, an exception raised after the GUI subsystem has detached
+    from the console produces exactly the failure mode users report: the
+    installer created the shortcuts, the process starts, then it vanishes
+    with no window and no message. The log file gives us a traceback; the
+    message box makes the failure visible instead of silent.
+    """
+    log = logging.getLogger("halcyon")
+
+    def _excepthook(exc_type, exc, tb) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        log.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
+        try:
+            from core.paths import data_file
+
+            detail = "".join(traceback.format_exception(exc_type, exc, tb))
+            log_path = data_file("halcyon.log")
+            _fatal(
+                "Halcyon encountered an error and could not start.\n\n"
+                f"Details were written to:\n{log_path}\n\n"
+                f"{exc_type.__name__}: {exc}\n\n{detail[-1500:]}"
+            )
+        except Exception:
+            _fatal(f"Halcyon encountered an error and could not start:\n\n{exc}")
+
+    sys.excepthook = _excepthook
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import traceback
+
+    # main() itself calls configure_logging(); we only need to make sure an
+    # exception raised *before* that call (or inside it) still reaches a
+    # visible error dialog instead of vanishing into a disabled console.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 — last-resort startup handler
+        logging.getLogger("halcyon").critical(
+            "Startup failed", exc_info=True
+        )
+        try:
+            _fatal(f"Halcyon could not start:\n\n{exc}")
+        except Exception:
+            pass
+        raise SystemExit(1)

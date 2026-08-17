@@ -18,7 +18,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
+def get_nuitka_args(
+    output_dir: Path,
+    onefile: bool = False,
+    console: bool = False,
+) -> list[str]:
     """Generate the Nuitka command-line arguments for building Halcyon."""
     args = [
         sys.executable,
@@ -60,7 +64,15 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         args.append("--onefile")
 
     if sys.platform == "win32":
-        args.append("--windows-console-mode=disable")
+        # Release builds are GUI subsystem (no console window). A --console
+        # build keeps the console attached so a startup crash that would
+        # otherwise be invisible (the "shortcuts exist but nothing opens"
+        # report) can be diagnosed from the terminal. The installer always
+        # uses the GUI build.
+        if console:
+            args.append("--windows-console-mode=force")
+        else:
+            args.append("--windows-console-mode=disable")
 
     icon_path = ROOT / "assets" / "halcyon.ico"
     if icon_path.exists():
@@ -118,13 +130,18 @@ def main() -> int:
         help="Produce a single executable file instead of standalone folder",
     )
     parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Build with a console window attached (for diagnosing startup failures)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the Nuitka build command without running it",
     )
     args = parser.parse_args()
 
-    cmd = get_nuitka_args(args.output_dir, onefile=args.onefile)
+    cmd = get_nuitka_args(args.output_dir, onefile=args.onefile, console=args.console)
 
     if args.dry_run:
         print("Nuitka build command (dry run):")

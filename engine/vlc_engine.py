@@ -238,12 +238,18 @@ def find_bundled_hrtf(base: Path | None) -> tuple[Path | None, bool]:
 def _resolve_bundled_vlc() -> Path | None:
     """Point ctypes at ``vendor/vlc`` if it is populated.
 
-    Must happen *before* ``import vlc``. In a frozen build the same directory
-    sits next to the executable (§9, the Nuitka row).
+    Must happen *before* ``import vlc``. In a packaged build the same directory
+    sits under the application root (§9, the Nuitka row).
     """
     candidates = [paths.VENDOR_VLC]
-    if getattr(sys, "frozen", False):
-        candidates.insert(0, Path(sys.executable).parent / "vlc")
+    if paths.is_packaged_build():
+        # Nuitka does not set sys.frozen, so the old check skipped the bundled
+        # copy entirely. Check next to the executable as well so a layout where
+        # the runtime lives directly beside Halcyon.exe is also accepted. The
+        # Inno Setup build uses vendor/vlc (the first candidate); a bare
+        # "vlc/" folder is kept for manual/sideload deployments.
+        candidates.insert(0, Path(sys.executable).resolve().parent / "vendor" / "vlc")
+        candidates.append(Path(sys.executable).resolve().parent / "vlc")
     for base in candidates:
         if not base.is_dir():
             continue

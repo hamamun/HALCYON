@@ -20,8 +20,53 @@ from pathlib import Path
 
 APP_NAME = "Halcyon"
 
-#: Repository root — the directory containing main.py.
-ROOT = Path(__file__).resolve().parent.parent
+
+def _runtime_root() -> Path:
+    """Locate the application root in every supported runtime.
+
+    Order matters:
+
+    1. **Nuitka** (standalone or onefile).  Nuitka neither sets ``sys.frozen``
+       nor guarantees that ``__file__`` points at the install directory — the
+       main module's ``__file__`` can report the *source* path captured at
+       compile time, which does not exist on the end user's machine.  The
+       supported anchor is ``__compiled__.containing_dir``: for a standalone
+       build it is the ``.dist`` folder (the directory holding
+       ``Halcyon.exe``), and for a onefile build it is the temporary unpack
+       directory where the bundled ``ui/``, ``config/`` and ``vendor/`` trees
+       actually live.
+    2. **PyInstaller** (used by some downstream packagers).  ``sys.frozen`` is
+       set and bundled resources live under ``sys._MEIPASS``.
+    3. **Source checkout.**  Two parents up from this file — the directory
+       holding ``main.py``.
+
+    Using anything based on ``os.getcwd()`` would break when Explorer launches
+    the app with a different working directory (file associations, the
+    AutoPlay handler), so it is deliberately never consulted.
+    """
+    # In a Nuitka build every compiled module has a ``__compiled__`` attribute
+    # in its own globals (Nuitka does *not* set ``sys.frozen`` — that is a
+    # PyInstaller convention). It may also be visible as a builtin in some
+    # Nuitka configurations, so check both.
+    compiled = globals().get("__compiled__")
+    if compiled is None:
+        compiled = getattr(__import__("builtins"), "__compiled__", None)
+    containing_dir = getattr(compiled, "containing_dir", None)
+    if containing_dir:
+        return Path(containing_dir).resolve()
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass).resolve()
+        return Path(sys.executable).resolve().parent
+
+    return Path(__file__).resolve().parent.parent
+
+
+#: Application root — the directory containing main.py (source) or the
+#: compiled executable / unpacked bundle (packaged build).
+ROOT = _runtime_root()
 
 #: First-run defaults shipped with the app.
 DEFAULTS_DIR = ROOT / "config"
@@ -29,9 +74,20 @@ DEFAULTS_DIR = ROOT / "config"
 #: Bundled libVLC (§P1.3). Gitignored; see README for how to populate it.
 VENDOR_VLC = ROOT / "vendor" / "vlc"
 
+VENDOR_WEBVIEW2 = ROOT / "vendor" / "webview2"
+
 ASSETS = ROOT / "assets"
 UI_DIR = ROOT / "ui"
 SHADERS = UI_DIR / "shaders"
+
+
+def is_packaged_build() -> bool:
+    """True when running inside a Nuitka/PyInstaller bundle (not a source run)."""
+    if globals().get("__compiled__") is not None:
+        return True
+    if getattr(__import__("builtins"), "__compiled__", None) is not None:
+        return True
+    return bool(getattr(sys, "frozen", False))
 
 
 def qml_url(url: str) -> str:

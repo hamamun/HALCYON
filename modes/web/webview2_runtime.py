@@ -25,7 +25,9 @@ logger = logging.getLogger("modes.web.webview2_runtime")
 # Evergreen WebView2 Runtime client GUID published by Microsoft.
 WEBVIEW2_RUNTIME_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
-ROOT = Path(__file__).resolve().parents[2]
+from core import paths as _paths  # noqa: E402  — must follow stdlib imports
+
+ROOT = _paths.ROOT
 VENDOR_WEBVIEW2_DIR = ROOT / "vendor" / "webview2"
 CORE_DLL_NAME = "Microsoft.Web.WebView2.Core.dll"
 LOADER_DLL_NAME = "WebView2Loader.dll"
@@ -60,7 +62,10 @@ def get_user_data_dir() -> Path:
 def _candidate_vendor_dirs() -> list[Path]:
     """Return source and frozen-build locations for the bridge files."""
     candidates = [VENDOR_WEBVIEW2_DIR]
-    if getattr(sys, "frozen", False):
+    # Nuitka does not set sys.frozen; use the shared packaged-build check so
+    # the bridge DLLs shipped under {app}\vendor\webview2 are actually found
+    # on an installed build.
+    if _paths.is_packaged_build():
         candidates.append(Path(sys.executable).resolve().parent / "vendor" / "webview2")
 
     unique: list[Path] = []
