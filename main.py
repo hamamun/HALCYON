@@ -36,11 +36,12 @@ import threading
 from pathlib import Path
 
 # ROOT is resolved here only for the very early sys.path setup, before
-# core.paths is importable. In a Nuitka standalone build this must be the
-# directory holding Halcyon.exe (the .dist root), NOT __compiled__.containing_dir
-# of the main module's submodules — for a submodule that points one level too
-# deep (e.g. .dist\core), which makes bundled vendor/ and ui/ unfindable. Once
-# core.paths imports, use core.paths.ROOT (it encodes the same logic robustly).
+# core.paths is importable. For the Nuitka standalone build (what Inno Setup
+# ships), bundled data always lives beside Halcyon.exe, so use the exe's
+# directory. We deliberately do NOT trust __compiled__.containing_dir: it is
+# module-relative and has been observed returning a PARENT of the install dir,
+# which made vendor/ and ui/ resolve one level too high. Onefile is the only
+# layout that needs containing_dir.
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -48,18 +49,13 @@ try:
     import builtins as _builtins
 
     _compiled = globals().get("__compiled__") or getattr(_builtins, "__compiled__", None)
-    _containing = getattr(_compiled, "containing_dir", None)
-    if _containing:
-        _exe_dir = Path(sys.executable).resolve().parent
-        _containing_path = Path(_containing).resolve()
-        # Standalone: the containing dir is the .dist root itself (main module)
-        # or a child of it (a submodule). The .dist root is always beside the
-        # executable and is where vendor/ and ui/ are installed.
-        if _containing_path == _exe_dir or _containing_path.is_relative_to(_exe_dir):
-            ROOT = _exe_dir
+    if _compiled is not None:
+        if os.environ.get("NUITKA_ONEFILE_PARENT"):
+            _containing = getattr(_compiled, "containing_dir", None)
+            if _containing:
+                ROOT = Path(_containing).resolve()
         else:
-            # Onefile / app bundle: data unpacked elsewhere.
-            ROOT = _containing_path
+            ROOT = Path(sys.executable).resolve().parent
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
 except Exception:

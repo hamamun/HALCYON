@@ -60,18 +60,22 @@ def _runtime_root() -> Path:
     compiled = globals().get("__compiled__")
     if compiled is None:
         compiled = getattr(__import__("builtins"), "__compiled__", None)
-    containing_dir = getattr(compiled, "containing_dir", None)
 
-    if containing_dir is not None:
-        containing_path = Path(containing_dir).resolve()
-        # Standalone: containing_dir of a submodule is a child of the .dist
-        # folder (e.g. .dist\\core). The exe directory IS the .dist root and
-        # is where vendor/ and ui/ live.
-        if containing_path == exe_dir or containing_path.is_relative_to(exe_dir):
-            return exe_dir
-        # Onefile / app bundle: data files are in the unpack/containing
-        # location, which differs from the exe directory.
-        return containing_path
+    if compiled is not None:
+        # Onefile unpacks to a temp dir; that is the one layout where data is
+        # NOT beside the exe. For a STANDALONE build (what Inno Setup ships)
+        # the bundled data always lives beside Halcyon.exe, so use exe_dir
+        # regardless of what __compiled__.containing_dir claims. That value is
+        # module-relative and unreliable across Nuitka versions: it has been
+        # observed returning a PARENT of the install dir (C:\Program Files
+        # instead of C:\Program Files\Halcyon), which made every bundled path
+        # resolve one level too high and libVLC fail to load despite the files
+        # being correctly installed.
+        if os.environ.get("NUITKA_ONEFILE_PARENT"):
+            containing_dir = getattr(compiled, "containing_dir", None)
+            if containing_dir:
+                return Path(containing_dir).resolve()
+        return exe_dir
 
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", None)
