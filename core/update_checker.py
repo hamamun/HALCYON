@@ -491,7 +491,12 @@ class UpdateChecker(QObject):
         """Open *relative_path* (relative to repo root) in Windows Explorer."""
         folder = paths.ROOT / relative_path
         if not folder.exists():
-            folder.mkdir(parents=True, exist_ok=True)
+            # In a packaged install under Program Files the root is not
+            # writable by a normal user; never let that abort the slot.
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                log.warning("could not create folder %s: %s", folder, exc)
         if sys.platform == "win32":
             try:
                 os.startfile(str(folder.resolve()))

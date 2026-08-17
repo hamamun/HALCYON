@@ -35,9 +35,31 @@ import sys
 import threading
 from pathlib import Path
 
+# ROOT is resolved here only for the very early sys.path setup, before
+# core.paths is importable. For the Nuitka standalone build (what Inno Setup
+# ships), bundled data always lives beside Halcyon.exe, so use the exe's
+# directory. We deliberately do NOT trust __compiled__.containing_dir: it is
+# module-relative and has been observed returning a PARENT of the install dir,
+# which made vendor/ and ui/ resolve one level too high. Onefile is the only
+# layout that needs containing_dir.
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+try:
+    import builtins as _builtins
+
+    _compiled = globals().get("__compiled__") or getattr(_builtins, "__compiled__", None)
+    if _compiled is not None:
+        if os.environ.get("NUITKA_ONEFILE_PARENT"):
+            _containing = getattr(_compiled, "containing_dir", None)
+            if _containing:
+                ROOT = Path(_containing).resolve()
+        else:
+            ROOT = Path(sys.executable).resolve().parent
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+except Exception:
+    pass
 
 #: Anything QML holds a context-property reference to lives here for the life of
 #: the process. Qt parenting already covers this, but a stray Python-side
@@ -152,13 +174,61 @@ def configure_logging(debug: bool = False) -> None:
     uses, and which is swallowed entirely in some launchers. That is why a
     broken QML connection can look like "nothing happened" with a clean console.
 
-    In debug mode we install a handler that forwards every Qt/QML message into
-    the same logger as the Python side, so one stream carries both.
+    The packaged Windows build is compiled with
+    ``--windows-console-mode=disable``, so a crash that happens before the
+    window appears leaves *nothing* for the user to report. We therefore always
+    mirror the root logger into ``%APPDATA%\\Halcyon\\halcyon.log`` (rotated when
+    it grows past 1 MiB), regardless of debug mode. That file is the first
+    thing to ask for when a report says "the shortcuts exist but the app never
+    opens".
+
+    In debug mode we also install a handler that forwards every Qt/QML message
+    into the same logger as the Python side, so one stream carries both.
     """
+    handlers: list[logging.Handler] = []
+    if sys.stderr is not None:
+        # In a GUI subsystem build sys.stderr can be None; only attach a stream
+        # handler when there is actually somewhere for it to write.
+        handlers.append(logging.StreamHandler())
+    try:
+        # Import lazily: core.paths creates the profile directory on demand,
+        # and configure_logging runs before any other application import.
+        from core.paths import data_file
+
+        log_path = data_file("halcyon.log")
+        file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        handlers.append(file_handler)
+        # Keep the log from growing without bound on a long-lived install.
+        try:
+            if log_path.exists() and log_path.stat().st_size > 1_048_576:
+                backup = log_path.with_suffix(".log.1")
+                if backup.exists():
+                    backup.unlink()
+                log_path.replace(backup)
+                # Re-point the handler at the fresh file.
+                file_handler.close()
+                handlers.remove(file_handler)
+                file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+                handlers.append(file_handler)
+        except OSError:
+            pass
+    except Exception:
+        # Logging must never block startup — if the profile directory is not
+        # writable we fall back to stderr only.
+        pass
+
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)-22s %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
+        force=True,
     )
     if not debug:
         return
@@ -201,9 +271,15 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     debug = debug_enabled(argv)
     configure_logging(debug)
+    _install_crash_logging()
     log = logging.getLogger("halcyon")
     if debug:
         log.debug("debug mode on — Qt/QML messages are routed through logging")
+    try:
+        from core.version import __version__ as _early_version
+    except Exception:
+        _early_version = "unknown"
+    log.info("Halcyon %s starting (early root=%s)", _early_version, ROOT)
 
     from core.launch import (
         ACTION_PLAY,
@@ -236,8 +312,12 @@ def main(argv: list[str] | None = None) -> int:
     shutdown_tracer = None
     if shutdown_trace_enabled(argv):
         from core.shutdown_trace import ShutdownTracer
+        from core.paths import data_file
 
-        shutdown_tracer = ShutdownTracer(ROOT / "shutdown-trace.log")
+        # Write to the per-user profile, not next to the executable: under
+        # Program Files the install directory is not writable by a normal
+        # user, which would make the diagnostic silently produce nothing.
+        shutdown_tracer = ShutdownTracer(data_file("shutdown-trace.log"))
         shutdown_tracer.start()
 
     # WebView2 uses COM on the GUI thread.  Initialise pythonnet's bridge before
@@ -248,12 +328,30 @@ def main(argv: list[str] | None = None) -> int:
     # whether the exit hang is a .NET-vs-Python teardown race.
     if sys.platform == "win32" and not pythonnet_disabled(argv):
         try:
-            from modes.web.webview2_runtime import init_pythonnet_com
+            from modes.web.webview2_runtime import (
+                _find_core_dll,
+                _find_loader_dll,
+                init_pythonnet_com,
+            )
 
-            if not init_pythonnet_com():
-                log.debug("WebView2 bridge was not ready at startup; Web mode will explain why")
+            core_dll = _find_core_dll()
+            loader_dll = _find_loader_dll()
+            log.info(
+                "WebView2 bridge DLLs: core=%s loader=%s",
+                core_dll or "NOT FOUND",
+                loader_dll or "NOT FOUND",
+            )
+            if init_pythonnet_com():
+                log.info("WebView2 pythonnet/COM bridge initialised")
+            else:
+                log.warning(
+                    "WebView2 bridge was not ready at startup; Web mode will explain why"
+                )
         except Exception:
-            log.debug("WebView2 bootstrap failed; continuing without Web mode runtime", exc_info=True)
+            log.warning(
+                "WebView2 bootstrap failed; continuing without Web mode runtime",
+                exc_info=True,
+            )
 
     # --- graphics API, before anything Qt exists ---------------------------
     from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
@@ -291,6 +389,12 @@ def main(argv: list[str] | None = None) -> int:
 
     QCoreApplication.setOrganizationName("Halcyon")
     QCoreApplication.setApplicationName("Halcyon")
+    try:
+        from core.version import __version__ as _version
+
+        QCoreApplication.setApplicationVersion(_version)
+    except Exception:
+        _version = "unknown"
 
     app = QGuiApplication(argv)
     icon_path = ROOT / "assets" / "halcyon.ico"
@@ -357,6 +461,61 @@ def main(argv: list[str] | None = None) -> int:
     from engine.video_adjust import VideoAdjust
     from engine.vlc_engine import VlcEngine
 
+    log.info(
+        "Halcyon %s starting — root=%s exe=%s cwd=%s packaged=%s",
+        _version,
+        paths.ROOT,
+        sys.executable,
+        Path.cwd(),
+        paths.is_packaged_build(),
+    )
+    # Log the actual on-disk contents of the bundled VLC directory, so if the
+    # engine fails to load we can see from halcyon.log exactly what shipped.
+    try:
+        _vlc_dir = paths.VENDOR_VLC
+        if _vlc_dir.is_dir():
+            _entries = sorted(p.name for p in _vlc_dir.iterdir())
+            log.info("vendor/vlc contents (%d): %s", len(_entries), ", ".join(_entries))
+            _plugins = _vlc_dir / "plugins"
+            if _plugins.is_dir():
+                log.info(
+                    "vendor/vlc/plugins categories: %s",
+                    ", ".join(sorted(p.name for p in _plugins.iterdir() if p.is_dir())),
+                )
+            for _required in ("libvlc.dll", "libvlccore.dll"):
+                _p = _vlc_dir / _required
+                log.info(
+                    "  %s: %s (%d bytes)",
+                    _required,
+                    "present" if _p.exists() else "MISSING",
+                    _p.stat().st_size if _p.exists() else 0,
+                )
+        else:
+            log.error("vendor/vlc directory DOES NOT EXIST at %s", _vlc_dir)
+    except Exception:
+        log.debug("could not inventory vendor/vlc", exc_info=True)
+
+    # Same inventory for the WebView2 bridge, so a missing bridge DLL shows up
+    # in halcyon.log immediately rather than as a vague "Web mode unavailable"
+    # panel much later.
+    try:
+        _wv2_dir = paths.VENDOR_WEBVIEW2
+        if _wv2_dir.is_dir():
+            _wv2_entries = sorted(p.name for p in _wv2_dir.iterdir())
+            log.info("vendor/webview2 contents: %s", ", ".join(_wv2_entries))
+            for _required in ("Microsoft.Web.WebView2.Core.dll", "WebView2Loader.dll"):
+                _p = _wv2_dir / _required
+                log.info(
+                    "  %s: %s (%d bytes)",
+                    _required,
+                    "present" if _p.exists() else "MISSING",
+                    _p.stat().st_size if _p.exists() else 0,
+                )
+        else:
+            log.warning("vendor/webview2 directory DOES NOT EXIST at %s", _wv2_dir)
+    except Exception:
+        log.debug("could not inventory vendor/webview2", exc_info=True)
+
     paths.seed_defaults()
     settings = Settings(parent=app)
 
@@ -364,11 +523,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         player = VlcEngine(backend=backend, parent=app)
     except Exception as exc:  # libVLC missing is the common first-run failure
-        log.error("could not start libVLC: %s", exc)
+        log.error("could not start libVLC: %s", exc, exc_info=True)
+        # Report exactly where we looked and what the loader said, so this is
+        # diagnosable from a screenshot instead of a second guess.
+        checked = [paths.VENDOR_VLC]
+        if sys.platform == "win32":
+            checked.append(Path(sys.executable).resolve().parent / "vendor" / "vlc")
+            checked.append(Path(sys.executable).resolve().parent / "vlc")
+        existing = "\n".join(
+            f"   [{'OK ' if p.is_dir() else 'MISS'}] {p}" for p in checked
+        )
+        env_lib = os.environ.get("PYTHON_VLC_LIB_PATH", "(not set)")
+        env_plugins = os.environ.get("VLC_PLUGIN_PATH", "(not set)")
         _fatal(
             "libVLC could not be loaded.\n\n"
-            "Populate vendor/vlc/ with libvlc.dll, libvlccore.dll and plugins/ "
-            "(see README), or install VLC 3.0.21 x64."
+            f"Error: {type(exc).__name__}: {exc}\n\n"
+            f"App root: {paths.ROOT}\n"
+            f"Looked for vendor/vlc in:\n{existing}\n\n"
+            f"PYTHON_VLC_LIB_PATH={env_lib}\n"
+            f"VLC_PLUGIN_PATH={env_plugins}\n\n"
+            "Either reinstall Halcyon (the installer should place libvlc.dll, "
+            "libvlccore.dll and a plugins\\ folder under "
+            f"{paths.VENDOR_VLC}), or install VLC 3.0.21 x64 system-wide. "
+            "Details are in %APPDATA%\\Halcyon\\halcyon.log."
         )
         return 1
 
@@ -831,14 +1008,95 @@ def _build_mode_context(spec, player, controller, settings):
 
 
 def _fatal(message: str) -> None:
-    try:
-        from PySide6.QtWidgets import QApplication, QMessageBox
+    """Show a fatal error to the user, even before the QML window exists.
 
-        app = QApplication.instance() or QApplication([])
-        QMessageBox.critical(None, "Halcyon", message)
+    Tries the native Win32 message box first (it has no Qt dependency and
+    therefore works even when Qt itself failed to initialise), then falls back
+    to a Qt message box. Never raises — a failed error dialog must not mask the
+    original failure.
+    """
+    logging.getLogger("halcyon").error("FATAL: %s", message)
+    try:
+        from core.version import __version__ as _v
+
+        title = f"Halcyon {_v}"
     except Exception:
-        print(message, file=sys.stderr)
+        title = "Halcyon"
+    shown = False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            # MB_ICONERROR | MB_OK | MB_TOPMOST | MB_SETFOREGROUND
+            ctypes.windll.user32.MessageBoxW(0, message, title, 0x10 | 0x0 | 0x40000 | 0x10000)
+            shown = True
+        except Exception:
+            shown = False
+    if not shown:
+        try:
+            from PySide6.QtWidgets import QMessageBox
+
+            # Use whatever QApplication/QGuiApplication already exists; never
+            # construct a second QCoreApplication, which aborts the process.
+            QMessageBox.critical(None, title, message)
+            shown = True
+        except Exception:
+            pass
+    if not shown:
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
+
+
+def _install_crash_logging() -> None:
+    """Route uncaught exceptions to the log file and show a visible error.
+
+    Without this, an exception raised after the GUI subsystem has detached
+    from the console produces exactly the failure mode users report: the
+    installer created the shortcuts, the process starts, then it vanishes
+    with no window and no message. The log file gives us a traceback; the
+    message box makes the failure visible instead of silent.
+    """
+    log = logging.getLogger("halcyon")
+
+    def _excepthook(exc_type, exc, tb) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        log.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
+        try:
+            from core.paths import data_file
+
+            detail = "".join(traceback.format_exception(exc_type, exc, tb))
+            log_path = data_file("halcyon.log")
+            _fatal(
+                "Halcyon encountered an error and could not start.\n\n"
+                f"Details were written to:\n{log_path}\n\n"
+                f"{exc_type.__name__}: {exc}\n\n{detail[-1500:]}"
+            )
+        except Exception:
+            _fatal(f"Halcyon encountered an error and could not start:\n\n{exc}")
+
+    sys.excepthook = _excepthook
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import traceback
+
+    # main() itself calls configure_logging(); we only need to make sure an
+    # exception raised *before* that call (or inside it) still reaches a
+    # visible error dialog instead of vanishing into a disabled console.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 — last-resort startup handler
+        logging.getLogger("halcyon").critical(
+            "Startup failed", exc_info=True
+        )
+        try:
+            _fatal(f"Halcyon could not start:\n\n{exc}")
+        except Exception:
+            pass
+        raise SystemExit(1)

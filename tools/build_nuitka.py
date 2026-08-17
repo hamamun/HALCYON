@@ -18,8 +18,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
+def get_nuitka_args(
+    output_dir: Path,
+    onefile: bool = False,
+    console: bool = False,
+) -> list[str]:
     """Generate the Nuitka command-line arguments for building Halcyon."""
+    # Read the version from the single source of truth so the embedded file
+    # version, product version and installer can never disagree.
+    version_ns: dict[str, object] = {}
+    version_file = ROOT / "core" / "version.py"
+    try:
+        exec(version_file.read_text(encoding="utf-8"), version_ns)  # noqa: S102
+        app_version = str(version_ns.get("__version__", "1.2.1"))
+    except OSError:
+        app_version = "1.2.1"
+
     args = [
         sys.executable,
         "-m",
@@ -38,6 +52,11 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         "--include-package=core",
         "--include-package=engine",
         "--include-package=remote",
+        # python-vlc is imported lazily (inside VlcEngine.__init__, after the
+        # DLL path has been fixed up), so Nuitka's static analysis can miss it
+        # and the frozen build then fails with ModuleNotFoundError: vlc at
+        # first launch. Force it in.
+        "--include-module=vlc",
         # WebView2 is reached through pythonnet at runtime, so Nuitka cannot
         # infer these lazy imports from static analysis alone.
         "--include-module=clr",
@@ -51,8 +70,8 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         # them Nuitka exits instantly on Windows with:
         #   "Error, company name and file or product version need to be given
         #    when any version information is given."
-        "--file-version=1.2.0",
-        "--product-version=1.2.0",
+        f"--file-version={app_version}",
+        f"--product-version={app_version}",
         f"--output-dir={output_dir}",
     ]
 
@@ -60,7 +79,15 @@ def get_nuitka_args(output_dir: Path, onefile: bool = False) -> list[str]:
         args.append("--onefile")
 
     if sys.platform == "win32":
-        args.append("--windows-console-mode=disable")
+        # Release builds are GUI subsystem (no console window). A --console
+        # build keeps the console attached so a startup crash that would
+        # otherwise be invisible (the "shortcuts exist but nothing opens"
+        # report) can be diagnosed from the terminal. The installer always
+        # uses the GUI build.
+        if console:
+            args.append("--windows-console-mode=force")
+        else:
+            args.append("--windows-console-mode=disable")
 
     icon_path = ROOT / "assets" / "halcyon.ico"
     if icon_path.exists():
@@ -118,13 +145,18 @@ def main() -> int:
         help="Produce a single executable file instead of standalone folder",
     )
     parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Build with a console window attached (for diagnosing startup failures)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the Nuitka build command without running it",
     )
     args = parser.parse_args()
 
-    cmd = get_nuitka_args(args.output_dir, onefile=args.onefile)
+    cmd = get_nuitka_args(args.output_dir, onefile=args.onefile, console=args.console)
 
     if args.dry_run:
         print("Nuitka build command (dry run):")
