@@ -20,8 +20,75 @@ from pathlib import Path
 
 APP_NAME = "Halcyon"
 
-#: Repository root — the directory containing main.py.
-ROOT = Path(__file__).resolve().parent.parent
+
+def _runtime_root() -> Path:
+    """Locate the application root in every supported runtime.
+
+    Order matters:
+
+    1. **Nuitka standalone.**  This is the build the Inno installer ships.
+       Nuitka neither sets ``sys.frozen`` nor makes ``__file__`` point at the
+       install dir, and ``__compiled__.containing_dir`` reports the directory
+       of *whichever module reads it* — so reading it from this ``core.paths``
+       submodule would yield ``<app>\\core``, one level too deep, and the
+       bundled ``vendor\\vlc`` tree would never be found. For a standalone
+       build the bundled data files always live beside the executable, so the
+       directory of ``sys.executable`` is the correct, module-independent
+       root.
+    2. **Nuitka onefile / macOS app bundle.**  Here the data files live in a
+       temp unpack directory (or inside the ``.app``), not beside the
+       executable. ``__compiled__.containing_dir`` from the *main* module
+       abstracts that. We cannot read the main module's value directly from
+       here, but Nuitka exposes the same value through ``__compiled__``; if a
+       containing_dir is present and is NOT the directory of the executable,
+       use it (the onefile/unpack case).
+    3. **PyInstaller.**  ``sys.frozen`` is set and bundled resources live
+       under ``sys._MEIPASS``.
+    4. **Source checkout.**  Two parents up from this file — the directory
+       holding ``main.py``.
+
+    Using anything based on ``os.getcwd()`` would break when Explorer launches
+    the app with a different working directory (file associations, the
+    AutoPlay handler), so it is deliberately never consulted.
+    """
+    exe_dir = Path(sys.executable).resolve().parent
+
+    # In a Nuitka build every compiled module has a ``__compiled__`` attribute
+    # in its own globals (Nuitka does *not* set ``sys.frozen`` — that is a
+    # PyInstaller convention). It may also be visible as a builtin in some
+    # Nuitka configurations, so check both.
+    compiled = globals().get("__compiled__")
+    if compiled is None:
+        compiled = getattr(__import__("builtins"), "__compiled__", None)
+
+    if compiled is not None:
+        # Onefile unpacks to a temp dir; that is the one layout where data is
+        # NOT beside the exe. For a STANDALONE build (what Inno Setup ships)
+        # the bundled data always lives beside Halcyon.exe, so use exe_dir
+        # regardless of what __compiled__.containing_dir claims. That value is
+        # module-relative and unreliable across Nuitka versions: it has been
+        # observed returning a PARENT of the install dir (C:\Program Files
+        # instead of C:\Program Files\Halcyon), which made every bundled path
+        # resolve one level too high and libVLC fail to load despite the files
+        # being correctly installed.
+        if os.environ.get("NUITKA_ONEFILE_PARENT"):
+            containing_dir = getattr(compiled, "containing_dir", None)
+            if containing_dir:
+                return Path(containing_dir).resolve()
+        return exe_dir
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass).resolve()
+        return exe_dir
+
+    return Path(__file__).resolve().parent.parent
+
+
+#: Application root — the directory containing main.py (source) or the
+#: compiled executable / unpacked bundle (packaged build).
+ROOT = _runtime_root()
 
 #: First-run defaults shipped with the app.
 DEFAULTS_DIR = ROOT / "config"
@@ -29,9 +96,20 @@ DEFAULTS_DIR = ROOT / "config"
 #: Bundled libVLC (§P1.3). Gitignored; see README for how to populate it.
 VENDOR_VLC = ROOT / "vendor" / "vlc"
 
+VENDOR_WEBVIEW2 = ROOT / "vendor" / "webview2"
+
 ASSETS = ROOT / "assets"
 UI_DIR = ROOT / "ui"
 SHADERS = UI_DIR / "shaders"
+
+
+def is_packaged_build() -> bool:
+    """True when running inside a Nuitka/PyInstaller bundle (not a source run)."""
+    if globals().get("__compiled__") is not None:
+        return True
+    if getattr(__import__("builtins"), "__compiled__", None) is not None:
+        return True
+    return bool(getattr(sys, "frozen", False))
 
 
 def qml_url(url: str) -> str:
