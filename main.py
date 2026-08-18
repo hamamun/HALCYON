@@ -83,6 +83,17 @@ QML_NET_TIMEOUT_MS = 8_000
 #: construction, whatever native teardown decides to do next time.
 EXIT_WATCHDOG_SECONDS = 10.0
 
+#: Deadline for the *whole* shutdown, armed at the top of ``on_quit`` right
+#: after the settings flush. The post-``exec()`` watchdog above cannot see a
+#: hang *inside* ``on_quit`` — remote stop, subtitle jobs, controller flush
+#: and the libVLC engine teardown all run there, before ``exec()`` returns —
+#: and after hours of playback libVLC's threads are exactly the kind of
+#: cleanup with a history of taking arbitrarily long ("sometimes it clears
+#: instantly, sometimes it sits in Task Manager"). Generous on purpose: a
+#: healthy teardown finishes in well under a second, so this only ever fires
+#: on a wedge, after everything worth saving has already been flushed.
+QUIT_WATCHDOG_SECONDS = 20.0
+
 
 def _arm_exit_watchdog(exit_code: int, seconds: float = EXIT_WATCHDOG_SECONDS) -> None:
     """Last-resort guarantee that closing the window also ends the process.
@@ -787,6 +798,15 @@ def main(argv: list[str] | None = None) -> int:
             settings.flush()
         except Exception:
             log.exception("settings flush failed")
+
+        # From here on the process has a hard deadline. Settings are already
+        # on disk (the flush above), controller.shutdown() below persists the
+        # rest early in its own sequence — so if any of the cleanup steps
+        # wedges (a libVLC thread after a long session, a stuck native wait),
+        # ending the process forcibly loses nothing the user could notice,
+        # while NOT ending it is precisely the "Halcyon still in Task Manager
+        # minutes after closing" report.
+        _arm_exit_watchdog(0, seconds=QUIT_WATCHDOG_SECONDS)
 
         # Taskbar preview next: it touches the window handle, so it must go
         # before Qt tears the window down.

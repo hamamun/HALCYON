@@ -141,40 +141,82 @@ class UpdateChecker(QObject):
 
     @staticmethod
     def _read_file_version(file_path: Path) -> str | None:
-        """Read the product/file version from a Windows DLL via PowerShell."""
+        """Read the product/file version from a Windows DLL via the Win32 API.
+
+        Uses ``GetFileVersionInfoW``/``VerQueryValueW`` from version.dll
+        through ctypes — entirely in-process. The previous implementation
+        shelled out to PowerShell (twice), and because Halcyon is a
+        GUI-subsystem build, each child process flashed a visible console
+        window at startup: exactly the two "cmd windows" users reported.
+        Reading the version resource directly can never create a window and
+        is orders of magnitude faster than spawning PowerShell.
+
+        Preference order matches the old behaviour: the *string* ProductVersion
+        first (VLC puts "3.0.21 Vetinari" style values there), then the fixed
+        numeric file version as fallback.
+        """
         if sys.platform != "win32":
             return None
         try:
-            result = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-Command",
-                    f"(Get-Item '{file_path}').VersionInfo.ProductVersion",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            ver = result.stdout.strip()
-            if ver and ver != "0.0.0.0":
-                return ver
+            import ctypes
+            from ctypes import wintypes
+
+            version_dll = ctypes.WinDLL("version.dll")
+            path = str(file_path)
+
+            size = version_dll.GetFileVersionInfoSizeW(path, None)
+            if not size:
+                return None
+            buffer = ctypes.create_string_buffer(size)
+            if not version_dll.GetFileVersionInfoW(path, 0, size, buffer):
+                return None
+
+            value_ptr = ctypes.c_void_p()
+            value_len = wintypes.UINT()
+
+            # 1) String ProductVersion, using the file's own language/codepage
+            #    table (\VarFileInfo\Translation) — the same value PowerShell's
+            #    VersionInfo.ProductVersion surfaces.
+            if version_dll.VerQueryValueW(
+                buffer,
+                "\\VarFileInfo\\Translation",
+                ctypes.byref(value_ptr),
+                ctypes.byref(value_len),
+            ) and value_len.value >= 4:
+                lang, codepage = ctypes.cast(
+                    value_ptr, ctypes.POINTER(wintypes.WORD * 2)
+                ).contents
+                for key in ("ProductVersion", "FileVersion"):
+                    sub_block = (
+                        f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\{key}"
+                    )
+                    if version_dll.VerQueryValueW(
+                        buffer,
+                        sub_block,
+                        ctypes.byref(value_ptr),
+                        ctypes.byref(value_len),
+                    ) and value_len.value:
+                        ver = ctypes.wstring_at(value_ptr.value).strip()
+                        if ver and ver != "0.0.0.0":
+                            return ver
+
+            # 2) Fallback: the fixed (numeric) version from VS_FIXEDFILEINFO.
+            if version_dll.VerQueryValueW(
+                buffer,
+                "\\",
+                ctypes.byref(value_ptr),
+                ctypes.byref(value_len),
+            ) and value_len.value >= 52:
+                # VS_FIXEDFILEINFO: dwFileVersionMS at offset 8, LS at 12.
+                raw = ctypes.cast(
+                    value_ptr, ctypes.POINTER(wintypes.DWORD * 13)
+                ).contents
+                ms, ls = raw[2], raw[3]
+                ver = f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+                if ver != "0.0.0.0":
+                    return ver
         except Exception:
-            pass
-        # Fallback: try file version
-        try:
-            result = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-Command",
-                    f"(Get-Item '{file_path}').VersionInfo.FileVersion",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            ver = result.stdout.strip()
-            if ver and ver != "0.0.0.0":
-                return ver
-        except Exception:
-            pass
+            log.debug("could not read version resource of %s", file_path, exc_info=True)
         return None
 
     # ──────────────────────────────────────────────────── online fetching ──

@@ -492,8 +492,8 @@ Shell {
         }
 
         // ---------------------------------------------------- playlist --
-        function addFiles()        { window.openNativeDialog(fileDialog) }
-        function addFolder()       { window.openNativeDialog(folderDialog) }
+        function addFiles()        { window.openRememberedDialog(fileDialog) }
+        function addFolder()       { window.openRememberedDialog(folderDialog) }
         function addPaths(paths)   { App.addPaths(paths) }
         function clearSelected() {
             App.clearSelected(localPanelSelection());
@@ -1227,6 +1227,26 @@ Shell {
         dialog.open();
     }
 
+    // ---- shared "last folder" memory (Add files / Add folder) ------------
+    // One setting, two dialogs. Windows' native FILE picker keeps its own
+    // per-app location memory, but the FOLDER picker does not — which is why
+    // "Open files" appeared to remember and "Open folder" always started
+    // fresh. Seeding both from the same stored URL makes them consistent,
+    // shared (pick files somewhere, "Add folder" starts there too) and
+    // persistent across restarts. The subtitle dialog is deliberately NOT
+    // wired in: it follows the loaded media's location, which is its job.
+    function openRememberedDialog(dialog) {
+        var last = Settings.get("ui.lastOpenDir", "");
+        if (last && String(last).length > 0)
+            dialog.currentFolder = last;
+        openNativeDialog(dialog);
+    }
+    function rememberOpenDir(url) {
+        var s = String(url);
+        if (s.length > 0)
+            Settings.set("ui.lastOpenDir", s);
+    }
+
     function moveChromeToOverlay() {
         if (!window.turboActive)
             return;
@@ -1690,6 +1710,7 @@ Shell {
             var paths = [];
             for (var i = 0; i < selectedFiles.length; i++)
                 paths.push(selectedFiles[i].toString());
+            window.rememberOpenDir(currentFolder);
             Actions.addPaths(paths);
         }
     }
@@ -1697,7 +1718,10 @@ Shell {
     FolderDialog {
         id: folderDialog
         title: "Add folder"
-        onAccepted: Actions.addPaths([selectedFolder.toString()])
+        onAccepted: {
+            window.rememberOpenDir(selectedFolder);
+            Actions.addPaths([selectedFolder.toString()])
+        }
     }
 
     FileDialog {

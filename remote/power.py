@@ -17,7 +17,12 @@ log = logging.getLogger(__name__)
 
 def _default_executor(argv: list[str]) -> int:
     try:
-        return subprocess.run(argv, timeout=10).returncode
+        # CREATE_NO_WINDOW: Halcyon is a GUI-subsystem build, so a plain
+        # subprocess.run("shutdown"/"rundll32") would flash a console window.
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        return subprocess.run(argv, timeout=10, **kwargs).returncode
     except Exception as exc:  # pragma: no cover — OS dependent
         log.warning("power command %s failed: %s", argv, exc)
         return 1

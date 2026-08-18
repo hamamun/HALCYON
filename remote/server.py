@@ -79,6 +79,17 @@ STOP_JOIN_TIMEOUT = 4.0
 #: shutdown starts.
 SSE_TICK = 0.15
 
+#: Upper bound on a single SSE write. A phone whose screen has turned off (or
+#: whose browser backgrounded the tab) stops draining its socket but keeps the
+#: TCP connection alive; ``resp.write()`` then blocks on the flow-control
+#: drain, and the shutdown event cannot wake a handler stuck *inside* a write.
+#: That blocked handler is what ``runner.cleanup()`` then waits out on close —
+#: the "closed the window but Halcyon is still in Task Manager, unless I close
+#: the remote page on the phone first" report. Bounding the write converts a
+#: non-draining client into a dead client: the stream ends, the handler
+#: returns, and shutdown never has anything to wait for.
+SSE_WRITE_TIMEOUT = 1.0
+
 
 def available() -> bool:
     """True when aiohttp is installed and the server can actually run."""
@@ -255,7 +266,15 @@ class RemoteServer:
                         payload = json.dumps(
                             self._bridge.store.snapshot(), ensure_ascii=False
                         )
-                        await resp.write(f"data: {payload}\n\n".encode("utf-8"))
+                        # Bounded write — see SSE_WRITE_TIMEOUT. A client that
+                        # cannot drain one snapshot within the timeout is
+                        # treated as gone; a handler blocked in an unbounded
+                        # write is unreachable by the shutdown event and would
+                        # stall runner.cleanup() at close.
+                        await asyncio.wait_for(
+                            resp.write(f"data: {payload}\n\n".encode("utf-8")),
+                            timeout=SSE_WRITE_TIMEOUT,
+                        )
                 if closing is None:  # pragma: no cover — defensive
                     await asyncio.sleep(SSE_TICK)
                     continue

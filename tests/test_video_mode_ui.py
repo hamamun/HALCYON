@@ -335,9 +335,23 @@ def test_native_dialogs_are_seated_on_the_current_chrome_host():
     )
 
     # Every native-dialog action must go through the seating path. A raw
-    # open() at a call site is how one of them regresses.
-    assert "function addFiles()        { window.openNativeDialog(fileDialog) }" in main
-    assert "function addFolder()       { window.openNativeDialog(folderDialog) }" in main
+    # open() at a call site is how one of them regresses. addFiles/addFolder
+    # go through openRememberedDialog — the shared last-folder memory — which
+    # itself must delegate to openNativeDialog so the seating contract holds.
+    remembered = main.split("function openRememberedDialog(dialog)", 1)[1].split(
+        "function ", 1
+    )[0]
+    assert "openNativeDialog(dialog)" in remembered, (
+        "openRememberedDialog must delegate to openNativeDialog — the "
+        "last-folder memory sits on top of the seating path, never beside it"
+    )
+    assert 'Settings.get("ui.lastOpenDir"' in remembered, (
+        "both add dialogs share ONE remembered location (ui.lastOpenDir)"
+    )
+    assert "function addFiles()        { window.openRememberedDialog(fileDialog) }" in main
+    assert "function addFolder()       { window.openRememberedDialog(folderDialog) }" in main
+    # The subtitle dialog deliberately does NOT remember: it follows the
+    # loaded media's location instead.
     assert (
         "function loadSubtitleFile()   { window.openNativeDialog(subtitleDialog) }"
         in main
