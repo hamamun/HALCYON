@@ -455,6 +455,24 @@ def main(argv: list[str] | None = None) -> int:
     qml_engine.setNetworkAccessManagerFactory(_nam_factory)
     _KEEP_ALIVE.append(_nam_factory)
 
+    # Surface every QML warning, including the standalone splash. A QML warning
+    # means a binding or signal handler is dead, which the user experiences as
+    # a control that silently does nothing.
+    qml_engine.warnings.connect(
+        lambda warnings: [
+            logging.getLogger("qml").warning("%s", warning.toString())
+            for warning in warnings
+        ]
+    )
+
+    # --- startup splash ----------------------------------------------------
+    # One local image plus two text lines; no services, network, second process,
+    # or nested event loop.  It stays above the main window until that window's
+    # first frame is presented, so it never disappears onto an unpainted shell.
+    from core.splash import show_startup_splash
+
+    startup_splash = show_startup_splash(qml_engine, ROOT / "ui" / "Splash.qml")
+
     # --- shared services ---------------------------------------------------
     # NOTE the import style: `from engine.xxx import Yyy`, never a bare
     # `import engine.zzz`, so the name `engine` is never bound in this scope.
@@ -535,6 +553,10 @@ def main(argv: list[str] | None = None) -> int:
         player = VlcEngine(backend=backend, parent=app)
     except Exception as exc:  # libVLC missing is the common first-run failure
         log.error("could not start libVLC: %s", exc, exc_info=True)
+        # Never leave the splash above a fatal error dialog.
+        from core.splash import close_startup_splash
+
+        close_startup_splash(startup_splash, immediate=True)
         # Report exactly where we looked and what the loader said, so this is
         # diagnosable from a screenshot instead of a second guess.
         checked = [paths.VENDOR_VLC]
@@ -638,33 +660,33 @@ def main(argv: list[str] | None = None) -> int:
                 ctx.setContextProperty(spec.context_property, context_object)
 
     # --- load the UI -------------------------------------------------------
-    # Warnings are logged always, not only in debug. A QML warning means a
-    # binding or a signal handler is dead, which the user experiences as a
-    # control that does nothing — the single hardest failure to diagnose from a
-    # bug report, and free to surface here.
-    qml_engine.warnings.connect(
-        lambda warnings: [
-            logging.getLogger("qml").warning("%s", w.toString()) for w in warnings
-        ]
-    )
+    # The splash is already one root object, so success means Main.qml added a
+    # *new* root. Checking only rootObjects() would mistake a healthy splash for
+    # a healthy main window and continue after a fatal shell load error.
+    roots_before_main = len(qml_engine.rootObjects())
     qml_engine.load(QUrl.fromLocalFile(str(ROOT / "ui" / "Main.qml")))
-    if not qml_engine.rootObjects():
+    roots_after_main = qml_engine.rootObjects()
+    if len(roots_after_main) <= roots_before_main:
         log.error("QML failed to load — see the messages above")
+        from core.splash import close_startup_splash
+
+        close_startup_splash(startup_splash, immediate=True)
         return 2
+    main_window = roots_after_main[-1]
 
     # --- shell launches / single-instance IPC -------------------------------
     def _activate_window() -> None:
-        """Bring the existing window forward after a shell launch."""
+        """Bring the main window forward after a shell launch."""
         try:
-            for window in app.allWindows():
-                if not window.isVisible():
-                    continue
-                state = window.windowState()
-                if state & Qt.WindowState.WindowMinimized:
-                    window.showNormal()
-                window.raise_()
-                window.requestActivate()
-                break
+            # Do not scan allWindows(): during the first rendered frame the
+            # splash is also a visible window and must never receive a forwarded
+            # file-open activation in place of the real shell.
+            window = main_window
+            state = window.windowState()
+            if state & Qt.WindowState.WindowMinimized:
+                window.showNormal()
+            window.raise_()
+            window.requestActivate()
         except Exception:
             log.debug("could not activate existing window", exc_info=True)
 
@@ -764,7 +786,6 @@ def main(argv: list[str] | None = None) -> int:
             from core.taskbar_preview import TaskbarLivePreview, is_supported
 
             if is_supported():
-                main_window = qml_engine.rootObjects()[0] if qml_engine.rootObjects() else None
                 if main_window is not None:
                     taskbar_preview = TaskbarLivePreview(
                         engine=player, window=main_window, parent=app
@@ -774,6 +795,14 @@ def main(argv: list[str] | None = None) -> int:
                     log.info("taskbar live preview initialized")
     except Exception:
         log.debug("taskbar preview init failed", exc_info=True)
+
+    # Startup is now complete.  Retire the splash only after Qt confirms that
+    # the main QQuickWindow has presented its first frame; no fixed delay and no
+    # chance of exposing an unpainted window between the two.
+    from core.splash import FirstFrameSplashCloser
+
+    splash_closer = FirstFrameSplashCloser(startup_splash, main_window, parent=app)
+    _KEEP_ALIVE.append(splash_closer)
 
     # --- shutdown, in the right order (§9) ---------------------------------
     def on_quit() -> None:
@@ -828,7 +857,8 @@ def main(argv: list[str] | None = None) -> int:
         # it safe to close the bridge, which drops its references to the
         # controller, engine and mode contexts Qt is about to destroy.
         try:
-            remote.stop()
+            if not remote.stop():
+                log.error("remote server did not terminate before shutdown continued")
         except Exception:
             log.exception("remote server stop failed")
         try:
@@ -895,6 +925,16 @@ def main(argv: list[str] | None = None) -> int:
     # still works — instead of leaving the same destruction to interpreter-
     # exit cleanup, where the hang used to be invisible and unkillable.
     _arm_exit_watchdog(exit_code)
+
+    # Defensive only: a normal run dismissed it on the first frame. If the app
+    # was asked to quit before a frame could be presented, close it explicitly
+    # before deleting the shared QML engine.
+    try:
+        from core.splash import close_startup_splash
+
+        close_startup_splash(startup_splash, immediate=True)
+    except Exception:
+        log.debug("defensive splash close failed", exc_info=True)
 
     try:
         from shiboken6 import Shiboken
