@@ -1,0 +1,29 @@
+# Halcyon — Personal, Non-Commercial Licence
+
+Copyright © 2026 hamamun
+
+Halcyon's own source code and artwork (everything in this repository that is
+not attributed to a third party in [NOTICE.md](NOTICE.md)) is provided for
+**personal, non-commercial use only**.
+
+You may:
+
+- download and run the application for personal, non-commercial use;
+- view and modify the source code for your own personal, non-commercial use.
+
+You may **not**:
+
+- sell the application or use it in any commercial product or service;
+- redistribute the application or its installer without the author's
+  permission.
+
+The software is provided "as is", without warranty of any kind.
+
+## Third-party components
+
+The installer bundles third-party components that keep their own licences —
+notably libVLC and its plugins (LGPL-2.1 / GPL-2.0-or-later, © VideoLAN and
+its contributors) and the Microsoft WebView2 Runtime and Visual C++
+Redistributable (© Microsoft Corporation, redistributed under their own
+terms). See [NOTICE.md](NOTICE.md) for details and links to each component's
+source and licence text.

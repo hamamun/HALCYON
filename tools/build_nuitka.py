@@ -53,7 +53,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 #: Fallback only — the real version is read from core/version.py, the single
 #: source of truth shared with packaging/installer/Halcyon.iss.
-_FALLBACK_VERSION = "1.2.2"
+_FALLBACK_VERSION = "1.3.0"
 
 
 def read_app_version() -> str:
