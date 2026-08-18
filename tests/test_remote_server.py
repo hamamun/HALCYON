@@ -40,6 +40,25 @@ def test_index_page_served(server):
     with urllib.request.urlopen(f"http://127.0.0.1:{server.port}/", timeout=5) as resp:
         html = resp.read().decode("utf-8")
     assert "Halcyon" in html
+    assert 'rel="manifest" href="/manifest.webmanifest"' in html
+    assert 'rel="apple-touch-icon"' in html
+
+
+def test_pwa_manifest_and_icons_are_served(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with urllib.request.urlopen(f"{base}/manifest.webmanifest", timeout=5) as resp:
+        assert resp.headers.get_content_type() == "application/manifest+json"
+        manifest = json.loads(resp.read().decode("utf-8"))
+
+    assert manifest["name"] == "Halcyon Remote"
+    assert manifest["short_name"] == "Halcyon"
+    assert manifest["display"] == "standalone"
+    assert {icon["sizes"] for icon in manifest["icons"]} >= {"192x192", "512x512"}
+    assert any("maskable" in icon.get("purpose", "") for icon in manifest["icons"])
+
+    with urllib.request.urlopen(f"{base}/static/icons/halcyon-192.png", timeout=5) as resp:
+        assert resp.headers.get_content_type() == "image/png"
+        assert resp.read(8) == b"\x89PNG\r\n\x1a\n"
 
 
 def test_ephemeral_port_is_real(server):

@@ -25,6 +25,7 @@ import urllib.request
 import pytest
 
 from remote.server import STOP_JOIN_TIMEOUT, RemoteServer
+from remote.status import StatusStore
 
 
 def _remote_threads() -> list[threading.Thread]:
@@ -86,6 +87,48 @@ class _SseClient:
         return self.finished.wait(timeout)
 
 
+class _NonReadingSseClient:
+    """A phone whose browser accepted the stream and then stopped draining it."""
+
+    def __init__(self, port: int) -> None:
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Keep the receive window small so a large snapshot reaches transport
+        # back-pressure promptly on every OS, including Windows CI.
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+        self._socket.settimeout(5.0)
+        self._socket.connect(("127.0.0.1", port))
+        self._socket.sendall(
+            b"GET /api/events HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Accept: text/event-stream\r\n\r\n"
+        )
+        headers = bytearray()
+        while b"\r\n\r\n" not in headers:
+            chunk = self._socket.recv(1)
+            if not chunk:
+                break
+            headers.extend(chunk)
+        assert b"200 OK" in headers
+        # Deliberately never read the event body.
+
+    def close(self) -> None:
+        try:
+            self._socket.close()
+        except OSError:
+            pass
+
+
+class _LargeSnapshotBridge:
+    """Enough payload to block a client with a closed receive window."""
+
+    def __init__(self) -> None:
+        self.store = StatusStore()
+        self.store.update({"app": "halcyon", "payload": "x" * 16_000_000})
+
+    def set_server_url(self, _url: str) -> None:
+        pass
+
+
 @pytest.fixture()
 def server():
     srv = RemoteServer(port=0)
@@ -102,12 +145,45 @@ def test_stop_ends_the_server_thread_with_an_open_sse_stream(server):
     assert client.await_connected(), "SSE stream never opened"
 
     started = time.monotonic()
-    server.stop()
+    assert server.stop() is True
     elapsed = time.monotonic() - started
 
     assert not _remote_threads(), "server thread outlived stop()"
     # Comfortably under the old 5 s give-up, let alone aiohttp's 60 s grace.
     assert elapsed < STOP_JOIN_TIMEOUT, f"stop() took {elapsed:.1f}s"
+
+
+def test_stop_aborts_a_non_reading_phone_without_a_graceful_final_write():
+    """A backgrounded phone must not hold prepare/write/write_eof open.
+
+    The older test client continuously drained the body, so aiohttp's final
+    write always succeeded and the real mobile failure was never represented.
+    This raw client reads the headers and then closes its receive window in
+    practice by never consuming the 16 MB snapshot.
+    """
+    srv = RemoteServer(bridge=_LargeSnapshotBridge(), port=0)
+    assert srv.start()
+    loop = srv._loop
+    # A real browser fetches the static shell before opening EventSource. That
+    # creates aiohttp's default-executor worker, another resource which must be
+    # gone before process finalization.
+    with urllib.request.urlopen(f"http://127.0.0.1:{srv.port}/", timeout=5) as response:
+        response.read()
+    client = _NonReadingSseClient(srv.port)
+    try:
+        started = time.monotonic()
+        assert srv.stop() is True
+        elapsed = time.monotonic() - started
+    finally:
+        client.close()
+        srv.stop()
+
+    assert elapsed < STOP_JOIN_TIMEOUT
+    assert not _remote_threads()
+    assert not [thread for thread in threading.enumerate() if thread.name.startswith("asyncio")]
+    assert loop is not None and loop.is_closed()
+    assert srv._sse_tasks == set()
+    assert srv._sse_transports == set()
 
 
 def test_open_sse_stream_is_released_by_stop(server):
@@ -185,8 +261,36 @@ def test_stop_is_idempotent_and_leaves_no_thread(server):
 
 
 def test_stop_without_any_client(server):
-    server.stop()
+    assert server.stop() is True
     assert not _remote_threads()
+
+
+def test_failed_join_retains_live_handles_and_reports_false(monkeypatch):
+    """Never claim success or discard the only handle to a surviving thread."""
+
+    class StuckThread:
+        def __init__(self) -> None:
+            self.alive = True
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def join(self, timeout=None) -> None:
+            pass
+
+    stuck = StuckThread()
+    srv = RemoteServer(port=0)
+    srv._thread = stuck
+    srv._started = True
+    monkeypatch.setattr("remote.server.STOP_JOIN_TIMEOUT", 0.01)
+
+    assert srv.stop() is False
+    assert srv._thread is stuck
+
+    # Once the owner really has ended, the same idempotent stop may clear it.
+    stuck.alive = False
+    assert srv.stop() is True
+    assert srv._thread is None
 
 
 def test_many_streams_all_released(server):

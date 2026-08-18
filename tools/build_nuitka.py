@@ -263,9 +263,22 @@ def verify_dist(output_dir: Path) -> list[str]:
         ("modes", "mode panels loaded from disk"),
         ("Halcyon", "Halcyon.Ui QML import bridge"),
         ("assets", "icons"),
+        ("remote/static", "mobile remote web app"),
     ):
         if (ROOT / tree).is_dir():
             require(tree, why)
+
+    # These are individually load-bearing for an installed remote shortcut.
+    # A present static directory is not enough if a packaging edit omitted its
+    # manifest or generated icon subtree.
+    for relative in (
+        "remote/static/manifest.webmanifest",
+        "remote/static/icons/halcyon-192.png",
+        "remote/static/icons/halcyon-512.png",
+        "remote/static/icons/halcyon-maskable-512.png",
+    ):
+        if (ROOT / relative).is_file():
+            require(relative, "Halcyon remote home-screen/PWA icon")
 
     return problems
 

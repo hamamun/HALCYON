@@ -7,9 +7,10 @@ Reproducible master → derived assets, so the icon can be regenerated exactly:
 
 Outputs (all committed, needed at runtime):
 
-    assets/halcyon.ico         multi-size Windows icon 16→256 px
-    assets/halcyon.png         the full tile (squircle + glass pane), 512 px
-    assets/halcyon-glyph.png   the transparent in-app mark, 64 px (QML)
+    assets/halcyon.ico                multi-size Windows icon 16→256 px
+    assets/halcyon.png                full tile, 512 px
+    assets/halcyon-glyph.png          transparent in-app mark, 512 px
+    remote/static/icons/halcyon-*.png browser/PWA/Apple exports
 
 Design (final, from concept "C · Glass Pane"):
 
@@ -38,6 +39,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
+REMOTE_ICONS = ROOT / "remote" / "static" / "icons"
 
 # The app's own design tokens (keep in sync with ui/Theme.qml).
 TEAL = (94, 234, 212)      # Theme.accent
@@ -171,6 +173,35 @@ def _render_tile(ss: int = 2, glyph: Image.Image | None = None) -> Image.Image:
     return tile.resize((S, S), Image.LANCZOS)
 
 
+def _export_remote_icons(tile: Image.Image) -> dict[str, Path]:
+    """Write browser, Apple touch, and maskable PWA icon variants."""
+    REMOTE_ICONS.mkdir(parents=True, exist_ok=True)
+    outputs: dict[str, Path] = {}
+    for size in (32, 192, 512):
+        path = REMOTE_ICONS / f"halcyon-{size}.png"
+        tile.resize((size, size), Image.LANCZOS).save(path, format="PNG", optimize=True)
+        outputs[f"web-{size}"] = path
+
+    # Apple recommends an opaque touch icon; otherwise iOS chooses the colour
+    # behind the transparent squircle corners itself.
+    apple = Image.new("RGBA", (180, 180), BASE + (255,))
+    apple.alpha_composite(tile.resize((180, 180), Image.LANCZOS))
+    apple_path = REMOTE_ICONS / "halcyon-180.png"
+    apple.convert("RGB").save(apple_path, format="PNG", optimize=True)
+    outputs["apple-180"] = apple_path
+
+    # Maskable icons may be cropped into circles/squircles by the OS. Keep the
+    # complete tile inside the standard 80% safe zone on an opaque app-colour
+    # canvas, rather than allowing Android to cut through the Halcyon mark.
+    maskable = Image.new("RGBA", (512, 512), BASE + (255,))
+    safe_tile = tile.resize((400, 400), Image.LANCZOS)
+    maskable.alpha_composite(safe_tile, (56, 56))
+    maskable_path = REMOTE_ICONS / "halcyon-maskable-512.png"
+    maskable.save(maskable_path, format="PNG", optimize=True)
+    outputs["maskable-512"] = maskable_path
+    return outputs
+
+
 def build() -> dict[str, Path]:
     glyph = _render_glyph(ss=4)
     tile = _render_tile(ss=2, glyph=glyph)
@@ -192,7 +223,9 @@ def build() -> dict[str, Path]:
     glyph_path = ASSETS / "halcyon-glyph.png"
     glyph.save(glyph_path, format="PNG")
 
-    return {"ico": ico_path, "tile": png_path, "glyph": glyph_path}
+    outputs = {"ico": ico_path, "tile": png_path, "glyph": glyph_path}
+    outputs.update(_export_remote_icons(tile))
+    return outputs
 
 
 def main() -> int:
