@@ -90,6 +90,14 @@ _QT_INT_MAX = 2_147_483_647
 # that a black screen never settles in as the outcome.
 _HW_DECODE_GRACE_S = 3.0
 
+# How long a Soft (vmem) media may play with video tracks but without a
+# single published frame before we conclude Soft failed to generate video
+# (shader missing, format negotiation failed, Nuitka callback race) and
+# rescue it by switching to Turbo. Same grace as HW watchdog — 3s is
+# enough for a slow disk, short enough that audio-only with a black stage
+# never settles as the outcome. See task 1: Soft failed detection -> Turbo.
+_SOFT_DECODE_GRACE_S = 3.0
+
 # libVLC's public time and position values are samples from the demuxer, not a
 # continuously advancing presentation clock. Some files update them sparsely;
 # malformed files can leave one value at zero or -1 until the first seek. The
@@ -398,6 +406,10 @@ class VlcEngine(QObject):
     _hw_decode_pending = False
     _hw_watch_started = None
     _cpu_decode_override = ""
+    # Soft failure watchdog: Soft has video tracks but no frames published.
+    _soft_decode_pending = False
+    _soft_watch_started = None
+    _soft_failed_mrls: set = set()
     # Defaults keep the timeline helpers safe in focused tests that construct
     # VlcEngine with __new__ instead of starting a native libVLC instance.
     _timeline_tick = None
@@ -465,6 +477,10 @@ class VlcEngine(QObject):
         self._pending_turbo_play = False
         self._video_width = 0
         self._video_height = 0
+        # Soft failure watchdog (task 1)
+        self._soft_decode_pending = False
+        self._soft_watch_started = None
+        self._soft_failed_mrls = set()
 
         # Hard references — see the module docstring. Never let these be locals.
         self._event_callbacks: list = []
@@ -529,35 +545,50 @@ class VlcEngine(QObject):
         self._event_manager = None
 
     # Every one of these runs on a *VLC* thread. Emit and get out — Qt queues the
-    # delivery to the GUI thread for us.
-    def _on_end_reached(self, _event) -> None:
-        self.endReached.emit()
+    # delivery to the GUI thread for us. Varargs-tolerant for Nuitka 1.3.1
+    # installed build: event callbacks can be invoked with different argcounts
+    # in compiled exe vs CPython dev.
+    def _on_end_reached(self, *_args) -> None:
+        try:
+            self.endReached.emit()
+        except Exception:
+            pass
 
-    def _on_error(self, _event) -> None:
-        self.errorOccurred.emit(f"Could not play {self._current_mrl or 'media'}")
+    def _on_error(self, *_args) -> None:
+        try:
+            self.errorOccurred.emit(f"Could not play {self._current_mrl or 'media'}")
+        except Exception:
+            pass
 
-    def _on_state_event(self, _event) -> None:
+    def _on_state_event(self, *_args) -> None:
         pass  # the poll timer publishes state on the GUI thread
 
-    def _on_buffering(self, event) -> None:
+    def _on_buffering(self, *args) -> None:
         try:
-            new_cache = float(event.u.new_cache)
+            event = args[0] if args else None
+            new_cache = float(event.u.new_cache) if event is not None else 0.0
         except Exception:
             return
         # libVLC reports the cache as a percentage (0..100). Both consumers
         # want a fraction: M3U's hairline (via `buffering`) and the seek
         # bars' buffer fill (via `buffered`), which multiply it by a width.
-        buffered = max(0.0, min(1.0, new_cache / 100.0))
-        if abs(buffered - self._buffered) > 1e-4:
-            self._buffered = buffered
-            self.bufferedChanged.emit(buffered)
-        self.buffering.emit(new_cache)
+        try:
+            buffered = max(0.0, min(1.0, new_cache / 100.0))
+            if abs(buffered - self._buffered) > 1e-4:
+                self._buffered = buffered
+                self.bufferedChanged.emit(buffered)
+            self.buffering.emit(new_cache)
+        except Exception:
+            pass
 
-    def _on_length(self, _event) -> None:
+    def _on_length(self, *_args) -> None:
         pass  # picked up by the poll
 
-    def _on_tracks(self, _event) -> None:
-        self.tracksChanged.emit()
+    def _on_tracks(self, *_args) -> None:
+        try:
+            self.tracksChanged.emit()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- poll ---
     def _plausible_timeline_sample(
@@ -745,6 +776,12 @@ class VlcEngine(QObject):
         except Exception:
             log.debug("hardware-decode health check failed", exc_info=True)
             self._hw_decode_pending = False
+        # Soft failure watchdog (task 1): Soft has video tracks but no frames.
+        try:
+            self._check_soft_decode_health(state)
+        except Exception:
+            log.debug("soft-decode health check failed", exc_info=True)
+            self._soft_decode_pending = False
 
     # ------------------------------------------------------------ playback ---
     @Slot(str)
@@ -800,10 +837,12 @@ class VlcEngine(QObject):
         self._current_mrl = ""
         self._scrubbing = False
         self._pending_resume_ms = 0
-        # Disarm the decode watchdog with the media it was watching; the new
-        # media re-arms it below only if it actually carries the GPU request.
+        # Disarm the decode watchdogs with the media it was watching; the new
+        # media re-arms them below only if needed.
         self._hw_decode_pending = False
         self._hw_watch_started = None
+        self._soft_decode_pending = False
+        self._soft_watch_started = None
         self._reset_timeline()
 
         # Retire whatever the previous media left on the video surface
@@ -1011,6 +1050,8 @@ class VlcEngine(QObject):
         # A stopped player has no media to watch.
         self._hw_decode_pending = False
         self._hw_watch_started = None
+        self._soft_decode_pending = False
+        self._soft_watch_started = None
         self._set_video_size(0, 0)
         # One-tuner rule (§V.4): a full stop — including the one
         # AppController performs when switching to a mode that does not use
@@ -1387,6 +1428,114 @@ class VlcEngine(QObject):
         self._cpu_decode_override = mrl
         resume_ms, was_paused = self._capture_playback()
         self._reopen_current(resume_ms, was_paused)
+
+    def _check_soft_decode_health(self, state: State) -> None:
+        """Watchdog for Soft: video track exists but no frame ever published.
+
+        Task 1: Auto stays Soft because file is not demanding, but Soft fails
+        to generate video (shader missing, format negotiation failed, Nuitka
+        callback race in 1.3.1). User sees audio only + black stage / Now
+        Playing card. Detect and rescue by switching to Turbo, which uses a
+        native HWND and D3D11 and can succeed where Soft's vmem path failed.
+
+        Only arms when:
+        * route is Soft
+        * state is Playing
+        * video_tracks() non-empty (has video, not audio-only)
+        * MRL not already tried Soft->Turbo (avoid loop)
+        * Turbo is available on this platform
+        After _SOFT_DECODE_GRACE_S seconds with 0 frames_seen and 0 serial,
+        switch to Turbo via set_video_route.
+        """
+        if self._video_route != video_policy.SOFT:
+            self._soft_decode_pending = False
+            self._soft_watch_started = None
+            return
+        if state != State.Playing:
+            # Not playing yet — don't start timer, but keep pending if we
+            # have video tracks so first Playing tick arms it.
+            if state in (State.Opening, State.Buffering):
+                return
+            self._soft_decode_pending = False
+            self._soft_watch_started = None
+            return
+        # Has video tracks?
+        try:
+            has_video_tracks = bool(self.video_tracks())
+        except Exception:
+            has_video_tracks = False
+        if not has_video_tracks:
+            # Audio-only file — never rescue to Turbo.
+            self._soft_decode_pending = False
+            self._soft_watch_started = None
+            return
+        # Avoid loop: if we already tried Soft->Turbo for this MRL, don't retry.
+        mrl = self._current_mrl
+        if mrl and mrl in self._soft_failed_mrls:
+            self._soft_decode_pending = False
+            self._soft_watch_started = None
+            return
+        # Turbo available?
+        try:
+            if not self.turbo_available():
+                self._soft_decode_pending = False
+                self._soft_watch_started = None
+                return
+        except Exception:
+            pass
+
+        now = time.monotonic()
+        if not self._soft_decode_pending:
+            self._soft_decode_pending = True
+            self._soft_watch_started = now
+            return
+        if self._soft_watch_started is None:
+            self._soft_watch_started = now
+            return
+        if now - self._soft_watch_started < _SOFT_DECODE_GRACE_S:
+            return
+
+        # Grace elapsed — did Soft produce any frame?
+        try:
+            vout = self.video_output
+            ring = vout.ring if vout else None
+            frames_seen = 0
+            serial = 0
+            fmt = None
+            if ring is not None:
+                frames_seen = ring.stats()[0]
+                serial = ring.serial
+                fmt = ring.format
+        except Exception:
+            frames_seen = 0
+            serial = 0
+            fmt = None
+
+        if frames_seen > 0 or serial > 0 or fmt is not None:
+            # Soft is producing — healthy.
+            self._soft_decode_pending = False
+            self._soft_watch_started = None
+            return
+
+        # Soft failed: video track exists but no frame published after grace.
+        self._soft_decode_pending = False
+        self._soft_watch_started = None
+        if mrl:
+            self._soft_failed_mrls.add(mrl)
+            # Keep set bounded — only remember last 20 failures.
+            if len(self._soft_failed_mrls) > 20:
+                # pop arbitrary
+                self._soft_failed_mrls.pop()
+        log.warning(
+            "Soft video failed to generate any frame after %.1fs "
+            "(has video tracks but no picture) — switching to Turbo rescue: %s",
+            _SOFT_DECODE_GRACE_S,
+            mrl,
+        )
+        try:
+            self.set_video_route(video_policy.TURBO)
+        except Exception:
+            log.debug("Soft->Turbo rescue failed", exc_info=True)
 
     def _restore_soft_output(self) -> None:
         """Re-install the vmem callbacks and undo the Turbo player options."""
@@ -1812,6 +1961,8 @@ class VlcEngine(QObject):
         self._media_options = []
         self._hw_decode_pending = False
         self._hw_watch_started = None
+        self._soft_decode_pending = False
+        self._soft_watch_started = None
         if surface is None:
             return
         try:

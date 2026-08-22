@@ -584,27 +584,58 @@ class VideoOutput:
         # way in, so the chroma we request is silently discarded (module
         # docstring). Declare it with a raw pointer, then cast to the type the
         # binding will type-check against.
+        #
+        # Nuitka 2.x compiles nested functions differently: a closure that
+        # captures ``self`` can be invoked by ctypes with a mismatched argcount
+        # on first run after install (observed in 1.3.1: unlock called with 1
+        # arg instead of 3 -> TypeError at startup, only in installed exe).
+        # Every callback here is therefore varargs-tolerant and never raises —
+        # a bad sample is dropped, never a crash.
         @_FormatCbProto
-        def _format(opaque, chroma, width, height, pitches, lines):
-            return self._on_format(chroma, width, height, pitches, lines)
+        def _format(*args):
+            try:
+                if len(args) < 6:
+                    return 0
+                _, chroma, width, height, pitches, lines = args[:6]
+                return self._on_format(chroma, width, height, pitches, lines)
+            except Exception:
+                log.exception("video format setup failed (Nuitka-safe wrapper)")
+                return 0
 
         @vlc.CallbackDecorators.VideoCleanupCb
-        def _cleanup(opaque):
-            self._on_cleanup()
+        def _cleanup(*args):
+            try:
+                self._on_cleanup()
+            except Exception:
+                log.debug("cleanup callback failed", exc_info=True)
 
         @vlc.CallbackDecorators.VideoLockCb
-        def _lock(opaque, planes):
-            return self._on_lock(planes)
+        def _lock(*args):
+            try:
+                planes = args[1] if len(args) > 1 else (args[0] if args else None)
+                if planes is None:
+                    return 0
+                return self._on_lock(planes)
+            except Exception:
+                log.exception("lock callback failed (Nuitka-safe wrapper)")
+                try:
+                    return self._fill_scratch(args[1] if len(args) > 1 else None)
+                except Exception:
+                    return 0
 
         @vlc.CallbackDecorators.VideoUnlockCb
-        def _unlock(opaque, picture, planes):
+        def _unlock(*_args):
             # Deliberately empty. Any work here runs on the decode thread and
-            # delays the next frame.
+            # delays the next frame. Varargs-tolerant: Nuitka 1.3.1 installed
+            # build once called this with only opaque -> TypeError at startup.
             return None
 
         @vlc.CallbackDecorators.VideoDisplayCb
-        def _display(opaque, picture):
-            self._on_display()
+        def _display(*_args):
+            try:
+                self._on_display()
+            except Exception:
+                log.debug("display callback failed", exc_info=True)
 
         self._cb_format = _format
         self._cb_cleanup = _cleanup
@@ -628,10 +659,23 @@ class VideoOutput:
 
     def detach(self) -> None:
         """Drop the callbacks. Only safe once the player has fully stopped."""
+        player = self._player
+        # Clear libVLC side FIRST, while ctypes trampolines are still alive.
+        # Otherwise libVLC may still call a freed pointer after we set
+        # self._cb_* = None -> use-after-free segfault or, in Nuitka 1.3.1,
+        # TypeError: _unlock() missing args because GC freed the wrapper.
+        if player is not None:
+            try:
+                player.video_set_callbacks(None, None, None, None)
+            except Exception:
+                log.debug("could not clear video callbacks on detach", exc_info=True)
+            try:
+                player.video_set_format_callbacks(None, None)
+            except Exception:
+                log.debug("could not clear format callbacks on detach", exc_info=True)
+
         self._player = None
         self._attached = False
-        # Keep the trampolines alive until VLC can no longer reach them; the
-        # player release path is what guarantees that, so we clear afterwards.
         self._cb_format = None
         self._cb_format_cast = None
         self._cb_cleanup = None
