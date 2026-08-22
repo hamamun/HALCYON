@@ -71,6 +71,6 @@ Just want to talk? Use [discussions](https://github.com/hamamun/HALCYON/discussi
 
 ## ⚖️ Licence
 
-Halcyon itself is a **personal, non-commercial** project — see
+Halcyon is released under the **MIT Licence** — see
 [`LICENSE`](LICENSE). It bundles libVLC and other third-party components with
 their own licences; details in [`NOTICE.md`](NOTICE.md).

@@ -25,7 +25,7 @@
 | **Language** | Python 3.12 — 100%, no C++ build step |
 | **UI** | PySide6 / Qt Quick (QML) — GPU composited |
 | **Engine** | libVLC 3.0.21 (bundled with the app) |
-| **License posture** | Personal, non-commercial, not redistributed |
+| **License posture** | MIT for Halcyon's own code; bundled third-party components keep their own licences (see NOTICE.md) |
 
 ---
 
