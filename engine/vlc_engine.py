@@ -1584,7 +1584,7 @@ class VlcEngine(QObject):
 
     def video_tracks(self) -> list[tuple[int, str]]:
         """Video tracks of the current media, if any."""
-        return _describe_tracks(getattr(self._player, "video_get_track_description", lambda: None)())
+        return _describe_tracks(getattr(self._player, "video_get_track_description", lambda *args, **kwargs: None)())
 
     def video_size(self) -> tuple[int, int]:
         """Decoded width × height of video track 0, or ``(0, 0)``.

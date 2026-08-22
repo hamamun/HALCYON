@@ -53,7 +53,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 #: Fallback only — the real version is read from core/version.py, the single
 #: source of truth shared with packaging/installer/Halcyon.iss.
-_FALLBACK_VERSION = "1.3.0"
+_FALLBACK_VERSION = "1.3.1"
 
 
 def read_app_version() -> str:
@@ -268,6 +268,11 @@ def verify_dist(output_dir: Path) -> list[str]:
         if (ROOT / tree).is_dir():
             require(tree, why)
 
+    # Compiled QML shaders — load-bearing for the I420 Soft video path.
+    # If .qsb is missing, video renders as a silent black screen.
+    if (ROOT / "ui" / "shaders" / "yuv420p.frag").is_file():
+        require("ui/shaders/yuv420p.frag.qsb", "compiled I420 video shader")
+
     # These are individually load-bearing for an installed remote shortcut.
     # A present static directory is not enough if a packaging edit omitted its
     # manifest or generated icon subtree.
@@ -328,6 +333,18 @@ def main() -> int:
         return 0
 
     if not args.verify_only:
+        print("Compiling shaders...")
+        try:
+            from tools.build_shaders import build_all
+
+            built, failed = build_all()
+            if failed:
+                print(f"WARNING: {failed} shader(s) failed to compile", file=sys.stderr)
+            else:
+                print(f"Shaders compiled ({built} built).")
+        except Exception as exc:
+            print(f"WARNING: could not compile shaders: {exc}", file=sys.stderr)
+
         print(f"Building Halcyon {read_app_version()} with Nuitka...")
         res = subprocess.run(cmd, cwd=ROOT, check=False)
         if res.returncode != 0:

@@ -11,7 +11,7 @@ from __future__ import annotations
 #: Application version. Bump for every tagged release; keep in sync with
 #: packaging/installer/Halcyon.iss (MyAppVersion) and tools/build_nuitka.py
 #: (--file-version / --product-version).
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 #: Human-readable build channel, surfaced in the title bar and the fatal
 #: error dialog so a screenshot proves which installer is running.
