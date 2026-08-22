@@ -184,6 +184,7 @@ def describe(
     mini_mode: bool = False,
     turbo_available: bool = True,
     pending: bool = False,
+    soft_failed: bool = False,
 ) -> str:
     """The badge's hover tooltip: what is running, and *why*.
 
@@ -195,11 +196,17 @@ def describe(
     ``pending`` means Settings changed but the new choice has not been
     applied yet: Soft / Auto / Turbo only take effect when the next video
     starts, so a Turbo selection still playing on Soft is not a failed start.
+    ``soft_failed`` means Soft had video tracks but produced no picture and
+    was rescued to Turbo (task 1).
     """
     mode = normalise(selected)
     route = normalise(effective, SOFT)
 
     if route == TURBO:
+        if soft_failed:
+            if mode == AUTO:
+                return "Auto \u2192 Turbo \u2014 Soft failed to generate video, rescued to hardware (GPU) output"
+            return "Turbo \u2014 Soft failed to generate video, rescued to hardware (GPU) output"
         if mode == AUTO:
             text = "Auto \u2192 Turbo \u2014 hardware (GPU) video output"
         else:

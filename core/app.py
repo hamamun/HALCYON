@@ -349,6 +349,16 @@ class AppController(QObject):
                 log.debug("turbo_available() failed", exc_info=True)
         last = getattr(self, "_last_applied_selection", self._video_mode)
         pending = self._video_mode != last
+        # Soft failure rescue detection (task 1): if Soft had video tracks but
+        # produced no frame and we are now on Turbo, show rescue reason.
+        soft_failed = False
+        try:
+            mrl = getattr(engine, "currentMedia", "") or ""
+            failed_set = getattr(engine, "_soft_failed_mrls", set())
+            if mrl and mrl in failed_set and self.effectiveVideoMode == video_policy.TURBO:
+                soft_failed = True
+        except Exception:
+            soft_failed = False
         return video_policy.describe(
             self._video_mode,
             self.effectiveVideoMode,
@@ -360,6 +370,7 @@ class AppController(QObject):
             mini_mode=bool(getattr(self, "_mini_mode", False)),
             turbo_available=available,
             pending=pending,
+            soft_failed=soft_failed,
         )
 
     @Slot(str)
