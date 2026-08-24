@@ -577,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
             f"VLC_PLUGIN_PATH={env_plugins}\n\n"
             "Either reinstall Halcyon (the installer should place libvlc.dll, "
             "libvlccore.dll and a plugins\\ folder under "
-            f"{paths.VENDOR_VLC}), or install VLC 3.0.21 x64 system-wide. "
+            f"{paths.VENDOR_VLC}), or install a current VLC x64 system-wide. "
             "Details are in %APPDATA%\\Halcyon\\halcyon.log."
         )
         return 1

@@ -1,5 +1,5 @@
 #define MyAppName "Halcyon"
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.3.3"
 #define MyAppPublisher "Halcyon"
 #define MyAppExeName "Halcyon.exe"
 

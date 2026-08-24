@@ -6,7 +6,7 @@ assistance, so please be kind and explain things simply.
 ## Quick start
 
 - **The app:** [latest release installer](https://github.com/hamamun/HALCYON/releases/latest) — `Halcyon-Setup.exe`, Windows 10/11 x64
-- **The stack:** Python 3.12, PySide6 / Qt Quick (QML), libVLC 3.0.21
+- **The stack:** Python 3.12, PySide6 / Qt Quick (QML), latest stable libVLC
 - **Run from source:** see [docs/BUILDING.md](docs/BUILDING.md)
 
 ## Ways to help

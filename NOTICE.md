@@ -6,7 +6,9 @@ licences, which apply to them.
 
 ## libVLC (VideoLAN)
 
-- **Component:** libVLC 3.0.21 (`libvlc.dll`, `libvlccore.dll`)
+- **Component:** latest stable libVLC at release build time (`libvlc.dll`, `libvlccore.dll`)
+- The exact bundled version is recorded in `vendor/vlc/VERSION.txt` during each
+  build.
 - **Licence:** GNU Lesser General Public License v2.1 (LGPL-2.1)
 - **Source:** <https://www.videolan.org/vlc/>
 - **Licence text:** <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>

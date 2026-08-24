@@ -11,7 +11,7 @@ debugging and architecture guard rails.
 
 - Windows 10 / 11 x64 (the app targets Windows; the pure-Python parts run anywhere)
 - Python 3.12 (3.11 also works)
-- libVLC 3.0.21 x64 binaries in `vendor/vlc/` — **not committed**, see below
+- latest stable libVLC x64 binaries in `vendor/vlc/` — **not committed**, see below
 - WebView2 SDK bridge files (`Microsoft.Web.WebView2.Core.dll` +
   `WebView2Loader.dll`) in `vendor/webview2/` — **not committed**, fetched
   locally (see below)
@@ -38,9 +38,10 @@ That's it — Local + M3U + Web + Remote + tests all installed.
 
 ### Fetching libVLC (not committed — ~60 MB)
 
-1. Download the **Win64 7z/zip** build of VLC **3.0.21** from
-   <https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/>
-   (file: `vlc-3.0.21-win64.7z`).
+1. Download the **latest stable Win64 7z/zip** build of VLC from
+   <https://download.videolan.org/pub/videolan/vlc/last/win64/>.
+   The Windows build fetcher resolves the ordinary `vlc-*-win64.7z` archive
+   and verifies its upstream SHA-256 checksum.
 2. Extract it and copy into `vendor/vlc/`:
 
    ```
@@ -68,7 +69,8 @@ That's it — Local + M3U + Web + Remote + tests all installed.
    python -c "import vlc; print(vlc.libvlc_get_version())"
    ```
 
-   It should print the bundled libVLC version (3.0.21).
+   It should print the bundled libVLC version. The exact version is also
+   recorded in `vendor/vlc/VERSION.txt`.
 
 Halcyon sets `VLC_PLUGIN_PATH` and pre-loads the bundled DLLs at startup, so a
 system-wide VLC installation is neither needed nor used.
@@ -100,7 +102,7 @@ certificate.
 The release installer is built by GitHub Actions on Windows
 (`.github/workflows/build-installer.yml`):
 
-1. downloads VLC 3.0.21 x64 into `vendor/vlc/`;
+1. resolves and downloads the latest stable VLC x64 into `vendor/vlc/` and verifies its SHA-256 checksum;
 2. prunes VLC plugins using `packaging/vlc-plugin-whitelist.txt`;
 3. keeps `vendor/vlc/hrtfs/` beside `libvlccore.dll` for spatial audio;
 4. downloads the WebView2 bridge DLLs from the official NuGet package into
@@ -109,8 +111,9 @@ The release installer is built by GitHub Actions on Windows
 6. builds the Nuitka standalone app;
 7. builds `Halcyon-Setup.exe` with Inno Setup.
 
-The workflow runs on every push to `main` (artifact only) and on every `v*`
-tag (artifact + GitHub Release).
+The workflow runs on every push to `main` (artifact + latest GitHub Release),
+matching `v*` tag (artifact + GitHub Release), and manual dispatch. The release
+body records the exact VLC and WebView2 SDK versions fetched for that build.
 
 Manual Windows build equivalent:
 
