@@ -23,7 +23,8 @@ aiohttp>=3.9
 qrcode[pil]>=7.4
 
 # --- Notes (not pip packages) ---
-# 1. libVLC binaries (3.0.21 win64) → vendor/vlc/ (see README)
+# 1. Latest stable libVLC win64 → vendor/vlc/ (see README; resolved by the
+#    Windows build fetcher from VideoLAN's `last/win64/` index)
 #    - libvlc.dll, libvlccore.dll, plugins/
 # 2. WebView2 SDK bridge files (from NuGet Microsoft.Web.WebView2) → vendor/webview2/
 #    - Microsoft.Web.WebView2.Core.dll (788 KB)

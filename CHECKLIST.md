@@ -205,7 +205,7 @@ required. See HALCYON_PLAN.md §V.6.
 - [x] Commit `HALCYON_PLAN.md` and `CHECKLIST.md` as the first commit — *both tracked; exact commit order is unrecoverable from the squashed history*
 - [x] `py -3.12 -m venv .venv` · §12 — *README pins 3.12 (3.11 works); venv creation verified*
 - [x] `pip install PySide6 python-vlc` — *both resolve from `requirements.txt`; import verified*
-- [ ] Download libVLC 3.0.21 Win64 → `vendor/vlc/` (`libvlc.dll`, `libvlccore.dll`, `plugins/`) — **not verifiable here:** `vendor/vlc/` is gitignored and absent from this Linux checkout. Windows-only, must be confirmed on your machine.
+- [ ] Download latest stable libVLC Win64 → `vendor/vlc/` (`libvlc.dll`, `libvlccore.dll`, `plugins/`) — **not verifiable here:** `vendor/vlc/` is gitignored and absent from this Linux checkout. Windows-only, must be confirmed on your machine.
 - [ ] Confirm `python -c "import vlc; print(vlc.libvlc_get_version())"` works against the bundled DLLs — **not verifiable here:** needs the DLLs above. The `python-vlc` binding imports fine; it is the native binaries that are unproven in this environment.
 
 ◻ Repo exists, venv activates, libVLC version prints *(first two confirmed; the libVLC version print is yours to run on Windows)*
@@ -1078,7 +1078,7 @@ required. See HALCYON_PLAN.md §V.6.
 - [x] `core/update_checker.py` — `UpdateChecker(QObject)` exposed as `UpdateChecker` QML context property · §U.2
 - [x] Version detection: reads `vendor/vlc/libvlc.dll` product version (PowerShell `VersionInfo`) · §U.2
 - [x] Version detection: reads `vendor/webview2/Microsoft.Web.WebView2.Core.dll` file version (fallback: `.nupkg` filename) · §U.2
-- [x] Known latest versions as constants: `VLC_KNOWN_LATEST = "3.0.21"`, `WEBVIEW2_KNOWN_LATEST = "1.0.2903"` · §U.2
+- [x] Known latest versions as constants: `VLC_KNOWN_LATEST = "3.0.23"`, `WEBVIEW2_KNOWN_LATEST = "1.0.4129.50"` · §U.2
 - [x] `checkUpdates()` slot — runs detection + comparison, emits `checkStarted` / `checkFinished(result)` · §U.2
 - [x] `openFolder(relativePath)` slot — opens folder in Windows Explorer (`os.startfile`) · §U.2
 - [x] `openVlcDownload()` / `openWebview2Download()` slots — opens download URL in default browser · §U.2
@@ -1172,3 +1172,4 @@ Not in any phase above. Recorded so they aren't mistaken for oversights.
 *Last reconciled 2026-08-11: counts recomputed from the boxes, Phase 0 re-verified, two
 defects found and fixed (see "Verification pass" at the top). All `◻` owner-verification
 marks left untouched — they are yours to set.*
+t.*

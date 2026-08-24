@@ -23,9 +23,9 @@ local files, M3U playlists and web streams, with a phone remote.
 **[Get Halcyon-Setup.exe](https://github.com/hamamun/HALCYON/releases/latest)** — one installer, Windows 10/11 x64.
 No Python, no VLC install needed: everything is bundled.
 
-> Every release is built automatically by GitHub Actions from this repository's
-> source, so the download is always the latest code. Each release also ships a
-> `SHA256SUMS.txt` so you can verify your download.
+> Every push to `main` builds and publishes the current source as the GitHub
+> latest Release. Each release also ships a `SHA256SUMS.txt` so you can verify
+> your download.
 
 ## ✨ Why Halcyon
 
@@ -38,7 +38,7 @@ No Python, no VLC install needed: everything is bundled.
 - **Polished around the edges** — startup splash branding, last-folder memory,
   and hardened shutdown: close it and it's gone, no lingering processes.
 
-Built on **Python 3.12 · PySide6 / Qt Quick · libVLC 3.0.21**, packaged with
+Built on **Python 3.12 · PySide6 / Qt Quick · the latest stable libVLC**, packaged with
 **Nuitka + Inno Setup**.
 
 ## 🚀 Run from source

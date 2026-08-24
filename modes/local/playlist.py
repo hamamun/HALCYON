@@ -25,6 +25,7 @@ from pathlib import Path
 from PySide6.QtCore import (
     Property,
     QAbstractListModel,
+    QSortFilterProxyModel,
     QByteArray,
     QModelIndex,
     QObject,
@@ -50,6 +51,96 @@ class RepeatMode(IntEnum):
     Off = 0
     One = 1
     All = 2
+
+
+class LocalPlaylistFilterModel(QSortFilterProxyModel):
+    """The Local queue's filtered view.
+
+    The source model remains the authoritative playlist: playback, selection,
+    persistence, and Actions all continue to use source rows. This proxy only
+    changes what the panel displays, which means filtering can never make a
+    double-click target the wrong media item.
+    """
+
+    SourceIndexRole = Qt.ItemDataRole.UserRole + 6
+    countChanged = Signal()
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._filter_text = ""
+        self._current_index = -1
+        self.setDynamicSortFilter(True)
+
+    def roleNames(self) -> dict:  # noqa: N802 - Qt override
+        roles = dict(super().roleNames())
+        roles[self.SourceIndexRole] = QByteArray(b"sourceIndex")
+        return roles
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if role == self.SourceIndexRole:
+            if not index.isValid():
+                return -1
+            source_index = self.mapToSource(index)
+            return source_index.row() if source_index.isValid() else -1
+        return super().data(index, role)
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802
+        if not self._filter_text:
+            return True
+        source = self.sourceModel()
+        if source is None:
+            return False
+        index = source.index(source_row, 0, source_parent)
+        title = str(source.data(index, Qt.ItemDataRole.DisplayRole) or "")
+        path = str(source.data(index, Qt.ItemDataRole.UserRole + 1) or "")
+        return self._filter_text in f"{title}\n{path}".casefold()
+
+    @Property(int, notify=countChanged)
+    def count(self) -> int:
+        return self.rowCount()
+
+    @Property(int, notify=currentIndexChanged)
+    def currentIndex(self) -> int:  # noqa: N802 - QML-facing
+        return self._current_index
+
+    @Slot(str)
+    def setFilter(self, text: str) -> None:  # noqa: N802 - QML-facing
+        value = str(text or "").casefold()
+        if value == self._filter_text:
+            return
+        self._filter_text = value
+        self.invalidateFilter()
+        self._publish_current_index()
+
+    @Slot(int, result=int)
+    def sourceRowAt(self, view_row: int) -> int:  # noqa: N802 - QML-facing
+        if not (0 <= int(view_row) < self.rowCount()):
+            return -1
+        index = self.mapToSource(self.index(int(view_row), 0))
+        return index.row() if index.isValid() else -1
+
+    @Slot(int)
+    def sourceCurrentIndexChanged(self, source_row: int) -> None:  # noqa: N802
+        self._publish_current_index(int(source_row))
+
+    @Slot()
+    def _on_rows_changed(self) -> None:
+        self.countChanged.emit()
+        self._publish_current_index()
+
+    def _publish_current_index(self, source_row: int | None = None) -> None:
+        if source_row is None:
+            source = self.sourceModel()
+            source_row = int(source.currentIndex) if source is not None else -1
+        mapped = QModelIndex()
+        source = self.sourceModel()
+        if source is not None and source_row >= 0:
+            mapped = self.mapFromSource(source.index(source_row, 0))
+        current = mapped.row() if mapped.isValid() else -1
+        if current != self._current_index:
+            self._current_index = current
+            self.currentIndexChanged.emit(current)
 
 
 @dataclass
@@ -188,6 +279,17 @@ class PlaylistModel(QAbstractListModel):
         # last saved source. Loading only rebuilds the list and current marker;
         # it deliberately never emits playRequested, so startup stays silent.
         self._load_saved_playlist()
+
+        # The panel binds to this proxy, while all Actions continue to address
+        # the complete source playlist. Source rows are therefore stable even
+        # while the user types into the filter.
+        self._filtered_model = LocalPlaylistFilterModel(self)
+        self._filtered_model.setSourceModel(self)
+        self.currentIndexChanged.connect(
+            self._filtered_model.sourceCurrentIndexChanged
+        )
+        self.countChanged.connect(self._filtered_model._on_rows_changed)
+        self._filtered_model.sourceCurrentIndexChanged(self._current)
 
     # ------------------------------------------------------ model plumbing ---
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt override
@@ -658,6 +760,10 @@ class PlaylistModel(QAbstractListModel):
     @Property(int, notify=currentIndexChanged)
     def currentIndex(self) -> int:  # noqa: N802 - QML-facing
         return self._current
+
+    @Property(QObject, constant=True)
+    def filteredModel(self) -> QObject:  # noqa: N802 - QML-facing
+        return self._filtered_model
 
     @Property(int, notify=repeatModeChanged)
     def repeatMode(self) -> int:  # noqa: N802 - QML-facing
