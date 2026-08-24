@@ -1,14 +1,16 @@
 # Builds the Windows release installer (Halcyon-Setup.exe).
 #
-# Pipeline (matches README → "Windows installer build"):
-#   1. fetch vendor files: pruned VLC 3.0.21 x64 (hrtfs/ kept), WebView2
-#      bridge DLLs from NuGet, VC++ + WebView2 runtime installers;
+# Pipeline:
+#   1. fetch the latest stable VLC x64 (SHA-256 verified and pruned, hrtfs/
+#      kept), the latest WebView2 bridge DLLs from NuGet, and VC++ + Evergreen
+#      WebView2 runtime installers;
 #   2. compile QML shaders (.frag/.vert -> .qsb);
 #   3. build the Nuitka standalone app (dist/main.dist/Halcyon.exe);
-#   4. compile Halcyon-Setup.exe with Inno Setup.
+#   4. compile the installer with Inno Setup;
+#   5. upload the installer and update the GitHub latest Release.
 #
-# Runs on every push to main (artifact), on v* tags (artifact + GitHub
-# Release), and manually via workflow_dispatch.
+# Main pushes publish/update the release for the version in core/version.py.
+# Version tags are also supported for an explicit release build.
 
 name: Build Windows Installer
 
@@ -54,9 +56,46 @@ jobs:
           pip install -r requirements.txt
           pip install nuitka ordered-set zstandard
 
-      - name: Fetch vendor files (VLC, WebView2, redists)
+      - name: Read and validate release version
+        id: release
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File packaging/fetch_vendor_windows.ps1
+        run: |
+          $version = (python -c "from core.version import __version__; print(__version__)").Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "core.version.__version__ must be a stable semantic version, got '$version'"
+          }
+
+          $iss = Get-Content -LiteralPath "packaging/installer/Halcyon.iss" -Raw
+          $match = [regex]::Match($iss, '#define\s+MyAppVersion\s+"(?<version>[^"\r\n]+)"')
+          if (-not $match.Success -or $match.Groups["version"].Value -ne $version) {
+            $issVersion = if ($match.Success) { $match.Groups["version"].Value } else { "missing" }
+            throw "Version mismatch: core/version.py is '$version', Halcyon.iss is '$issVersion'"
+          }
+
+          $tag = "v$version"
+          if ($env:GITHUB_REF -like "refs/tags/*" -and $env:GITHUB_REF -ne "refs/tags/$tag") {
+            throw "Tag $env:GITHUB_REF does not match the application version $tag"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Fetch vendor files (VLC, WebView2, redists)
+        id: vendor
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging/fetch_vendor_windows.ps1
+          $vlcPath = "vendor/vlc/VERSION.txt"
+          $webview2Path = "vendor/webview2/VERSION.txt"
+          if (!(Test-Path $vlcPath) -or !(Test-Path $webview2Path)) {
+            throw "Vendor fetch did not write both VERSION.txt files"
+          }
+          $vlc = (Get-Content -LiteralPath $vlcPath -Raw).Trim()
+          $webview2 = (Get-Content -LiteralPath $webview2Path -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($vlc) -or [string]::IsNullOrWhiteSpace($webview2)) {
+            throw "Vendor version metadata is empty"
+          }
+          "vlc_version=$vlc" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "webview2_version=$webview2" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Compile shaders
         run: python tools/build_shaders.py
@@ -98,17 +137,49 @@ jobs:
         shell: pwsh
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer\Halcyon.iss
+          if (!(Test-Path "dist/installer/Halcyon-Setup.exe")) {
+            throw "Inno Setup did not produce dist/installer/Halcyon-Setup.exe"
+          }
+
+      - name: Generate installer checksum
+        shell: pwsh
+        run: |
+          $exe = "dist/installer/Halcyon-Setup.exe"
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Halcyon-Setup.exe" | Out-File -FilePath dist/installer/SHA256SUMS.txt -Encoding utf8
+          Get-Content -LiteralPath dist/installer/SHA256SUMS.txt
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Halcyon-Setup
-          path: dist/installer/Halcyon-Setup.exe
+          name: Halcyon-${{ steps.release.outputs.tag }}-Windows-x64
+          path: |
+            dist/installer/Halcyon-Setup.exe
+            dist/installer/SHA256SUMS.txt
           if-no-files-found: error
 
-      - name: Publish GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish latest GitHub Release
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/installer/Halcyon-Setup.exe
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Halcyon ${{ steps.release.outputs.tag }}
+          body: |
+            Windows 10/11 x64 installer for Halcyon ${{ steps.release.outputs.version }}.
+
+            Bundled components:
+            - libVLC ${{ steps.vendor.outputs.vlc_version }} (latest stable at build time)
+            - Microsoft WebView2 SDK bridge ${{ steps.vendor.outputs.webview2_version }}
+            - Microsoft Evergreen WebView2 Runtime installer
+
+            Verify the installer with `SHA256SUMS.txt`.
+          files: |
+            dist/installer/Halcyon-Setup.exe
+            dist/installer/SHA256SUMS.txt
           generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true
