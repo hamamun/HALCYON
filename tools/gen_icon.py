@@ -32,6 +32,8 @@ so it also runs on the CI/headless box.
 
 from __future__ import annotations
 
+import io
+import struct
 import sys
 from pathlib import Path
 
@@ -134,6 +136,69 @@ def _render_glyph(ss: int = 4) -> Image.Image:
     return canvas.resize((S, S), Image.LANCZOS)
 
 
+def _write_windows_ico(tile: Image.Image, path: Path, sizes: list[int]) -> None:
+    """Write a Windows-correct ``.ico`` — BMP frames up to 128 px, PNG at 256.
+
+    Pillow's own ICO writer stores **every** frame as PNG whenever the image has
+    an alpha channel (our squircle tile does), which produces an ``.ico`` the
+    Windows shell and Nuitka's ``--windows-icon-from-ico`` only half-read: the
+    icon then shows in the in-app title bar (Qt decodes the PNG itself) but
+    comes out blank/generic in Explorer, the taskbar, shortcuts, the Default
+    Apps list and file-type icons — every place that reads the icon back out of
+    ``Halcyon.exe``'s embedded resource.
+
+    The fix is the format Windows actually expects: 32-bpp BMP/DIB frames for
+    16→128 px (BGRA, bottom-up, with a zeroed AND mask — the alpha channel is
+    what carries transparency) and a PNG frame only for 256 px. We assemble the
+    container by hand so we never depend on Pillow's ICO encoder's compression
+    choice again.
+    """
+    def _frame_data(size: int) -> tuple[int, bytes]:
+        frame = tile.resize((size, size), Image.LANCZOS).convert("RGBA")
+        if size >= 256:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            return size, buf.getvalue()
+
+        w = h = size
+        # BGRA, top-down, then reversed to bottom-up row order.
+        r, g, b, a = frame.split()
+        bgra = Image.merge("RGBA", (b, g, r, a)).tobytes()
+        rows = [bgra[i * w * 4 : (i + 1) * w * 4] for i in range(h)]
+        rows.reverse()
+        xor = b"".join(rows)
+        # AND mask: 1 bit/px per row, padded to 32-bit boundaries. All-zero
+        # because transparency lives in the alpha channel for 32-bpp icons.
+        mask_stride = ((w + 31) // 32) * 4
+        mask = b"\x00" * (mask_stride * h)
+        # BITMAPINFOHEADER: biHeight = 2*h (XOR bitmap + AND mask).
+        header = struct.pack(
+            "<IiiHHIIiiII",
+            40,        # biSize
+            w,         # biWidth
+            2 * h,     # biHeight
+            1,         # biPlanes
+            32,        # biBitCount
+            0,         # biCompression (BI_RGB)
+            len(xor) + len(mask),  # biSizeImage
+            0, 0, 0, 0,  # biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant
+        )
+        return size, header + xor + mask
+
+    frames = [_frame_data(s) for s in sizes]
+    # ICONDIR (reserved=0, type=1, count) + ICONDIRENTRY table (16 bytes each).
+    header = struct.pack("<HHH", 0, 1, len(frames))
+    offset = 6 + 16 * len(frames)
+    directory = bytearray()
+    payload = bytearray()
+    for size, data in frames:
+        wh = 0 if size >= 256 else size
+        directory += struct.pack("<BBBBHHII", wh, wh, 0, 0, 1, 32, len(data), offset)
+        payload += data
+        offset += len(data)
+    path.write_bytes(header + bytes(directory) + bytes(payload))
+
+
 def _render_tile(ss: int = 2, glyph: Image.Image | None = None) -> Image.Image:
     """The full squircle tile at 1024 px with the glyph composited on top."""
     S = 1024
@@ -209,13 +274,10 @@ def build() -> dict[str, Path]:
     ASSETS.mkdir(parents=True, exist_ok=True)
 
     ico_path = ASSETS / "halcyon.ico"
-    # Pillow writes the ICO from the largest source and LANCZOS-downscales to
-    # every requested size — so hand it the 1024 px master, not a small frame.
-    tile.save(
-        ico_path,
-        format="ICO",
-        sizes=[(s, s) for s in ICO_SIZES],
-    )
+    # Windows-correct ICO: BMP frames 16→128 px, PNG only at 256 px. See
+    # _write_windows_ico for why Pillow's default (all-PNG) icon goes missing
+    # everywhere that reads the icon back out of the compiled Halcyon.exe.
+    _write_windows_ico(tile, ico_path, ICO_SIZES)
 
     png_path = ASSETS / "halcyon.png"
     tile.resize((512, 512), Image.LANCZOS).save(png_path, format="PNG")

@@ -64,7 +64,7 @@ def test_release_version_is_consistent_across_build_tools() -> None:
         (ROOT / "tools/build_nuitka.py").read_text(encoding="utf-8"),
         re.MULTILINE,
     ).group(1)
-    assert version == iss_version == fallback == "1.3.3"
+    assert version == iss_version == fallback == "1.4.0"
 
 
 def test_local_panel_follows_the_filtered_current_row() -> None:
