@@ -52,6 +52,15 @@ DEFAULTS: dict[str, Any] = {
     # never a user-facing control again.
     "playback.videoMode": "auto",
     "playback.resumeEnabled": True,
+    # Machine-level hardware-decode verdict, written by the engine after the
+    # Turbo runtime watchdog caught two *different* media decoding zero
+    # pictures (a driver that accepts the GPU decoder and then fails every
+    # frame). While true, Turbo opens everything on CPU decode directly — no
+    # 3 s watch, no fallback re-open. Deleting the key (or a future toggle)
+    # restores GPU attempts after a driver update. Mirrors
+    # engine.vlc_engine._HW_CPU_ONLY_KEY; tests/test_hw_decode.py keeps the
+    # two literals in sync.
+    "playback.hwDecodeCpuOnly": False,
     # ui
     "ui.mode": "local",
     "ui.timeDisplayRemaining": False,

@@ -186,7 +186,10 @@ def test_the_engine_still_boots_on_the_soft_callbacks():
 
 def test_the_hardware_override_is_scoped_to_one_media():
     source = (ROOT / "engine" / "vlc_engine.py").read_text(encoding="utf-8")
-    assert 'self._set_player_option("avcodec-hw", "d3d11va")' in source
+    assert 'self._set_player_option("avcodec-hw", "any")' in source, (
+        "the override must stay automatic — a pinned backend turns every "
+        "init-time driver refusal into the engine's re-open fallback"
+    )
     assert "media.add_option(option)" in source
 
 

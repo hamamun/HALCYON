@@ -379,11 +379,17 @@ def test_switching_to_turbo_takes_the_soft_callbacks_off(qt_application, forced_
 
 
 def test_turbo_asks_for_hardware_decoding_on_this_media_only(qt_application, forced_turbo):
+    from engine import hw_decode
+
     engine = _engine()
     engine.set_video_route(vm.TURBO)
     try:
         media = engine._instance.created[-1]
-        assert ":avcodec-hw=d3d11va" in media.options
+        assert hw_decode.HW_DECODE_OPTION in media.options, (
+            "the request must stay automatic ('any'): libVLC then falls back "
+            "to software inside the running decoder when the GPU path cannot "
+            "start, instead of forcing the engine's stop/re-open fallback"
+        )
     finally:
         engine.set_video_route(vm.SOFT)
 

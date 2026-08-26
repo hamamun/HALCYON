@@ -41,6 +41,12 @@ from engine.video_out import Chroma, VideoOutput
 
 log = logging.getLogger(__name__)
 
+#: Settings key for the machine-level "Turbo decodes on the CPU" verdict,
+#: written after the runtime watchdog has caught two *different* media
+#: producing zero decoded pictures. Mirrored in ``core.settings.DEFAULTS``;
+#: ``tests/test_hw_decode.py`` keeps the two literals in sync.
+_HW_CPU_ONLY_KEY = "playback.hwDecodeCpuOnly"
+
 # Keep Windows DLL-directory handles alive for the lifetime of the process.
 # ``os.add_dll_directory`` removes the search path when its returned handle is
 # garbage-collected; retaining only the path is not sufficient for libvlccore
@@ -89,6 +95,14 @@ _QT_INT_MAX = 2_147_483_647
 # for a slow disk and a cold decoder to deliver the first frame; short enough
 # that a black screen never settles in as the outcome.
 _HW_DECODE_GRACE_S = 3.0
+
+# How far the poll's position may sit behind a queued resume target before
+# the poll concludes that :start-time did not land (old build, exotic input)
+# and issues the seek itself. Anything within the tolerance means the demuxer
+# opened at — or already past — the target, and seeking again would flush and
+# re-buffer for no user-visible gain: that double seek was the perceptible
+# "bump" of a silent re-open (clock to zero, audio gap, snap back).
+_RESUME_SEEK_TOLERANCE_MS = 500
 
 # How long a Soft (vmem) media may play with video tracks but without a
 # single published frame before we conclude Soft failed to generate video
@@ -172,7 +186,17 @@ BASE_VLC_ARGS = [
     "--no-video-title-show",
     "--avcodec-threads=0",
     "--no-snapshot-preview",
-    "--no-stats",
+    # Media statistics must stay ENABLED (libVLC's own default, restated
+    # explicitly so a shared vlcrc from desktop VLC cannot turn them off
+    # either). The Turbo hardware-decode watchdog reads ``decoded_video``
+    # through libvlc_media_get_stats(), and libVLC 3 zeroes every counter
+    # while stats are disabled — stats_ComputeInputStats() returns before
+    # copying anything into the media's stats struct. An earlier "--no-stats"
+    # here therefore made the watchdog "prove" hardware failure for *every*
+    # Turbo media exactly 3 s in — playback was fine, yet each open took the
+    # CPU-decode fallback and its visible re-open bump. The counters cost
+    # nothing: a few integers and a 1 Hz copy inside libVLC.
+    "--stats",
     "--no-osd",  # Halcyon draws its own OSD in the scene graph (§6.2)
     # ------------------------------------------------------------------
     # Hardware decoding is INCOMPATIBLE with the vmem video callbacks.
@@ -406,6 +430,20 @@ class VlcEngine(QObject):
     _hw_decode_pending = False
     _hw_watch_started = None
     _cpu_decode_override = ""
+    # Machine-level hardware-decode verdict (§V.2). One runtime failure might
+    # be a corrupt file; two *different* media that decoded zero pictures
+    # while Playing mean the machine's GPU path is broken, and every Turbo
+    # open goes straight to CPU decode — no 3 s watch, no fallback bump —
+    # until the persisted setting is cleared. Class defaults exist for the
+    # __new__-built test engines; __init__ rebinds all of them.
+    _hw_cpu_only = False
+    _hw_failed_mrls: set = set()
+    _hw_decode_store = None
+    #: How many *distinct* media must fail the runtime watchdog before the
+    #: machine's GPU path is judged broken (see _note_hw_failure). One is too
+    #: eager — a single corrupt file decodes zero pictures too — while two
+    #: different media that both produced none while Playing is a driver.
+    _HW_MACHINE_STRIKES = 2
     # Soft failure watchdog: Soft has video tracks but no frames published.
     _soft_decode_pending = False
     _soft_watch_started = None
@@ -416,7 +454,12 @@ class VlcEngine(QObject):
     _last_vlc_time = None
     _last_vlc_position = None
 
-    def __init__(self, backend: str = "auto", parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        backend: str = "auto",
+        parent: QObject | None = None,
+        hw_decode_store=None,
+    ) -> None:
         super().__init__(parent)
         vlc_base = _resolve_bundled_vlc()
         try:
@@ -436,6 +479,18 @@ class VlcEngine(QObject):
         self._player = self._instance.media_player_new()
         self._media = None
 
+        # Optional {get, set} store (core.settings.Settings in the real app)
+        # persisting the machine-level hardware-decode verdict. Duck-typed on
+        # purpose: the engine stays constructible and testable without it.
+        self._hw_decode_store = hw_decode_store
+        self._hw_failed_mrls = set()
+        self._hw_cpu_only = False
+        if hw_decode_store is not None:
+            try:
+                self._hw_cpu_only = bool(hw_decode_store.get(_HW_CPU_ONLY_KEY, False))
+            except Exception:
+                log.debug("could not read the hw-decode verdict", exc_info=True)
+
         chroma = Chroma.RV32 if backend == "rv32" else Chroma.I420
         self.video_output = VideoOutput(chroma)
         self.video_output.attach(self._player)
@@ -447,7 +502,7 @@ class VlcEngine(QObject):
         # imports QtGui here.
         self._video_route = video_policy.SOFT
         self._turbo_surface = None
-        #: Per-playback libVLC options (":avcodec-hw=d3d11va" for Turbo).
+        #: Per-playback libVLC options (":avcodec-hw=any" for Turbo).
         #: Applied to each media in open(); empty on the Soft path.
         self._media_options: list[str] = []
 
@@ -669,11 +724,43 @@ class VlcEngine(QObject):
         if self._pending_resume_ms and state == State.Playing:
             resume_ms = self._pending_resume_ms
             self._pending_resume_ms = 0
-            log.debug("applying resume seek to %d ms", resume_ms)
-            self.seek(resume_ms)
-            # seek() anchors the clock at the instant of the request.
-            expected_advance_ms = 0.0
-            fallback_advance_ms = 0.0
+            # open() normally lands the demuxer *at* the target with
+            # :start-time, and re-seeking an already-resumed media would
+            # flush and re-buffer for nothing — that double seek was the
+            # perceptible bump of a silent re-open. Seek only when the
+            # position is still clearly behind the target, which is exactly
+            # the ":start-time was ignored" case. Never seek backwards to
+            # the target: a delayed GUI tick can legitimately find the clock
+            # already past it.
+            current_ms = None
+            try:
+                current_ms = _qt_milliseconds(player.get_time())
+            except Exception:
+                current_ms = None
+            if (
+                current_ms is None
+                or resume_ms - current_ms > _RESUME_SEEK_TOLERANCE_MS
+            ):
+                log.debug("applying resume seek to %d ms", resume_ms)
+                self.seek(resume_ms)
+                # seek() anchors the clock at the instant of the request.
+                expected_advance_ms = 0.0
+                fallback_advance_ms = 0.0
+            elif current_ms > self._time:
+                # :start-time landed: adopt libVLC's position as the clock
+                # anchor, exactly like seek() would, so the first timeline
+                # sample of the new position is not mistaken for an
+                # implausible jump by _plausible_timeline_sample().
+                self._time = current_ms
+                self._timeline_tick = now
+                self.timeChanged.emit(self._time)
+                if self._duration > 0:
+                    position = max(0.0, min(1.0, current_ms / self._duration))
+                    if abs(position - self._position) > 1e-5:
+                        self._position = position
+                        self.positionChanged.emit(position)
+                expected_advance_ms = 0.0
+                fallback_advance_ms = 0.0
 
         try:
             duration = _qt_milliseconds(player.get_length())
@@ -878,22 +965,37 @@ class VlcEngine(QObject):
         if media is None:
             self.errorOccurred.emit(f"Could not open {path_or_url}")
             return
-        # Per-playback options (§V.2): Turbo carries ":avcodec-hw=d3d11va" so
+        # Per-playback options (§V.2): Turbo carries ":avcodec-hw=any" so
         # hardware decode applies to this media only, leaving the instance-wide
         # "none" that protects the Soft vmem path untouched. Never fatal — a
         # build that rejects the option still plays, just without HW decode.
         #
-        # The GPU request is a *route-level* wish, not a per-media certainty:
-        # legacy codecs (WMV3/VC-1, DivX-era MPEG-4) black-screen on the
-        # d3d11va path because drivers advertise decoders they no longer
-        # honour. _effective_media_options() replaces the request for known-bad
-        # containers and for a media the runtime watchdog already caught with
-        # an explicit ``:avcodec-hw=none``.  Omitting the D3D11VA option is not
-        # sufficient: libVLC 3's ``set_hwnd`` resets the player-level decoder
-        # choice to automatic, which overrides the instance's
-        # ``--avcodec-hw=none``.  The native Turbo window stays; only decode
-        # moves to the CPU, exactly as it does in VLC's desktop player (§V.2).
+        # The GPU request is a *route-level* wish, not a per-media certainty.
+        # "any" is libVLC's own default: the codec module negotiates a GPU
+        # decoder (d3d11va, dxva2, …) when the media is opened and quietly
+        # falls back to software *inside the running decoder* when the GPU
+        # path cannot start — no stop, no re-open, no seam. What negotiation
+        # cannot fix is the driver that accepts the decoder and then rejects
+        # every frame (WMV3/VC-1, DivX-era MPEG-4 — one 0x80070057 per
+        # frame): _effective_media_options() replaces the request up front
+        # for known-bad containers, and the runtime watchdog re-opens with
+        # ":avcodec-hw=none" for anything else it catches. Omitting the
+        # option is not sufficient either way: libVLC 3's "set_hwnd" resets
+        # the player-level decoder choice to automatic, which overrides the
+        # instance's "--avcodec-hw=none". The native Turbo window stays;
+        # only decode moves to the CPU, exactly as it does in VLC's desktop
+        # player (§V.2).
         options = self._effective_media_options(mrl)
+        if start_ms > 0:
+            # Open *at* the resume position instead of playing from zero and
+            # seeking on the first Playing tick: the demuxer starts at the
+            # target, so a silent re-open (route switch, decode fallback,
+            # library resume) has no zero-crossing at all — no brief blip of
+            # audio from the head of the file, no double buffering. The poll
+            # keeps the queued seek as a safety net and only issues it when
+            # the position is still clearly behind the target, which is the
+            # ":start-time was ignored" case (old build, exotic input).
+            options.append(f":start-time={start_ms / 1000.0:.3f}")
         for option in options:
             try:
                 media.add_option(option)
@@ -945,13 +1047,14 @@ class VlcEngine(QObject):
             self.mediaChanged.emit(mrl)
         self._player.play()
 
-        # Resume is applied on the first Playing tick, not on a fixed delay.
-        # A 300 ms singleShot is a race: a file that is still opening silently
-        # drops the seek (VLC ignores set_time before playback starts), so the
-        # UI announced "Resuming from 24:31" while playback sat at zero. The
-        # poll already runs 5x a second and already knows when the state turns
-        # Playing — hanging the seek off that makes it deterministic on a cold
-        # cache and on a slow disk alike.
+        # Resume opens *at* the target via :start-time (see above). The
+        # queued value below is the safety net: applied on the first Playing
+        # tick — not on a fixed delay, a 300 ms singleShot is a race that
+        # silently drops the seek on a slow disk — but only when libVLC's
+        # position is still clearly behind the target, i.e. when the media
+        # option did not take. The poll already runs 5x a second and already
+        # knows when the state turns Playing, which keeps this deterministic
+        # on a cold cache and on a slow disk alike.
         self._pending_resume_ms = int(start_ms) if start_ms > 0 else 0
 
     @Slot()
@@ -1153,11 +1256,15 @@ class VlcEngine(QObject):
             if not surface.start(self._player):
                 raise RuntimeError("native Turbo surface unavailable")
             # Hardware decode is what Turbo is for.  set_hwnd resets libVLC
-            # 3's player-level decoder value to automatic; record the narrower
-            # per-media D3D11VA request here.  _effective_media_options() swaps
-            # that request for an equally narrow explicit ``none`` when this
-            # particular media must use the CPU.
-            self._set_player_option("avcodec-hw", "d3d11va")
+            # 3's player-level decoder value to automatic; record the equally
+            # automatic per-media request here so a media option always wins
+            # over that reset.  "any" — libVLC's own default — lets the codec
+            # module pick d3d11va/dxva2 and fall back to software inside the
+            # running decoder when the GPU path cannot start, without the
+            # stop/re-open a pinned backend would force.  When this
+            # particular media must use the CPU, _effective_media_options()
+            # swaps the request for an equally narrow explicit ``none``.
+            self._set_player_option("avcodec-hw", "any")
             self._turbo_surface = surface
             self._video_route = video_policy.TURBO
             self._reopen_current(resume_ms, was_paused)
@@ -1243,8 +1350,9 @@ class VlcEngine(QObject):
     #
     # Turbo is two separable things: the *output route* (libVLC renders into
     # the native child window — works for every file) and the *decode method*
-    # (":avcodec-hw=d3d11va" — great for H.264/HEVC/VP9/AV1, a black screen
-    # for WMV3/VC-1 and DivX-era MPEG-4, whose hardware decoders modern
+    # (":avcodec-hw=any" — automatic GPU negotiation that falls back to
+    # software inside the running decoder for H.264/HEVC/VP9/AV1 and a black
+    # screen for WMV3/VC-1 and DivX-era MPEG-4, whose hardware decoders modern
     # drivers advertise but reject at execute time, one 0x80070057 per frame).
     # The helpers below keep the two apart, the way VLC's own desktop player
     # does: the Turbo window always stays; only the decoder quietly moves to
@@ -1253,8 +1361,12 @@ class VlcEngine(QObject):
     def _effective_media_options(self, mrl: str) -> list[str]:
         """Return the recorded options with an explicit decoder for this media.
 
-        Two reasons force CPU decode, checked in order of certainty:
+        Three reasons force CPU decode, checked in order of certainty:
 
+        * the machine-level verdict is set (``_hw_cpu_only``) — the runtime
+          watchdog caught two *different* media producing zero decoded
+          pictures, so this GPU/driver combination is judged broken and no
+          Turbo open pays the 3 s watch or the fallback bump again;
         * the runtime watchdog already proved hardware decode broken for this
           exact MRL (``_cpu_decode_override``) — never hand the driver the
           same media twice;
@@ -1263,11 +1375,11 @@ class VlcEngine(QObject):
           right in practice for every family that produced the black screens.
 
         Forced CPU decode must be represented by ``:avcodec-hw=none``, not by
-        simply removing ``:avcodec-hw=d3d11va``.  In libVLC 3,
+        simply removing ``:avcodec-hw=any``.  In libVLC 3,
         ``libvlc_media_player_set_hwnd()`` sets the player's ``avcodec-hw``
         variable to an empty string (automatic).  That player-level value
         overrides the instance's ``--avcodec-hw=none``, so an option-less
-        WMV/AVI still enters D3D11VA and produces exactly the
+        WMV/AVI still enters automatic GPU decode and produces exactly the
         ``Failed to execute: 0x80070057`` log this gate is meant to prevent.
         A media option is closer than both values, so an explicit ``none``
         reliably wins without replacing the player or giving up Turbo's native
@@ -1276,7 +1388,9 @@ class VlcEngine(QObject):
         options = list(self._media_options)
         if hw_decode.HW_DECODE_OPTION not in options:
             return options
-        if self._cpu_decode_override and self._cpu_decode_override == mrl:
+        if self._hw_cpu_only:
+            reason = "hardware decode already failed on this machine"
+        elif self._cpu_decode_override and self._cpu_decode_override == mrl:
             reason = "hardware decode already failed for this media"
         else:
             if hw_decode.path_gpu_safe(mrl) is not False:
@@ -1414,7 +1528,12 @@ class VlcEngine(QObject):
         §V.4's promise, applied to the decoder: the user must not lose
         playback because the *driver* could not be made to work. The MRL is
         remembered in ``_cpu_decode_override`` so replaying the same file
-        later never repeats the failed attempt.
+        later never repeats the failed attempt, and the failure is offered to
+        :meth:`_note_hw_failure`, which escalates two *different* failing
+        media into a machine-level CPU-only verdict so later files never pay
+        the watch (or the bump) at all. The re-open itself carries
+        ``:start-time`` at the captured position (see :meth:`open`), which is
+        what makes this fallback seamless instead of a play-from-zero blip.
         """
         mrl = self._current_mrl
         if not mrl:
@@ -1426,8 +1545,39 @@ class VlcEngine(QObject):
             mrl,
         )
         self._cpu_decode_override = mrl
+        self._note_hw_failure(mrl)
         resume_ms, was_paused = self._capture_playback()
         self._reopen_current(resume_ms, was_paused)
+
+    def _note_hw_failure(self, mrl: str) -> None:
+        """Count a runtime hardware-decode failure toward the machine verdict.
+
+        The verdict is sticky on purpose — a machine whose GPU path was
+        proven broken should open every Turbo media on the CPU directly, with
+        no 3 s watch and no fallback re-open — but it is a *setting*, not a
+        life sentence: deleting ``playback.hwDecodeCpuOnly`` from
+        settings.json (or a future UI toggle) restores GPU attempts after a
+        driver update.
+        """
+        if self._hw_failed_mrls is None:  # __new__-built test engine safety
+            self._hw_failed_mrls = set()
+        self._hw_failed_mrls.add(mrl)
+        if self._hw_cpu_only or len(self._hw_failed_mrls) < self._HW_MACHINE_STRIKES:
+            return
+        self._hw_cpu_only = True
+        store = self._hw_decode_store
+        if store is not None:
+            try:
+                store.set(_HW_CPU_ONLY_KEY, True)
+            except Exception:
+                log.debug("could not persist the hw-decode verdict", exc_info=True)
+        log.warning(
+            "hardware decode failed for %d different media — Turbo will open "
+            "everything on CPU decode from now on (clear '%s' in settings.json "
+            "to retry after a driver update)",
+            len(self._hw_failed_mrls),
+            _HW_CPU_ONLY_KEY,
+        )
 
     def _check_soft_decode_health(self, state: State) -> None:
         """Watchdog for Soft: video track exists but no frame ever published.
@@ -1554,7 +1704,7 @@ class VlcEngine(QObject):
         The instance-wide ``--avcodec-hw=none`` (see :data:`BASE_VLC_ARGS`) has
         to keep protecting the Soft vmem path and the short-lived probe
         instances, so Turbo cannot simply change it globally. libVLC's supported
-        per-playback override is a media option (``:avcodec-hw=d3d11va``), which
+        per-playback override is a media option (``:avcodec-hw=any``), which
         applies to the media object the player is given — and a new media object
         is created on every :meth:`open`, including the silent re-open that
         performs the switch. Recording it here is therefore enough; ``open()``

@@ -22,6 +22,13 @@ which is what VLC's own desktop player does. Three layers, three test groups:
 Engine construction mirrors ``tests/test_turbo_surface.py``: ``VlcEngine``
 built with ``__new__`` and fakes, because the interesting logic is pure
 sequencing and must not need a native libVLC.
+
+A second bug lived one layer above this policy and is locked down here too:
+the instance was started with ``--no-stats``, libVLC therefore reported zero
+decoded pictures for *healthy* playback, and the watchdog re-opened every
+Turbo media on CPU decode exactly 3 s in — playback was fine, yet each open
+took the fallback's stop/re-open "bump". The instance must keep media
+statistics enabled: they are the watchdog's only sensor.
 """
 
 from __future__ import annotations
@@ -178,6 +185,7 @@ class FakePlayer:
         self.media = None
         self.stops = 0
         self.plays = 0
+        self.set_times: list[int] = []
 
     def stop(self):
         self.stops += 1
@@ -193,6 +201,9 @@ class FakePlayer:
 
     def get_time(self):
         return 61_000
+
+    def set_time(self, ms):
+        self.set_times.append(int(ms))
 
     def get_state(self):
         return 3
@@ -266,6 +277,11 @@ def _engine(*, route=vm.TURBO, hw_option=True):
     engine._hw_decode_pending = False
     engine._hw_watch_started = None
     engine._cpu_decode_override = ""
+    engine._hw_cpu_only = False
+    engine._hw_failed_mrls = set()
+    engine._hw_decode_store = None
+    engine._rate = 1.0
+    engine._timeline_tick = time.monotonic()
     return engine
 
 
@@ -482,3 +498,186 @@ class TestWatchdog:
 
         # FakePlayer.get_time() says 61 000 ms; the reopen must resume there.
         assert engine._pending_resume_ms == 61_000
+
+
+# ---------------------------------------------------------------------------
+# The 2026-08 regression: a blind sensor, not a broken GPU
+# ---------------------------------------------------------------------------
+class TestInstanceArguments:
+    """The watchdog's health signal must actually exist."""
+
+    def test_media_statistics_stay_enabled(self):
+        # --no-stats made libVLC zero every counter (stats_ComputeInputStats
+        # returns before copying them), so libvlc_media_get_stats() reported
+        # decoded_video == 0 for perfectly healthy GPU playback and the
+        # watchdog "proved" failure for every Turbo media 3 s in. Stated
+        # explicitly (--stats) so a shared vlcrc cannot turn them off either.
+        from engine.vlc_engine import BASE_VLC_ARGS
+
+        assert "--stats" in BASE_VLC_ARGS
+        assert not any(arg.startswith("--no-stats") for arg in BASE_VLC_ARGS)
+        # The instance-wide guard for the Soft vmem path is a different knob
+        # and must survive alongside.
+        assert "--avcodec-hw=none" in BASE_VLC_ARGS
+
+    def test_the_hw_request_is_automatic_not_a_pinned_backend(self):
+        # "any" lets libVLC negotiate d3d11va/dxva2 per media and — the
+        # point — fall back to software *inside the running decoder* when
+        # the GPU path cannot start. A pinned backend turns every init-time
+        # driver refusal into the engine's stop/re-open fallback: the bump.
+        assert hw_decode.HW_DECODE_OPTION == ":avcodec-hw=any"
+
+    def test_the_machine_verdict_key_matches_settings(self):
+        from core.settings import DEFAULTS
+        from engine.vlc_engine import _HW_CPU_ONLY_KEY
+
+        assert DEFAULTS.get(_HW_CPU_ONLY_KEY) is False, (
+            "engine and settings must spell the persisted hw-decode verdict "
+            "identically, or the flag is written under one key and read "
+            "under another"
+        )
+
+    def test_the_real_app_wires_the_store_into_the_engine(self):
+        # The verdict is only persistent if main.py passes Settings in.
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parent.parent / "main.py").read_text(
+            encoding="utf-8"
+        )
+        assert "hw_decode_store=settings" in source
+
+
+# ---------------------------------------------------------------------------
+# The machine-level verdict
+# ---------------------------------------------------------------------------
+class _Store:
+    """The two Settings methods the engine is allowed to call."""
+
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, object]] = []
+
+    def get(self, key, default=None):
+        return default
+
+    def set(self, key, value):
+        self.writes.append((key, value))
+
+
+class TestMachineVerdict:
+    def test_a_banned_machine_opens_turbo_media_on_cpu_directly(self, qt_application):
+        engine = _engine()
+        engine._hw_cpu_only = True
+
+        engine.open("file:///C:/Videos/film.mkv")
+
+        media = engine._instance.created[-1]
+        assert hw_decode.HW_DECODE_OPTION not in media.options
+        assert hw_decode.CPU_DECODE_OPTION in media.options
+        # No GPU request means no 3 s watch and no fallback bump.
+        assert engine._hw_decode_pending is False
+
+    def test_a_second_distinct_failure_bans_and_persists(self, qt_application):
+        from engine.vlc_engine import _HW_CPU_ONLY_KEY
+
+        engine = _engine()
+        store = _Store()
+        engine._hw_decode_store = store
+
+        engine._note_hw_failure("file:///C:/V/a.mkv")
+        assert engine._hw_cpu_only is False, (
+            "one failure can be a corrupt file — not a machine verdict"
+        )
+        assert store.writes == []
+
+        engine._note_hw_failure("file:///C:/V/b.mkv")
+        assert engine._hw_cpu_only is True
+        assert store.writes == [(_HW_CPU_ONLY_KEY, True)]
+
+        # ...and the very next Turbo open goes straight to the CPU.
+        engine.open("file:///C:/V/c.mkv")
+        media = engine._instance.created[-1]
+        assert hw_decode.CPU_DECODE_OPTION in media.options
+        assert engine._hw_decode_pending is False
+
+    def test_the_same_media_twice_is_one_verdict_not_two(self, qt_application):
+        engine = _engine()
+
+        engine._note_hw_failure("file:///C:/V/a.mkv")
+        engine._note_hw_failure("file:///C:/V/a.mkv")
+
+        assert engine._hw_cpu_only is False
+
+    def test_the_runtime_fallback_counts_toward_the_verdict(self, qt_application):
+        # The watchdog path (_fallback_to_cpu_decode) must feed the counter;
+        # this is the wiring that makes a genuinely broken driver stop
+        # bumping after its second distinct failure.
+        engine = _engine()
+        media = _StatsMedia("file:///C:/V/odd.mkv", decoded_video=0)
+        _playing_with(engine, media)
+        engine._player.video_get_track_description = lambda: [(0, b"Video 1")]
+
+        engine._check_hw_decode_health(State.Playing)      # arms the clock
+        engine._hw_watch_started -= _HW_DECODE_GRACE_S + 1  # grace elapsed
+        engine._check_hw_decode_health(State.Playing)       # falls back
+
+        assert engine._hw_failed_mrls == {"file:///C:/V/odd.mkv"}
+        assert engine._hw_cpu_only is False                 # one strike only
+
+
+# ---------------------------------------------------------------------------
+# The seamless re-open
+# ---------------------------------------------------------------------------
+class TestSeamlessReopen:
+    def test_a_reopen_opens_at_the_position_not_at_zero(self, qt_application):
+        engine = _engine()
+
+        engine.open("file:///C:/Videos/film.mkv", 61_000, announce=False)
+
+        media = engine._instance.created[-1]
+        assert ":start-time=61.000" in media.options, (
+            "the demuxer must start at the captured position — a play-from-"
+            "zero-then-seek re-open is the visible 'bump'"
+        )
+        # The poll's seek stays armed as the safety net for inputs that
+        # ignore the option.
+        assert engine._pending_resume_ms == 61_000
+
+    def test_a_plain_open_carries_no_start_time(self, qt_application):
+        engine = _engine()
+
+        engine.open("file:///C:/Videos/film.mkv")
+
+        media = engine._instance.created[-1]
+        assert not any(o.startswith(":start-time=") for o in media.options)
+
+    def test_a_landed_start_time_never_seeks_again(self, qt_application):
+        # :start-time took effect (position == target): re-seeking would
+        # flush and re-buffer for nothing. The clock is anchored instead.
+        engine = _engine()
+        engine._time = 0
+        engine._position = 0.0
+        engine._pending_resume_ms = 61_000  # FakePlayer.get_time() == 61 000
+
+        engine._poll_state()
+
+        assert engine._player.set_times == [], "the redundant seek is the bump"
+        assert engine._pending_resume_ms == 0
+        assert engine._time == 61_000, (
+            "the clock must jump straight to the resumed position, or the "
+            "first timeline sample is rejected as an implausible jump"
+        )
+
+    def test_an_ignored_start_time_still_seeks(self, qt_application):
+        # An old build or an exotic input can reject :start-time; the poll
+        # must notice the position never landed and seek as it always did.
+        engine = _engine()
+        engine._player.get_time = lambda: 500  # still at the head of the file
+        engine._time = 0
+        engine._position = 0.0
+        engine._pending_resume_ms = 61_000
+
+        engine._poll_state()
+
+        assert engine._player.set_times == [61_000]
+        assert engine._time == 61_000
+        assert engine._pending_resume_ms == 0

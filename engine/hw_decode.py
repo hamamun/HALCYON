@@ -5,9 +5,11 @@ Turbo is *two* independent things and only reads as one from the outside:
 * the **output route** — libVLC renders into the native child window
   (``engine/turbo_surface.py``) instead of the vmem callbacks. This works for
   every file and is what the user-facing "Turbo" badge reports;
-* the **decode method** — ``:avcodec-hw=d3d11va`` asks the GPU driver to
-  decompress the frames. This is great for modern codecs and a black screen
-  for old ones.
+* the **decode method** — ``:avcodec-hw=any`` lets libVLC negotiate a GPU
+  decoder per media (d3d11va, dxva2, …) and — crucially — fall back to
+  software *inside* the already-running decoder when the GPU path cannot
+  start, with no stop/re-open of the media. This works for every modern
+  codec and is a black screen for old ones.
 
 The bug this module exists for: forcing ``d3d11va`` on *everything* the Turbo
 route opens. Modern drivers advertise VC-1 (WMV3) and DivX-era MPEG-4 decode
@@ -63,7 +65,16 @@ log = logging.getLogger(__name__)
 #: an option-less legacy media still enters hardware decode.  An explicit
 #: per-media ``none`` overrides the HWND reset while retaining the same player
 #: and Turbo's native output window.
-HW_DECODE_OPTION = ":avcodec-hw=d3d11va"
+#:
+#: ``HW_DECODE_OPTION`` is ``any`` — libVLC's own default, the one the desktop
+#: player ships with — and not a pinned backend.  With ``any``, the hw/sw
+#: decision happens inside the codec module when the decoder loads: if the
+#: GPU path cannot start, the software decoder takes over within the same
+#: playback and the user sees nothing.  A pinned value (the old
+#: ``d3d11va``) turns every init-time driver refusal into the engine's
+#: stop/re-open fallback — the exact "bump" Turbo exists to avoid.  Like any
+#: non-empty value, ``any`` also overrides the HWND reset below.
+HW_DECODE_OPTION = ":avcodec-hw=any"
 CPU_DECODE_OPTION = ":avcodec-hw=none"
 
 #: ``libvlc_track_type_t``: unknown=-1, audio=0, video=1, text=2.
