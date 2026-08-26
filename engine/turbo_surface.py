@@ -2,7 +2,7 @@
 
 Turbo is *not* a second player. It is the same single :class:`~engine.vlc_engine.VlcEngine`
 player told to render into a native child window instead of into the vmem
-callbacks, so libVLC can keep the decoded frame on the GPU (``--avcodec-hw=d3d11va``)
+callbacks, so libVLC can keep the decoded frame on the GPU (``:avcodec-hw=any``)
 instead of copying it back to system memory for the Soft I420 path.
 
 What this module owns, and nothing else:

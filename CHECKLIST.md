@@ -145,8 +145,10 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 - [x] `engine/turbo_surface.py` — one hidden native child `QWindow`, `set_hwnd`,
       and a teardown that is safe at every half-finished point.
 - [x] `engine/vlc_engine.py` — `set_video_route()` on the **existing** player:
-      Soft callbacks off → native child → `:avcodec-hw=d3d11va` on that media
-      only → silent re-open of the same MRL at the captured position. Every
+      Soft callbacks off → native child → `:avcodec-hw=any` on that media
+      only (automatic GPU negotiation, software fallback inside the running
+      decoder) → silent re-open of the same MRL at the captured position
+      (`:start-time`, so a re-open has no zero-crossing). Every
       failure restores the Soft callbacks and re-opens on Soft.
       `stop()`/`shutdown()` release the child. · `tests/test_turbo_surface.py`
 - [x] `ui/shell/TurboSurfaceHost.qml` + `ui/shell/TurboChromeWindow.qml` —
@@ -185,8 +187,9 @@ never ticked in this file. Left as-is — they are ticked when re-verified.
 
 ### Windows-only verification gap — not verified
 
-`set_hwnd()` is Win32 and `--avcodec-hw=d3d11va` is a Windows decoder path;
-neither can execute on the Linux machine this was built on. libVLC actually
+`set_hwnd()` is Win32 and `:avcodec-hw=any` requests a Windows GPU decoder
+path (d3d11va/dxva2); neither can execute on the Linux machine this was
+built on. libVLC actually
 painting into the child HWND, D3D11 decode engaging, and the composited result
 appearing inside the Halcyon window are **written and reviewed, not observed**.
 Off Windows `is_supported()` is `False`, so those platforms deterministically

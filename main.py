@@ -550,7 +550,9 @@ def main(argv: list[str] | None = None) -> int:
 
     backend = _resolve_backend(str(settings.get("video.backend", "auto")), paths, log)
     try:
-        player = VlcEngine(backend=backend, parent=app)
+        player = VlcEngine(
+            backend=backend, parent=app, hw_decode_store=settings
+        )
     except Exception as exc:  # libVLC missing is the common first-run failure
         log.error("could not start libVLC: %s", exc, exc_info=True)
         # Never leave the splash above a fatal error dialog.
