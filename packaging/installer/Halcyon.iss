@@ -1,5 +1,5 @@
 #define MyAppName "Halcyon"
-#define MyAppVersion "1.3.3"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "Halcyon"
 #define MyAppExeName "Halcyon.exe"
 
@@ -21,7 +21,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog commandline
 CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
