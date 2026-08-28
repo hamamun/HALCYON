@@ -135,6 +135,7 @@ function isDragging(el) { return el === document.activeElement; }
 
 if ($("muteBtn")) $("muteBtn").addEventListener("click", () => cmd("toggleMute", {}));
 if ($("muteBtn2")) $("muteBtn2").addEventListener("click", () => cmd("toggleMute", {}));
+if ($("localFsBtn")) $("localFsBtn").addEventListener("click", () => cmd("fullscreen", {}));
 $("rate").addEventListener("change", (e) => cmd("setRate", { rate: Number(e.target.value) }));
 
 $("subDelayMinus").addEventListener("click", () => cmd("adjustSubtitleDelay", { delta: -500 }));

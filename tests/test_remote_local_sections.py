@@ -60,6 +60,21 @@ def test_files_card_sits_directly_above_the_playlist():
     )
 
 
+def test_local_transport_keeps_seek_forward_and_fullscreen_controls():
+    """Local must expose the same seek/fullscreen actions as desktop playback."""
+    local = _local_screen()
+    source = _js()
+
+    assert 'id="localSeekBack"' in local
+    assert 'id="localSeekFwd"' in local
+    assert 'data-cmd="seekFwd"' in local
+    assert 'id="localFsBtn"' in local
+    assert '$("localFsBtn").addEventListener("click", () => cmd("fullscreen", {}))' in source
+    # Native selects have a large intrinsic width on some phone browsers. If
+    # flex children cannot shrink, the trailing +10s button is pushed away.
+    assert re.search(r"\.row2\s*>\s*\*\s*\{[^}]*min-width:\s*0", _css(), re.S)
+
+
 def test_local_card_order_is_transport_volume_tracks_eq_files_playlist():
     local = _local_screen()
 
