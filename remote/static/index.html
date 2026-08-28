@@ -58,7 +58,7 @@
             <span class="t-mini" id="tDur">0:00</span>
           </div>
           <div class="row2">
-            <button class="mini" data-cmd="seekBack">−10s</button>
+            <button class="mini" id="localSeekBack" data-cmd="seekBack" title="Seek back 10 seconds">−10s</button>
             <select id="rate" title="Speed">
               <option value="0.5">0.5×</option>
               <option value="0.75">0.75×</option>
@@ -68,7 +68,10 @@
               <option value="1.75">1.75×</option>
               <option value="2">2.0×</option>
             </select>
-            <button class="mini" data-cmd="seekFwd">+10s</button>
+            <button class="mini" id="localSeekFwd" data-cmd="seekFwd" title="Seek forward 10 seconds">+10s</button>
+          </div>
+          <div class="row2 extras">
+            <button class="mini" id="localFsBtn" title="Toggle fullscreen on the PC">⛶ Fullscreen</button>
           </div>
         </div>
 

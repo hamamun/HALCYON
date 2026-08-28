@@ -116,7 +116,9 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .seekrow { display: flex; align-items: center; gap: 8px; }
 .t-mini { font-size: 0.72rem; color: var(--dim); font-variant-numeric: tabular-nums; min-width: 38px; }
 .row2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.row2 > * { flex: 1; }
+/* Allow native selects to shrink on narrow phones instead of pushing the
+   trailing action (for example Local's +10s seek) outside the card. */
+.row2 > * { flex: 1; min-width: 0; }
 .volrow { display: flex; align-items: center; gap: 8px; }
 .volrow input[type="range"] { flex: 1; }
 .extras { justify-content: center; }
